@@ -389,3 +389,62 @@ pub fn clear_all_data() -> Result<()> {
     )?;
     Ok(())
 }
+
+// 获取未翻译的词根
+pub fn get_untranslated_roots() -> Result<Vec<String>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT word FROM roots WHERE translation IS NULL OR translation = '' ORDER BY id",
+    )?;
+    let words = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<Vec<String>>>()?;
+    Ok(words)
+}
+
+// 批量更新词根翻译和分类
+pub fn batch_update_root_analysis(
+    updates: Vec<(String, String, Vec<String>)>, // (word, translation, category_names)
+) -> Result<()> {
+    let conn = get_db().lock();
+
+    for (word, translation, category_names) in updates {
+        // 更新翻译
+        conn.execute(
+            "UPDATE roots SET translation = ?1 WHERE word = ?2",
+            rusqlite::params![translation, word],
+        )?;
+
+        // 获取词根ID
+        let root_id: Option<i64> = conn
+            .query_row("SELECT id FROM roots WHERE word = ?1", [&word], |row| {
+                row.get(0)
+            })
+            .ok();
+
+        if let Some(root_id) = root_id {
+            // 清除现有分类
+            conn.execute("DELETE FROM root_categories WHERE root_id = ?1", [root_id])?;
+
+            // 添加新分类
+            for cat_name in category_names {
+                let cat_id: Option<i64> = conn
+                    .query_row(
+                        "SELECT id FROM categories WHERE name = ?1",
+                        [&cat_name],
+                        |row| row.get(0),
+                    )
+                    .ok();
+
+                if let Some(cat_id) = cat_id {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO root_categories (root_id, category_id) VALUES (?1, ?2)",
+                        [root_id, cat_id],
+                    )?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}

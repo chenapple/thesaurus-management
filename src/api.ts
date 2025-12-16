@@ -55,3 +55,13 @@ export async function getStats(): Promise<[number, number]> {
 export async function clearAllData(): Promise<void> {
   return await invoke("clear_all_data");
 }
+
+export async function getUntranslatedRoots(): Promise<string[]> {
+  return await invoke("get_untranslated_roots");
+}
+
+export async function batchUpdateRootAnalysis(
+  updates: [string, string, string[]][]
+): Promise<void> {
+  return await invoke("batch_update_root_analysis", { updates });
+}

@@ -51,6 +51,18 @@ fn clear_all_data() -> Result<(), String> {
     db::clear_all_data().map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn get_untranslated_roots() -> Result<Vec<String>, String> {
+    db::get_untranslated_roots().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn batch_update_root_analysis(
+    updates: Vec<(String, String, Vec<String>)>,
+) -> Result<(), String> {
+    db::batch_update_root_analysis(updates).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -71,6 +83,8 @@ pub fn run() {
             remove_root_category,
             get_stats,
             clear_all_data,
+            get_untranslated_roots,
+            batch_update_root_analysis,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

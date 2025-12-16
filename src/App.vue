@@ -6,6 +6,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { readFile } from "@tauri-apps/plugin-fs";
 import * as XLSX from "xlsx";
 import * as api from "./api";
+import { batchAnalyzeWords } from "./deepseek";
 import type { Category, Root } from "./types";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
@@ -16,6 +17,8 @@ const total = ref(0);
 const loading = ref(false);
 const importing = ref(false);
 const isDragging = ref(false);
+const analyzing = ref(false);
+const analysisProgress = ref({ current: 0, total: 0 });
 
 // 筛选和分页
 const searchText = ref("");
@@ -207,6 +210,62 @@ async function handleClearData() {
   }
 }
 
+// AI智能分析
+async function handleAIAnalysis() {
+  try {
+    // 获取未翻译的词根
+    const untranslatedWords = await api.getUntranslatedRoots();
+
+    if (untranslatedWords.length === 0) {
+      ElMessage.info("所有词根已完成翻译和分类");
+      return;
+    }
+
+    await ElMessageBox.confirm(
+      `发现 ${untranslatedWords.length} 个未分析的词根，是否使用AI进行智能翻译和分类？`,
+      "智能分析",
+      {
+        confirmButtonText: "开始分析",
+        cancelButtonText: "取消",
+        type: "info",
+      }
+    );
+
+    analyzing.value = true;
+    analysisProgress.value = { current: 0, total: untranslatedWords.length };
+
+    // 批量分析
+    const results = await batchAnalyzeWords(
+      untranslatedWords,
+      30,
+      (current, total) => {
+        analysisProgress.value = { current, total };
+      }
+    );
+
+    // 转换为更新格式并保存
+    const updates: [string, string, string[]][] = results.map((r) => [
+      r.word,
+      r.translation,
+      r.categories,
+    ]);
+
+    await api.batchUpdateRootAnalysis(updates);
+
+    ElMessage.success(`成功分析 ${results.length} 个词根`);
+
+    // 刷新数据
+    await loadRoots();
+  } catch (e) {
+    if (e !== "cancel") {
+      ElMessage.error("分析失败: " + e);
+    }
+  } finally {
+    analyzing.value = false;
+    analysisProgress.value = { current: 0, total: 0 };
+  }
+}
+
 // 搜索
 function handleSearch() {
   currentPage.value = 1;
@@ -384,6 +443,14 @@ onUnmounted(() => {
         <el-button type="primary" :loading="importing" @click="handleImport">
           <el-icon><Upload /></el-icon>
           导入Excel
+        </el-button>
+        <el-button
+          type="success"
+          :loading="analyzing"
+          @click="handleAIAnalysis"
+        >
+          <el-icon><MagicStick /></el-icon>
+          {{ analyzing ? `分析中 ${analysisProgress.current}/${analysisProgress.total}` : '智能分析' }}
         </el-button>
         <el-button type="danger" plain @click="handleClearData">
           <el-icon><Delete /></el-icon>
