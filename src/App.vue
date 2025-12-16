@@ -12,6 +12,7 @@ const roots = ref<Root[]>([]);
 const total = ref(0);
 const loading = ref(false);
 const importing = ref(false);
+const isDragging = ref(false);
 
 // 筛选和分页
 const searchText = ref("");
@@ -86,7 +87,41 @@ async function loadStats() {
   }
 }
 
-// 导入Excel
+// 处理Excel文件（通用函数）
+async function processExcelBuffer(buffer: ArrayBuffer) {
+  const workbook = XLSX.read(buffer, { type: "array" });
+
+  // 获取第一个工作表
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+
+  // 转换为JSON
+  const data = XLSX.utils.sheet_to_json<{ [key: string]: string }>(sheet);
+
+  // 提取关键词（第一列）
+  const keywords: string[] = [];
+  for (const row of data) {
+    const firstKey = Object.keys(row)[0];
+    if (firstKey && row[firstKey]) {
+      keywords.push(String(row[firstKey]));
+    }
+  }
+
+  if (keywords.length === 0) {
+    ElMessage.warning("Excel中没有找到关键词");
+    return;
+  }
+
+  // 导入
+  await api.importKeywords(keywords);
+  ElMessage.success(`成功导入 ${keywords.length} 个关键词`);
+
+  // 刷新数据
+  await loadRoots();
+  await loadStats();
+}
+
+// 导入Excel（点击按钮）
 async function handleImport() {
   try {
     const selected = await open({
@@ -101,36 +136,47 @@ async function handleImport() {
     // 读取文件
     const response = await fetch(`file://${selected}`);
     const buffer = await response.arrayBuffer();
-    const workbook = XLSX.read(buffer, { type: "array" });
+    await processExcelBuffer(buffer);
+  } catch (e) {
+    ElMessage.error("导入失败: " + e);
+  } finally {
+    importing.value = false;
+  }
+}
 
-    // 获取第一个工作表
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
+// 拖拽导入
+function handleDragOver(e: DragEvent) {
+  e.preventDefault();
+  isDragging.value = true;
+}
 
-    // 转换为JSON
-    const data = XLSX.utils.sheet_to_json<{ [key: string]: string }>(sheet);
+function handleDragLeave(e: DragEvent) {
+  e.preventDefault();
+  isDragging.value = false;
+}
 
-    // 提取关键词（第一列）
-    const keywords: string[] = [];
-    for (const row of data) {
-      const firstKey = Object.keys(row)[0];
-      if (firstKey && row[firstKey]) {
-        keywords.push(String(row[firstKey]));
-      }
-    }
+async function handleDrop(e: DragEvent) {
+  e.preventDefault();
+  isDragging.value = false;
 
-    if (keywords.length === 0) {
-      ElMessage.warning("Excel中没有找到关键词");
-      return;
-    }
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0) return;
 
-    // 导入
-    await api.importKeywords(keywords);
-    ElMessage.success(`成功导入 ${keywords.length} 个关键词`);
+  const file = files[0];
+  const validExtensions = [".xlsx", ".xls"];
+  const isValidFile = validExtensions.some((ext) =>
+    file.name.toLowerCase().endsWith(ext)
+  );
 
-    // 刷新数据
-    await loadRoots();
-    await loadStats();
+  if (!isValidFile) {
+    ElMessage.warning("请拖入Excel文件（.xlsx或.xls）");
+    return;
+  }
+
+  try {
+    importing.value = true;
+    const buffer = await file.arrayBuffer();
+    await processExcelBuffer(buffer);
   } catch (e) {
     ElMessage.error("导入失败: " + e);
   } finally {
@@ -254,7 +300,19 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="app-container">
+  <div
+    class="app-container"
+    @dragover="handleDragOver"
+    @dragleave="handleDragLeave"
+    @drop="handleDrop"
+  >
+    <!-- 拖拽遮罩 -->
+    <div v-if="isDragging" class="drop-overlay">
+      <div class="drop-content">
+        <el-icon class="drop-icon"><Upload /></el-icon>
+        <p>释放以导入Excel文件</p>
+      </div>
+    </div>
     <!-- 顶部工具栏 -->
     <header class="header">
       <div class="header-left">
@@ -478,6 +536,36 @@ body,
   display: flex;
   flex-direction: column;
   background-color: #f5f7fa;
+  position: relative;
+}
+
+.drop-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(64, 158, 255, 0.9);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.drop-content {
+  text-align: center;
+  color: #fff;
+}
+
+.drop-icon {
+  font-size: 64px;
+  margin-bottom: 16px;
+}
+
+.drop-content p {
+  font-size: 20px;
+  font-weight: 500;
 }
 
 .header {
