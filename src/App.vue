@@ -322,7 +322,6 @@ onUnmounted(() => {
     <header class="header">
       <div class="header-left">
         <h1 class="title">词根</h1>
-        <span class="subtitle">属性词分类</span>
       </div>
 
       <!-- 一级分类标签 -->
@@ -576,10 +575,10 @@ body,
 .header {
   display: flex;
   align-items: center;
-  padding: 12px 20px;
+  padding: 16px 24px;
   background: #fff;
   border-bottom: 1px solid #e4e7ed;
-  gap: 20px;
+  gap: 24px;
 }
 
 .header-left {
@@ -589,28 +588,25 @@ body,
 }
 
 .title {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 600;
   color: #303133;
 }
 
-.subtitle {
-  font-size: 14px;
-  color: #e6a23c;
-  font-weight: 500;
-}
-
 .category-tabs {
   display: flex;
-  gap: 8px;
+  gap: 12px;
   flex: 1;
+  flex-wrap: wrap;
 }
 
 .category-tag {
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  padding: 0 12px;
+  height: 32px;
 }
 
 .more-tag {
