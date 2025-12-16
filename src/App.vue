@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted, onUnmounted, computed } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { readFile } from "@tauri-apps/plugin-fs";
 import * as XLSX from "xlsx";
 import * as api from "./api";
 import type { Category, Root } from "./types";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 
 // 状态
 const categories = ref<Category[]>([]);
@@ -144,44 +147,44 @@ async function handleImport() {
   }
 }
 
-// 拖拽导入
-function handleDragOver(e: DragEvent) {
-  e.preventDefault();
-  isDragging.value = true;
-}
+// 拖拽导入 (Tauri 原生事件)
+let unlistenDragDrop: UnlistenFn | null = null;
 
-function handleDragLeave(e: DragEvent) {
-  e.preventDefault();
-  isDragging.value = false;
-}
+async function setupDragDrop() {
+  const webview = getCurrentWebview();
+  unlistenDragDrop = await webview.onDragDropEvent(async (event) => {
+    if (event.payload.type === "over") {
+      isDragging.value = true;
+    } else if (event.payload.type === "leave" || event.payload.type === "cancel") {
+      isDragging.value = false;
+    } else if (event.payload.type === "drop") {
+      isDragging.value = false;
+      const paths = event.payload.paths;
+      if (paths.length === 0) return;
 
-async function handleDrop(e: DragEvent) {
-  e.preventDefault();
-  isDragging.value = false;
+      const filePath = paths[0];
+      const validExtensions = [".xlsx", ".xls"];
+      const isValidFile = validExtensions.some((ext) =>
+        filePath.toLowerCase().endsWith(ext)
+      );
 
-  const files = e.dataTransfer?.files;
-  if (!files || files.length === 0) return;
+      if (!isValidFile) {
+        ElMessage.warning("请拖入Excel文件（.xlsx或.xls）");
+        return;
+      }
 
-  const file = files[0];
-  const validExtensions = [".xlsx", ".xls"];
-  const isValidFile = validExtensions.some((ext) =>
-    file.name.toLowerCase().endsWith(ext)
-  );
-
-  if (!isValidFile) {
-    ElMessage.warning("请拖入Excel文件（.xlsx或.xls）");
-    return;
-  }
-
-  try {
-    importing.value = true;
-    const buffer = await file.arrayBuffer();
-    await processExcelBuffer(buffer);
-  } catch (e) {
-    ElMessage.error("导入失败: " + e);
-  } finally {
-    importing.value = false;
-  }
+      try {
+        importing.value = true;
+        const fileData = await readFile(filePath);
+        const buffer = fileData.buffer;
+        await processExcelBuffer(buffer);
+      } catch (e) {
+        ElMessage.error("导入失败: " + e);
+      } finally {
+        importing.value = false;
+      }
+    }
+  });
 }
 
 // 清空数据
@@ -296,16 +299,18 @@ onMounted(async () => {
   await loadCategories();
   await loadRoots();
   await loadStats();
+  await setupDragDrop();
+});
+
+onUnmounted(() => {
+  if (unlistenDragDrop) {
+    unlistenDragDrop();
+  }
 });
 </script>
 
 <template>
-  <div
-    class="app-container"
-    @dragover="handleDragOver"
-    @dragleave="handleDragLeave"
-    @drop="handleDrop"
-  >
+  <div class="app-container">
     <!-- 拖拽遮罩 -->
     <div v-if="isDragging" class="drop-overlay">
       <div class="drop-content">
