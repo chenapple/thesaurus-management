@@ -393,13 +393,11 @@ onUnmounted(() => {
           class="category-tag"
           @click="toggleCategory(cat.id)"
         >
-          <el-icon><PriceTag /></el-icon>
           {{ cat.name }}({{ getCategoryCount(cat.id) }})
         </el-tag>
 
         <el-dropdown trigger="click">
           <el-tag type="info" effect="plain" class="category-tag more-tag">
-            <el-icon><Grid /></el-icon>
             更多
           </el-tag>
           <template #dropdown>
@@ -646,6 +644,7 @@ body,
   background: #fff;
   border-bottom: 1px solid #e4e7ed;
   gap: 24px;
+  flex-shrink: 0;
 }
 
 .header-left {
@@ -672,8 +671,9 @@ body,
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 12px;
-  height: 32px;
+  padding: 0 16px;
+  height: 36px;
+  font-size: 14px;
 }
 
 .more-tag {
@@ -693,6 +693,7 @@ body,
   padding: 12px 20px;
   background: #fff;
   border-bottom: 1px solid #e4e7ed;
+  flex-shrink: 0;
 }
 
 .stats {
@@ -711,6 +712,16 @@ body,
   flex: 1;
   overflow: auto;
   padding: 16px;
+  min-height: 0;
+}
+
+/* 增加表格行高 */
+.table-container :deep(.el-table__row) {
+  height: 52px;
+}
+
+.table-container :deep(.el-table__cell) {
+  padding: 12px 0;
 }
 
 .word-cell {
@@ -762,5 +773,6 @@ body,
   padding: 16px;
   background: #fff;
   border-top: 1px solid #e4e7ed;
+  flex-shrink: 0;
 }
 </style>

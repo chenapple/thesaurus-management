@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "thesaurus-management",
+  "productName": "词库管理",
   "version": "0.1.0",
   "identifier": "com.chenapple.thesaurus-management",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "thesaurus-management",
+        "title": "词库管理",
         "width": 800,
         "height": 600,
         "dragDropEnabled": true

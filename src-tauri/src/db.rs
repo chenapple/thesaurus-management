@@ -2,9 +2,106 @@ use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 use rusqlite::{Connection, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 static DB: OnceCell<Mutex<Connection>> = OnceCell::new();
+
+// 多语言停用词表（英语、德语、法语、意大利语、西班牙语）
+fn get_stopwords() -> HashSet<&'static str> {
+    [
+        // 英语 English
+        "a", "an", "the", "and", "or", "but", "if", "then", "else", "for", "of", "to", "in", "on",
+        "at", "by", "with", "from", "as", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "may",
+        "might", "must", "shall", "can", "need", "into", "through", "during", "before", "after",
+        "above", "below", "between", "under", "again", "further", "once", "here", "there",
+        "when", "where", "why", "how", "all", "each", "every", "both", "few", "more", "most",
+        "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too",
+        "very", "just", "also", "now", "new", "used", "one", "two", "first", "way", "even",
+        "because", "any", "these", "those", "its", "it", "this", "that", "what", "which", "who",
+        "whom", "while", "about", "against", "over", "out", "up", "down", "off", "your", "our",
+
+        // 德语 German
+        "der", "die", "das", "ein", "eine", "einer", "einem", "einen", "und", "oder", "aber",
+        "wenn", "dann", "für", "von", "zu", "in", "an", "auf", "mit", "aus", "ist", "sind",
+        "war", "waren", "sein", "haben", "hat", "hatte", "werden", "wird", "wurde", "können",
+        "kann", "konnte", "müssen", "muss", "musste", "sollen", "soll", "sollte", "wollen",
+        "will", "wollte", "dürfen", "darf", "durfte", "nicht", "auch", "nur", "noch", "schon",
+        "immer", "wieder", "hier", "dort", "wo", "wann", "wie", "warum", "was", "wer", "wen",
+        "wem", "welche", "welcher", "welches", "dieser", "diese", "dieses", "jener", "jene",
+        "jenes", "alle", "alles", "andere", "anderer", "anderes", "mehr", "viel", "viele",
+        "wenig", "wenige", "einige", "manche", "jeder", "jede", "jedes", "kein", "keine",
+        "durch", "über", "unter", "zwischen", "vor", "nach", "bei", "seit", "bis", "ohne",
+        "gegen", "um", "per", "pro",
+
+        // 法语 French
+        "le", "la", "les", "un", "une", "des", "du", "de", "et", "ou", "mais", "si", "que",
+        "qui", "quoi", "dont", "où", "pour", "par", "sur", "sous", "dans", "en", "avec",
+        "sans", "chez", "vers", "entre", "contre", "avant", "après", "pendant", "depuis",
+        "est", "sont", "était", "étaient", "être", "avoir", "ai", "as", "avons", "avez",
+        "ont", "fait", "faire", "peut", "peuvent", "pouvoir", "doit", "doivent", "devoir",
+        "veut", "veulent", "vouloir", "sait", "savent", "savoir", "ne", "pas", "plus",
+        "moins", "très", "bien", "mal", "peu", "beaucoup", "trop", "assez", "aussi",
+        "encore", "toujours", "jamais", "souvent", "parfois", "ici", "là", "ce", "cette",
+        "ces", "cet", "mon", "ma", "mes", "ton", "ta", "tes", "son", "sa", "ses", "notre",
+        "nos", "votre", "vos", "leur", "leurs", "tout", "tous", "toute", "toutes", "quel",
+        "quelle", "quels", "quelles", "chaque", "autre", "autres", "même", "mêmes",
+
+        // 意大利语 Italian
+        "il", "lo", "la", "i", "gli", "le", "un", "uno", "una", "di", "a", "da", "in", "con",
+        "su", "per", "tra", "fra", "e", "ed", "o", "ma", "se", "che", "chi", "cui", "dove",
+        "come", "quando", "perché", "quale", "quali", "quanto", "quanta", "quanti", "quante",
+        "questo", "questa", "questi", "queste", "quello", "quella", "quelli", "quelle",
+        "è", "sono", "era", "erano", "essere", "avere", "ho", "hai", "ha", "abbiamo",
+        "avete", "hanno", "fare", "può", "possono", "potere", "deve", "devono", "dovere",
+        "vuole", "vogliono", "volere", "non", "più", "meno", "molto", "molti", "molte",
+        "poco", "pochi", "poche", "troppo", "tanto", "tanti", "tante", "tutto", "tutti",
+        "tutte", "ogni", "altro", "altri", "altre", "stesso", "stessi", "stesse", "proprio",
+        "anche", "ancora", "sempre", "mai", "già", "ora", "poi", "qui", "là", "dove",
+        "solo", "soltanto", "circa", "quasi", "appena", "proprio", "verso", "durante",
+        "dopo", "prima", "sopra", "sotto", "dentro", "fuori", "oltre", "attraverso",
+
+        // 西班牙语 Spanish
+        "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "al", "a",
+        "en", "con", "por", "para", "sin", "sobre", "bajo", "entre", "hacia", "desde",
+        "hasta", "según", "durante", "mediante", "y", "e", "o", "u", "pero", "sino",
+        "que", "quien", "quienes", "cual", "cuales", "cuyo", "cuya", "cuyos", "cuyas",
+        "donde", "cuando", "como", "porque", "qué", "quién", "cuál", "dónde", "cuándo",
+        "cómo", "es", "son", "está", "están", "era", "eran", "fue", "fueron", "ser",
+        "estar", "haber", "he", "has", "ha", "hemos", "habéis", "han", "tener", "tiene",
+        "tienen", "hacer", "hace", "hacen", "poder", "puede", "pueden", "deber", "debe",
+        "deben", "querer", "quiere", "quieren", "saber", "sabe", "saben", "no", "sí",
+        "más", "menos", "muy", "mucho", "mucha", "muchos", "muchas", "poco", "poca",
+        "pocos", "pocas", "tanto", "tanta", "tantos", "tantas", "todo", "toda", "todos",
+        "todas", "otro", "otra", "otros", "otras", "mismo", "misma", "mismos", "mismas",
+        "cada", "algún", "alguna", "algunos", "algunas", "ningún", "ninguna", "este",
+        "esta", "estos", "estas", "ese", "esa", "esos", "esas", "aquel", "aquella",
+        "aquellos", "aquellas", "también", "tampoco", "además", "todavía", "ya",
+        "ahora", "antes", "después", "siempre", "nunca", "aquí", "allí", "así",
+    ]
+    .into_iter()
+    .collect()
+}
+
+// 检查是否为有效词根（非停用词、非纯数字、长度>=2）
+fn is_valid_root(word: &str) -> bool {
+    let stopwords = get_stopwords();
+    let word_lower = word.to_lowercase();
+
+    // 长度至少2个字符
+    if word.len() < 2 {
+        return false;
+    }
+
+    // 不是纯数字
+    if word.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+
+    // 不在停用词表中
+    !stopwords.contains(word_lower.as_str())
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Root {
@@ -193,6 +290,11 @@ pub fn import_keywords(keywords: Vec<String>) -> Result<()> {
         for word in words {
             let word = word.trim();
             if word.is_empty() {
+                continue;
+            }
+
+            // 过滤停用词（多语言：英语、德语、法语、意大利语、西班牙语）
+            if !is_valid_root(word) {
                 continue;
             }
 
