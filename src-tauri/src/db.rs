@@ -439,60 +439,75 @@ pub fn delete_product(id: i64) -> Result<()> {
 pub fn import_keywords(product_id: i64, keywords: Vec<String>) -> Result<()> {
     let conn = get_db().lock();
 
-    for keyword in keywords {
-        let keyword = keyword.trim().to_lowercase();
-        if keyword.is_empty() {
-            continue;
-        }
+    // 使用事务大幅提升导入速度（特别是在 Windows 上）
+    conn.execute("BEGIN TRANSACTION", [])?;
 
-        // 插入关键词（忽略重复）
-        conn.execute(
-            "INSERT OR IGNORE INTO keywords (keyword, product_id) VALUES (?1, ?2)",
-            rusqlite::params![&keyword, product_id],
-        )?;
-
-        // 获取关键词ID
-        let keyword_id: i64 = conn.query_row(
-            "SELECT id FROM keywords WHERE keyword = ?1 AND product_id = ?2",
-            rusqlite::params![&keyword, product_id],
-            |row| row.get(0),
-        )?;
-
-        // 分词并插入词根
-        let words: Vec<&str> = keyword.split_whitespace().collect();
-        for word in words {
-            let word = word.trim();
-            if word.is_empty() {
+    let result = (|| {
+        for keyword in keywords {
+            let keyword = keyword.trim().to_lowercase();
+            if keyword.is_empty() {
                 continue;
             }
 
-            // 过滤停用词（多语言：英语、德语、法语、意大利语、西班牙语）
-            if !is_valid_root(word) {
-                continue;
-            }
-
-            // 插入词根（忽略重复，按产品独立）
+            // 插入关键词（忽略重复）
             conn.execute(
-                "INSERT OR IGNORE INTO roots (word, product_id) VALUES (?1, ?2)",
-                rusqlite::params![word, product_id],
+                "INSERT OR IGNORE INTO keywords (keyword, product_id) VALUES (?1, ?2)",
+                rusqlite::params![&keyword, product_id],
             )?;
 
-            // 获取词根ID
-            let root_id: i64 = conn.query_row(
-                "SELECT id FROM roots WHERE word = ?1 AND product_id = ?2",
-                rusqlite::params![word, product_id],
+            // 获取关键词ID
+            let keyword_id: i64 = conn.query_row(
+                "SELECT id FROM keywords WHERE keyword = ?1 AND product_id = ?2",
+                rusqlite::params![&keyword, product_id],
                 |row| row.get(0),
             )?;
 
-            // 建立关联（忽略重复）
-            conn.execute(
-                "INSERT OR IGNORE INTO keyword_roots (keyword_id, root_id) VALUES (?1, ?2)",
-                [keyword_id, root_id],
-            )?;
+            // 分词并插入词根
+            let words: Vec<&str> = keyword.split_whitespace().collect();
+            for word in words {
+                let word = word.trim();
+                if word.is_empty() {
+                    continue;
+                }
+
+                // 过滤停用词（多语言：英语、德语、法语、意大利语、西班牙语）
+                if !is_valid_root(word) {
+                    continue;
+                }
+
+                // 插入词根（忽略重复，按产品独立）
+                conn.execute(
+                    "INSERT OR IGNORE INTO roots (word, product_id) VALUES (?1, ?2)",
+                    rusqlite::params![word, product_id],
+                )?;
+
+                // 获取词根ID
+                let root_id: i64 = conn.query_row(
+                    "SELECT id FROM roots WHERE word = ?1 AND product_id = ?2",
+                    rusqlite::params![word, product_id],
+                    |row| row.get(0),
+                )?;
+
+                // 建立关联（忽略重复）
+                conn.execute(
+                    "INSERT OR IGNORE INTO keyword_roots (keyword_id, root_id) VALUES (?1, ?2)",
+                    [keyword_id, root_id],
+                )?;
+            }
+        }
+        Ok::<(), rusqlite::Error>(())
+    })();
+
+    match result {
+        Ok(_) => {
+            conn.execute("COMMIT", [])?;
+            Ok(())
+        }
+        Err(e) => {
+            conn.execute("ROLLBACK", []).ok();
+            Err(e)
         }
     }
-
-    Ok(())
 }
 
 // 获取词根列表（带统计信息，按产品筛选）
