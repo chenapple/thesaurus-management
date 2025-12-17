@@ -27,6 +27,7 @@ const isDragging = ref(false);
 const analyzing = ref(false);
 const analysisProgress = ref({ current: 0, total: 0 });
 const exporting = ref(false);
+const analysisAbortController = ref<AbortController | null>(null);
 
 // 筛选和分页
 const searchText = ref("");
@@ -442,31 +443,52 @@ async function handleAIAnalysis() {
 
     analyzing.value = true;
     analysisProgress.value = { current: 0, total: untranslatedWords.length };
+    analysisAbortController.value = new AbortController();
 
-    const results = await batchAnalyzeWords(
-      untranslatedWords,
-      30,
-      (current, total) => {
+    let savedCount = 0;
+    const productId = selectedProduct.value.id;
+
+    await batchAnalyzeWords(untranslatedWords, {
+      batchSize: 30,
+      concurrency: 3,
+      signal: analysisAbortController.value.signal,
+      onProgress: (current, total) => {
         analysisProgress.value = { current, total };
-      }
-    );
+      },
+      onBatchComplete: async (batchResults) => {
+        // 每批完成后立即保存到数据库
+        const updates: [string, string, string[]][] = batchResults.map((r) => [
+          r.word,
+          r.translation,
+          r.categories,
+        ]);
+        await api.batchUpdateRootAnalysis(productId, updates);
+        savedCount += batchResults.length;
+      },
+    });
 
-    const updates: [string, string, string[]][] = results.map((r) => [
-      r.word,
-      r.translation,
-      r.categories,
-    ]);
-
-    await api.batchUpdateRootAnalysis(selectedProduct.value.id, updates);
-    ElMessage.success(`成功分析 ${results.length} 个词根`);
+    ElMessage.success(`成功分析 ${savedCount} 个词根`);
     await loadRoots();
   } catch (e) {
     if (e !== "cancel") {
-      ElMessage.error("分析失败: " + e);
+      // 检查是否是用户主动取消
+      if (e instanceof DOMException && e.name === "AbortError") {
+        ElMessage.info("分析已停止，已完成的部分已保存");
+        await loadRoots();
+      } else {
+        ElMessage.error("分析失败: " + e);
+      }
     }
   } finally {
     analyzing.value = false;
     analysisProgress.value = { current: 0, total: 0 };
+    analysisAbortController.value = null;
+  }
+}
+
+function cancelAnalysis() {
+  if (analysisAbortController.value) {
+    analysisAbortController.value.abort();
   }
 }
 
@@ -701,12 +723,20 @@ onUnmounted(() => {
             导出Excel
           </el-button>
           <el-button
+            v-if="!analyzing"
             type="success"
-            :loading="analyzing"
             @click="handleAIAnalysis"
           >
             <el-icon><MagicStick /></el-icon>
-            {{ analyzing ? `分析中 ${analysisProgress.current}/${analysisProgress.total}` : '智能分析' }}
+            智能分析
+          </el-button>
+          <el-button
+            v-else
+            type="danger"
+            @click="cancelAnalysis"
+          >
+            <el-icon><Close /></el-icon>
+            停止分析 ({{ analysisProgress.current }}/{{ analysisProgress.total }})
           </el-button>
           <el-button type="warning" plain @click="handleClearData">
             <el-icon><RefreshRight /></el-icon>

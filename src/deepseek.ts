@@ -26,7 +26,11 @@ export interface AnalysisResult {
   categories: string[];
 }
 
-export async function analyzeWords(words: string[]): Promise<AnalysisResult[]> {
+// 单批次分析（支持取消）
+export async function analyzeWords(
+  words: string[],
+  signal?: AbortSignal
+): Promise<AnalysisResult[]> {
   const prompt = `你是一个电商关键词分析专家。请分析以下英文词根，为每个词提供：
 1. 中文翻译（简洁准确）
 2. 分类标签（从以下分类中选择1-3个最合适的）
@@ -59,6 +63,7 @@ ${words.join("\n")}
       ],
       temperature: 0.1,
     }),
+    signal, // 支持取消
   });
 
   if (!response.ok) {
@@ -84,29 +89,105 @@ ${words.join("\n")}
   }
 }
 
-// 批量分析（分批处理）
-export async function batchAnalyzeWords(
-  words: string[],
-  batchSize: number = 30,
-  onProgress?: (current: number, total: number) => void
-): Promise<AnalysisResult[]> {
-  const results: AnalysisResult[] = [];
-  const totalBatches = Math.ceil(words.length / batchSize);
+// 并发控制器
+async function runWithConcurrency<T>(
+  tasks: (() => Promise<T>)[],
+  concurrency: number,
+  signal?: AbortSignal
+): Promise<T[]> {
+  const results: T[] = [];
+  let index = 0;
 
-  for (let i = 0; i < words.length; i += batchSize) {
-    const batch = words.slice(i, i + batchSize);
-    const batchResults = await analyzeWords(batch);
-    results.push(...batchResults);
-
-    if (onProgress) {
-      onProgress(Math.min(i + batchSize, words.length), words.length);
-    }
-
-    // 添加延迟避免API限流
-    if (i + batchSize < words.length) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
+  async function runNext(): Promise<void> {
+    while (index < tasks.length) {
+      if (signal?.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      const currentIndex = index++;
+      const result = await tasks[currentIndex]();
+      results[currentIndex] = result;
     }
   }
 
+  // 启动并发workers
+  const workers = Array(Math.min(concurrency, tasks.length))
+    .fill(null)
+    .map(() => runNext());
+
+  await Promise.all(workers);
   return results;
+}
+
+export interface BatchAnalyzeOptions {
+  batchSize?: number;
+  concurrency?: number;
+  onProgress?: (current: number, total: number) => void;
+  onBatchComplete?: (results: AnalysisResult[]) => Promise<void>;
+  signal?: AbortSignal;
+}
+
+// 批量分析（支持并发和取消）
+export async function batchAnalyzeWords(
+  words: string[],
+  options: BatchAnalyzeOptions = {}
+): Promise<AnalysisResult[]> {
+  const {
+    batchSize = 30,
+    concurrency = 3,
+    onProgress,
+    onBatchComplete,
+    signal,
+  } = options;
+
+  const allResults: AnalysisResult[] = [];
+  const batches: string[][] = [];
+
+  // 分批
+  for (let i = 0; i < words.length; i += batchSize) {
+    batches.push(words.slice(i, i + batchSize));
+  }
+
+  let completedWords = 0;
+
+  // 创建任务
+  const tasks = batches.map((batch) => async () => {
+    if (signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+
+    const batchResults = await analyzeWords(batch, signal);
+
+    // 更新进度
+    completedWords += batch.length;
+    if (onProgress) {
+      onProgress(completedWords, words.length);
+    }
+
+    // 每批完成后回调（用于渐进式保存）
+    if (onBatchComplete) {
+      await onBatchComplete(batchResults);
+    }
+
+    // 添加小延迟避免API限流（并发时也需要）
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    return batchResults;
+  });
+
+  try {
+    // 并发执行
+    const batchResults = await runWithConcurrency(tasks, concurrency, signal);
+    for (const results of batchResults) {
+      allResults.push(...results);
+    }
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") {
+      // 取消时返回已完成的结果
+      console.log("分析已取消，返回已完成的结果");
+    } else {
+      throw e;
+    }
+  }
+
+  return allResults;
 }

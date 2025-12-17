@@ -732,52 +732,67 @@ pub fn get_untranslated_roots(product_id: i64) -> Result<Vec<String>> {
     Ok(words)
 }
 
-// 批量更新词根翻译和分类（按产品筛选）
+// 批量更新词根翻译和分类（按产品筛选，使用事务提升性能）
 pub fn batch_update_root_analysis(
     product_id: i64,
     updates: Vec<(String, String, Vec<String>)>, // (word, translation, category_names)
 ) -> Result<()> {
     let conn = get_db().lock();
 
-    for (word, translation, category_names) in updates {
-        // 更新翻译
-        conn.execute(
-            "UPDATE roots SET translation = ?1 WHERE word = ?2 AND product_id = ?3",
-            rusqlite::params![translation, word, product_id],
-        )?;
+    // 使用事务提升批量更新性能
+    conn.execute("BEGIN TRANSACTION", [])?;
 
-        // 获取词根ID
-        let root_id: Option<i64> = conn
-            .query_row(
-                "SELECT id FROM roots WHERE word = ?1 AND product_id = ?2",
-                rusqlite::params![&word, product_id],
-                |row| row.get(0),
-            )
-            .ok();
+    let result = (|| {
+        for (word, translation, category_names) in updates {
+            // 更新翻译
+            conn.execute(
+                "UPDATE roots SET translation = ?1 WHERE word = ?2 AND product_id = ?3",
+                rusqlite::params![translation, word, product_id],
+            )?;
 
-        if let Some(root_id) = root_id {
-            // 清除现有分类
-            conn.execute("DELETE FROM root_categories WHERE root_id = ?1", [root_id])?;
+            // 获取词根ID
+            let root_id: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM roots WHERE word = ?1 AND product_id = ?2",
+                    rusqlite::params![&word, product_id],
+                    |row| row.get(0),
+                )
+                .ok();
 
-            // 添加新分类
-            for cat_name in category_names {
-                let cat_id: Option<i64> = conn
-                    .query_row(
-                        "SELECT id FROM categories WHERE name = ?1",
-                        [&cat_name],
-                        |row| row.get(0),
-                    )
-                    .ok();
+            if let Some(root_id) = root_id {
+                // 清除现有分类
+                conn.execute("DELETE FROM root_categories WHERE root_id = ?1", [root_id])?;
 
-                if let Some(cat_id) = cat_id {
-                    conn.execute(
-                        "INSERT OR IGNORE INTO root_categories (root_id, category_id) VALUES (?1, ?2)",
-                        [root_id, cat_id],
-                    )?;
+                // 添加新分类
+                for cat_name in category_names {
+                    let cat_id: Option<i64> = conn
+                        .query_row(
+                            "SELECT id FROM categories WHERE name = ?1",
+                            [&cat_name],
+                            |row| row.get(0),
+                        )
+                        .ok();
+
+                    if let Some(cat_id) = cat_id {
+                        conn.execute(
+                            "INSERT OR IGNORE INTO root_categories (root_id, category_id) VALUES (?1, ?2)",
+                            [root_id, cat_id],
+                        )?;
+                    }
                 }
             }
         }
-    }
+        Ok::<(), rusqlite::Error>(())
+    })();
 
-    Ok(())
+    match result {
+        Ok(_) => {
+            conn.execute("COMMIT", [])?;
+            Ok(())
+        }
+        Err(e) => {
+            conn.execute("ROLLBACK", []).ok();
+            Err(e)
+        }
+    }
 }
