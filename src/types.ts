@@ -1,3 +1,10 @@
+export interface Product {
+  id: number;
+  name: string;
+  sku: string | null;
+  asin: string | null;
+}
+
 export interface Category {
   id: number;
   name: string;

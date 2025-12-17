@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from "vue";
+import { ref, onMounted, onUnmounted, computed, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -7,10 +7,17 @@ import { readFile } from "@tauri-apps/plugin-fs";
 import * as XLSX from "xlsx";
 import * as api from "./api";
 import { batchAnalyzeWords } from "./deepseek";
-import type { Category, Root } from "./types";
+import type { Category, Product, Root } from "./types";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
-// 状态
+// ==================== 产品相关状态 ====================
+const products = ref<Product[]>([]);
+const selectedProduct = ref<Product | null>(null);
+const showProductDialog = ref(false);
+const productForm = ref({ id: 0, name: "", sku: "", asin: "" });
+const isEditingProduct = ref(false);
+
+// ==================== 词根相关状态 ====================
 const categories = ref<Category[]>([]);
 const roots = ref<Root[]>([]);
 const total = ref(0);
@@ -19,6 +26,7 @@ const importing = ref(false);
 const isDragging = ref(false);
 const analyzing = ref(false);
 const analysisProgress = ref({ current: 0, total: 0 });
+const exporting = ref(false);
 
 // 筛选和分页
 const searchText = ref("");
@@ -51,7 +59,119 @@ const secondaryCategories = computed(() =>
   )
 );
 
-// 加载分类
+// ==================== 产品管理 ====================
+
+async function loadProducts() {
+  try {
+    products.value = await api.getProducts();
+    // 如果有产品且没有选中的产品，选中第一个
+    if (products.value.length > 0 && !selectedProduct.value) {
+      selectedProduct.value = products.value[0];
+    }
+  } catch (e) {
+    ElMessage.error("加载产品失败: " + e);
+  }
+}
+
+function selectProduct(product: Product) {
+  selectedProduct.value = product;
+  currentPage.value = 1;
+  loadRoots();
+  loadStats();
+}
+
+function openAddProductDialog() {
+  productForm.value = { id: 0, name: "", sku: "", asin: "" };
+  isEditingProduct.value = false;
+  showProductDialog.value = true;
+}
+
+function openEditProductDialog(product: Product) {
+  productForm.value = {
+    id: product.id,
+    name: product.name,
+    sku: product.sku || "",
+    asin: product.asin || "",
+  };
+  isEditingProduct.value = true;
+  showProductDialog.value = true;
+}
+
+async function saveProduct() {
+  if (!productForm.value.name.trim()) {
+    ElMessage.warning("请输入产品名称");
+    return;
+  }
+
+  try {
+    if (isEditingProduct.value) {
+      await api.updateProduct(
+        productForm.value.id,
+        productForm.value.name,
+        productForm.value.sku || undefined,
+        productForm.value.asin || undefined
+      );
+      ElMessage.success("产品已更新");
+    } else {
+      const newId = await api.createProduct(
+        productForm.value.name,
+        productForm.value.sku || undefined,
+        productForm.value.asin || undefined
+      );
+      ElMessage.success("产品已创建");
+      // 选中新创建的产品
+      await loadProducts();
+      const newProduct = products.value.find((p) => p.id === newId);
+      if (newProduct) {
+        selectedProduct.value = newProduct;
+      }
+    }
+    showProductDialog.value = false;
+    await loadProducts();
+  } catch (e) {
+    ElMessage.error("保存失败: " + e);
+  }
+}
+
+async function deleteProduct(product: Product) {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除产品"${product.name}"吗？该产品下的所有关键词和词根数据都会被删除！`,
+      "警告",
+      {
+        confirmButtonText: "确定删除",
+        cancelButtonText: "取消",
+        type: "warning",
+      }
+    );
+
+    await api.deleteProduct(product.id);
+    ElMessage.success("产品已删除");
+
+    // 如果删除的是当前选中的产品，重新选择
+    if (selectedProduct.value?.id === product.id) {
+      selectedProduct.value = null;
+    }
+    await loadProducts();
+
+    // 重新加载数据
+    if (selectedProduct.value) {
+      await loadRoots();
+      await loadStats();
+    } else {
+      roots.value = [];
+      total.value = 0;
+      stats.value = { keywordCount: 0, rootCount: 0 };
+    }
+  } catch (e) {
+    if (e !== "cancel") {
+      ElMessage.error("删除失败: " + e);
+    }
+  }
+}
+
+// ==================== 分类和词根 ====================
+
 async function loadCategories() {
   try {
     categories.value = await api.getCategories();
@@ -60,11 +180,17 @@ async function loadCategories() {
   }
 }
 
-// 加载词根
 async function loadRoots() {
+  if (!selectedProduct.value) {
+    roots.value = [];
+    total.value = 0;
+    return;
+  }
+
   loading.value = true;
   try {
     const [data, count] = await api.getRoots({
+      productId: selectedProduct.value.id,
       search: searchText.value || undefined,
       categoryIds: selectedCategories.value.length
         ? selectedCategories.value
@@ -83,28 +209,33 @@ async function loadRoots() {
   }
 }
 
-// 加载统计
 async function loadStats() {
+  if (!selectedProduct.value) {
+    stats.value = { keywordCount: 0, rootCount: 0 };
+    return;
+  }
+
   try {
-    const [keywordCount, rootCount] = await api.getStats();
+    const [keywordCount, rootCount] = await api.getStats(selectedProduct.value.id);
     stats.value = { keywordCount, rootCount };
   } catch (e) {
     console.error("加载统计失败:", e);
   }
 }
 
-// 处理Excel文件（通用函数）
-async function processExcelBuffer(buffer: ArrayBuffer) {
-  const workbook = XLSX.read(buffer, { type: "array" });
+// ==================== 导入功能 ====================
 
-  // 获取第一个工作表
+async function processExcelBuffer(buffer: ArrayBuffer) {
+  if (!selectedProduct.value) {
+    ElMessage.warning("请先选择或创建一个产品");
+    return;
+  }
+
+  const workbook = XLSX.read(buffer, { type: "array" });
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
-
-  // 转换为JSON
   const data = XLSX.utils.sheet_to_json<{ [key: string]: string }>(sheet);
 
-  // 提取关键词（第一列）
   const keywords: string[] = [];
   for (const row of data) {
     const firstKey = Object.keys(row)[0];
@@ -118,17 +249,19 @@ async function processExcelBuffer(buffer: ArrayBuffer) {
     return;
   }
 
-  // 导入
-  await api.importKeywords(keywords);
-  ElMessage.success(`成功导入 ${keywords.length} 个关键词`);
+  await api.importKeywords(selectedProduct.value.id, keywords);
+  ElMessage.success(`成功导入 ${keywords.length} 个关键词到"${selectedProduct.value.name}"`);
 
-  // 刷新数据
   await loadRoots();
   await loadStats();
 }
 
-// 导入Excel（点击按钮）
 async function handleImport() {
+  if (!selectedProduct.value) {
+    ElMessage.warning("请先选择或创建一个产品");
+    return;
+  }
+
   try {
     const selected = await open({
       multiple: false,
@@ -138,8 +271,6 @@ async function handleImport() {
     if (!selected) return;
 
     importing.value = true;
-
-    // 读取文件
     const response = await fetch(`file://${selected}`);
     const buffer = await response.arrayBuffer();
     await processExcelBuffer(buffer);
@@ -150,7 +281,7 @@ async function handleImport() {
   }
 }
 
-// 拖拽导入 (Tauri 原生事件)
+// 拖拽导入
 let unlistenDragDrop: UnlistenFn | null = null;
 
 async function setupDragDrop() {
@@ -162,6 +293,12 @@ async function setupDragDrop() {
       isDragging.value = false;
     } else if (event.payload.type === "drop") {
       isDragging.value = false;
+
+      if (!selectedProduct.value) {
+        ElMessage.warning("请先选择或创建一个产品");
+        return;
+      }
+
       const paths = event.payload.paths;
       if (paths.length === 0) return;
 
@@ -190,31 +327,103 @@ async function setupDragDrop() {
   });
 }
 
-// 清空数据
-async function handleClearData() {
-  try {
-    await ElMessageBox.confirm("确定要清空所有数据吗？此操作不可恢复！", "警告", {
-      confirmButtonText: "确定",
-      cancelButtonText: "取消",
-      type: "warning",
-    });
+// ==================== 其他功能 ====================
 
-    await api.clearAllData();
-    ElMessage.success("数据已清空");
+async function handleClearData() {
+  if (!selectedProduct.value) {
+    ElMessage.warning("请先选择一个产品");
+    return;
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确定要重置"${selectedProduct.value.name}"的词库吗？所有关键词和词根数据都会被删除，此操作不可恢复！`,
+      "重置词库",
+      {
+        confirmButtonText: "确定重置",
+        cancelButtonText: "取消",
+        type: "warning",
+      }
+    );
+
+    await api.clearProductData(selectedProduct.value.id);
+    ElMessage.success("词库已重置");
     await loadRoots();
     await loadStats();
   } catch (e) {
     if (e !== "cancel") {
-      ElMessage.error("清空失败: " + e);
+      ElMessage.error("重置失败: " + e);
     }
   }
 }
 
-// AI智能分析
-async function handleAIAnalysis() {
+async function handleExport() {
+  if (!selectedProduct.value) {
+    ElMessage.warning("请先选择一个产品");
+    return;
+  }
+
+  if (stats.value.rootCount === 0) {
+    ElMessage.warning("当前产品没有词根数据可导出");
+    return;
+  }
+
   try {
-    // 获取未翻译的词根
-    const untranslatedWords = await api.getUntranslatedRoots();
+    exporting.value = true;
+
+    // 获取所有词根数据（使用大的pageSize获取全部）
+    const [allRoots] = await api.getRoots({
+      productId: selectedProduct.value.id,
+      page: 1,
+      pageSize: 100000, // 获取全部数据
+    });
+
+    // 准备Excel数据
+    const exportData = allRoots.map((root) => ({
+      词根: root.word,
+      中文翻译: root.translation || "",
+      词根长度: root.word.length,
+      包含词数: root.contains_count,
+      词根占比: root.percentage.toFixed(2) + "%",
+      分类: root.categories.map((id) => getCategoryName(id)).join(", "),
+    }));
+
+    // 创建工作簿
+    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "词根分析");
+
+    // 设置列宽
+    worksheet["!cols"] = [
+      { wch: 20 }, // 词根
+      { wch: 25 }, // 中文翻译
+      { wch: 10 }, // 词根长度
+      { wch: 10 }, // 包含词数
+      { wch: 10 }, // 词根占比
+      { wch: 30 }, // 分类
+    ];
+
+    // 生成文件名
+    const fileName = `${selectedProduct.value.name}_词库分析_${new Date().toISOString().slice(0, 10)}.xlsx`;
+
+    // 下载文件
+    XLSX.writeFile(workbook, fileName);
+    ElMessage.success(`成功导出 ${allRoots.length} 条词根数据`);
+  } catch (e) {
+    ElMessage.error("导出失败: " + e);
+  } finally {
+    exporting.value = false;
+  }
+}
+
+async function handleAIAnalysis() {
+  if (!selectedProduct.value) {
+    ElMessage.warning("请先选择一个产品");
+    return;
+  }
+
+  try {
+    const untranslatedWords = await api.getUntranslatedRoots(selectedProduct.value.id);
 
     if (untranslatedWords.length === 0) {
       ElMessage.info("所有词根已完成翻译和分类");
@@ -234,7 +443,6 @@ async function handleAIAnalysis() {
     analyzing.value = true;
     analysisProgress.value = { current: 0, total: untranslatedWords.length };
 
-    // 批量分析
     const results = await batchAnalyzeWords(
       untranslatedWords,
       30,
@@ -243,18 +451,14 @@ async function handleAIAnalysis() {
       }
     );
 
-    // 转换为更新格式并保存
     const updates: [string, string, string[]][] = results.map((r) => [
       r.word,
       r.translation,
       r.categories,
     ]);
 
-    await api.batchUpdateRootAnalysis(updates);
-
+    await api.batchUpdateRootAnalysis(selectedProduct.value.id, updates);
     ElMessage.success(`成功分析 ${results.length} 个词根`);
-
-    // 刷新数据
     await loadRoots();
   } catch (e) {
     if (e !== "cancel") {
@@ -266,13 +470,11 @@ async function handleAIAnalysis() {
   }
 }
 
-// 搜索
 function handleSearch() {
   currentPage.value = 1;
   loadRoots();
 }
 
-// 分类筛选
 function toggleCategory(id: number) {
   const index = selectedCategories.value.indexOf(id);
   if (index > -1) {
@@ -284,7 +486,6 @@ function toggleCategory(id: number) {
   loadRoots();
 }
 
-// 排序
 function handleSort(column: string) {
   if (sortBy.value === column) {
     sortOrder.value = sortOrder.value === "asc" ? "desc" : "asc";
@@ -295,7 +496,6 @@ function handleSort(column: string) {
   loadRoots();
 }
 
-// 分页
 function handlePageChange(page: number) {
   currentPage.value = page;
   loadRoots();
@@ -307,7 +507,6 @@ function handleSizeChange(size: number) {
   loadRoots();
 }
 
-// 编辑翻译
 function startEdit(root: Root) {
   editingId.value = root.id;
   editingTranslation.value = root.translation || "";
@@ -328,7 +527,6 @@ function cancelEdit() {
   editingId.value = null;
 }
 
-// 分类标签管理
 async function toggleRootCategory(root: Root, categoryId: number) {
   try {
     const hasCategory = root.categories.includes(categoryId);
@@ -353,11 +551,15 @@ function getCategoryCount(categoryId: number): number {
   return roots.value.filter((r) => r.categories.includes(categoryId)).length;
 }
 
-// 初始化
+// ==================== 初始化 ====================
+
 onMounted(async () => {
+  await loadProducts();
   await loadCategories();
-  await loadRoots();
-  await loadStats();
+  if (selectedProduct.value) {
+    await loadRoots();
+    await loadStats();
+  }
   await setupDragDrop();
 });
 
@@ -377,209 +579,296 @@ onUnmounted(() => {
         <p>释放以导入Excel文件</p>
       </div>
     </div>
-    <!-- 顶部工具栏 -->
-    <header class="header">
-      <div class="header-left">
-        <h1 class="title">词根</h1>
+
+    <!-- 侧边栏 - 产品列表 -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-title">产品列表</span>
+        <el-button type="primary" size="small" circle @click="openAddProductDialog">
+          <el-icon><Plus /></el-icon>
+        </el-button>
       </div>
-
-      <!-- 一级分类标签 -->
-      <div class="category-tabs">
-        <el-tag
-          v-for="cat in primaryCategories"
-          :key="cat.id"
-          :type="selectedCategories.includes(cat.id) ? '' : 'info'"
-          :effect="selectedCategories.includes(cat.id) ? 'dark' : 'plain'"
-          class="category-tag"
-          @click="toggleCategory(cat.id)"
+      <div class="product-list">
+        <div
+          v-for="product in products"
+          :key="product.id"
+          class="product-item"
+          :class="{ active: selectedProduct?.id === product.id }"
+          @click="selectProduct(product)"
         >
-          {{ cat.name }}({{ getCategoryCount(cat.id) }})
-        </el-tag>
+          <div class="product-info">
+            <div class="product-name">{{ product.name }}</div>
+            <div class="product-meta" v-if="product.sku || product.asin">
+              <span v-if="product.sku">SKU: {{ product.sku }}</span>
+              <span v-if="product.asin">ASIN: {{ product.asin }}</span>
+            </div>
+          </div>
+          <el-dropdown trigger="click" @click.stop>
+            <el-button size="small" text class="product-action">
+              <el-icon><MoreFilled /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item @click="openEditProductDialog(product)">
+                  <el-icon><Edit /></el-icon> 编辑
+                </el-dropdown-item>
+                <el-dropdown-item @click="deleteProduct(product)" divided>
+                  <el-icon color="#f56c6c"><Delete /></el-icon>
+                  <span style="color: #f56c6c">删除</span>
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+        <div v-if="products.length === 0" class="no-product">
+          <p>暂无产品</p>
+          <el-button type="primary" size="small" @click="openAddProductDialog">
+            创建产品
+          </el-button>
+        </div>
+      </div>
+    </aside>
 
-        <el-dropdown trigger="click">
-          <el-tag type="info" effect="plain" class="category-tag more-tag">
-            更多
+    <!-- 主内容区 -->
+    <main class="main-content">
+      <!-- 顶部工具栏 -->
+      <header class="header">
+        <div class="header-left">
+          <h1 class="title">{{ selectedProduct?.name || '请选择产品' }}</h1>
+        </div>
+
+        <!-- 一级分类标签 -->
+        <div class="category-tabs" v-if="selectedProduct">
+          <el-tag
+            v-for="cat in primaryCategories"
+            :key="cat.id"
+            :type="selectedCategories.includes(cat.id) ? '' : 'info'"
+            :effect="selectedCategories.includes(cat.id) ? 'dark' : 'plain'"
+            class="category-tag"
+            @click="toggleCategory(cat.id)"
+          >
+            {{ cat.name }}({{ getCategoryCount(cat.id) }})
           </el-tag>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item
-                v-for="cat in secondaryCategories"
-                :key="cat.id"
-                @click="toggleCategory(cat.id)"
-              >
-                <el-icon v-if="selectedCategories.includes(cat.id)"><Check /></el-icon>
-                {{ cat.name }}({{ getCategoryCount(cat.id) }})
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+
+          <el-dropdown trigger="click">
+            <el-tag type="info" effect="plain" class="category-tag more-tag">
+              更多
+            </el-tag>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item
+                  v-for="cat in secondaryCategories"
+                  :key="cat.id"
+                  @click="toggleCategory(cat.id)"
+                >
+                  <el-icon v-if="selectedCategories.includes(cat.id)"><Check /></el-icon>
+                  {{ cat.name }}({{ getCategoryCount(cat.id) }})
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+
+        <div class="header-right" v-if="selectedProduct">
+          <el-input
+            v-model="searchText"
+            placeholder="搜索词根"
+            clearable
+            style="width: 200px"
+            @keyup.enter="handleSearch"
+            @clear="handleSearch"
+          >
+            <template #prefix>
+              <el-icon><Search /></el-icon>
+            </template>
+          </el-input>
+        </div>
+      </header>
+
+      <!-- 统计和操作栏 -->
+      <div class="toolbar" v-if="selectedProduct">
+        <div class="stats">
+          <span>关键词: {{ stats.keywordCount }}</span>
+          <span>词根: {{ stats.rootCount }}</span>
+        </div>
+        <div class="actions">
+          <el-button type="primary" :loading="importing" @click="handleImport">
+            <el-icon><Upload /></el-icon>
+            导入Excel
+          </el-button>
+          <el-button :loading="exporting" @click="handleExport">
+            <el-icon><Download /></el-icon>
+            导出Excel
+          </el-button>
+          <el-button
+            type="success"
+            :loading="analyzing"
+            @click="handleAIAnalysis"
+          >
+            <el-icon><MagicStick /></el-icon>
+            {{ analyzing ? `分析中 ${analysisProgress.current}/${analysisProgress.total}` : '智能分析' }}
+          </el-button>
+          <el-button type="warning" plain @click="handleClearData">
+            <el-icon><RefreshRight /></el-icon>
+            重置词库
+          </el-button>
+        </div>
       </div>
 
-      <div class="header-right">
-        <el-input
-          v-model="searchText"
-          placeholder="搜索词根"
-          clearable
-          style="width: 200px"
-          @keyup.enter="handleSearch"
-          @clear="handleSearch"
+      <!-- 词根表格 -->
+      <div class="table-container" v-if="selectedProduct">
+        <el-table
+          :data="roots"
+          v-loading="loading"
+          stripe
+          style="width: 100%"
+          :default-sort="{ prop: 'contains_count', order: 'descending' }"
         >
-          <template #prefix>
-            <el-icon><Search /></el-icon>
-          </template>
-        </el-input>
-      </div>
-    </header>
+          <el-table-column type="index" label="#" width="50" />
 
-    <!-- 统计和操作栏 -->
-    <div class="toolbar">
-      <div class="stats">
-        <span>关键词: {{ stats.keywordCount }}</span>
-        <span>词根: {{ stats.rootCount }}</span>
-      </div>
-      <div class="actions">
-        <el-button type="primary" :loading="importing" @click="handleImport">
-          <el-icon><Upload /></el-icon>
-          导入Excel
-        </el-button>
-        <el-button
-          type="success"
-          :loading="analyzing"
-          @click="handleAIAnalysis"
-        >
-          <el-icon><MagicStick /></el-icon>
-          {{ analyzing ? `分析中 ${analysisProgress.current}/${analysisProgress.total}` : '智能分析' }}
-        </el-button>
-        <el-button type="danger" plain @click="handleClearData">
-          <el-icon><Delete /></el-icon>
-          清空数据
-        </el-button>
-      </div>
-    </div>
+          <el-table-column label="词根" min-width="120">
+            <template #default="{ row }">
+              <span class="word-cell">{{ row.word }}</span>
+            </template>
+          </el-table-column>
 
-    <!-- 词根表格 -->
-    <div class="table-container">
-      <el-table
-        :data="roots"
-        v-loading="loading"
-        stripe
-        style="width: 100%"
-        :default-sort="{ prop: 'contains_count', order: 'descending' }"
-      >
-        <el-table-column type="index" label="#" width="50" />
-
-        <el-table-column label="词根" min-width="120">
-          <template #default="{ row }">
-            <span class="word-cell">{{ row.word }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="中文翻译" min-width="150">
-          <template #default="{ row }">
-            <div v-if="editingId === row.id" class="edit-cell">
-              <el-input
-                v-model="editingTranslation"
-                size="small"
-                @keyup.enter="saveTranslation(row)"
-                @keyup.escape="cancelEdit"
-              />
-              <el-button size="small" type="primary" @click="saveTranslation(row)">
-                保存
-              </el-button>
-              <el-button size="small" @click="cancelEdit">取消</el-button>
-            </div>
-            <div v-else class="translation-cell" @click="startEdit(row)">
-              {{ row.translation || '-' }}
-              <el-icon class="edit-icon"><Edit /></el-icon>
-            </div>
-          </template>
-        </el-table-column>
-
-        <el-table-column
-          label="词根长度"
-          width="100"
-          sortable
-          :sort-method="(a: Root, b: Root) => a.word.length - b.word.length"
-        >
-          <template #default="{ row }">
-            {{ row.word.length }}
-          </template>
-        </el-table-column>
-
-        <el-table-column
-          prop="contains_count"
-          label="包含词"
-          width="100"
-          sortable
-          :sort-orders="['descending', 'ascending']"
-        >
-          <template #header>
-            <span class="sortable-header" @click="handleSort('contains_count')">
-              包含词
-              <el-icon v-if="sortBy === 'contains_count'">
-                <ArrowUp v-if="sortOrder === 'asc'" />
-                <ArrowDown v-else />
-              </el-icon>
-            </span>
-          </template>
-          <template #default="{ row }">
-            {{ row.contains_count }}个
-          </template>
-        </el-table-column>
-
-        <el-table-column label="词根占比" width="100">
-          <template #default="{ row }">
-            {{ row.percentage.toFixed(2) }}%
-          </template>
-        </el-table-column>
-
-        <el-table-column label="分类" min-width="200">
-          <template #default="{ row }">
-            <div class="category-cell">
-              <el-tag
-                v-for="catId in row.categories"
-                :key="catId"
-                size="small"
-                closable
-                @close="toggleRootCategory(row, catId)"
-              >
-                {{ getCategoryName(catId) }}
-              </el-tag>
-              <el-dropdown trigger="click" @visible-change="(v: boolean) => categoryDropdownVisible[row.id] = v">
-                <el-button size="small" circle>
-                  <el-icon><Plus /></el-icon>
+          <el-table-column label="中文翻译" min-width="150">
+            <template #default="{ row }">
+              <div v-if="editingId === row.id" class="edit-cell">
+                <el-input
+                  v-model="editingTranslation"
+                  size="small"
+                  @keyup.enter="saveTranslation(row)"
+                  @keyup.escape="cancelEdit"
+                />
+                <el-button size="small" type="primary" @click="saveTranslation(row)">
+                  保存
                 </el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item
-                      v-for="cat in categories"
-                      :key="cat.id"
-                      :disabled="row.categories.includes(cat.id)"
-                      @click="toggleRootCategory(row, cat.id)"
-                    >
-                      {{ cat.name }}
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </div>
-          </template>
-        </el-table-column>
-      </el-table>
-    </div>
+                <el-button size="small" @click="cancelEdit">取消</el-button>
+              </div>
+              <div v-else class="translation-cell" @click="startEdit(row)">
+                {{ row.translation || '-' }}
+                <el-icon class="edit-icon"><Edit /></el-icon>
+              </div>
+            </template>
+          </el-table-column>
 
-    <!-- 分页 -->
-    <div class="pagination">
-      <el-pagination
-        v-model:current-page="currentPage"
-        v-model:page-size="pageSize"
-        :page-sizes="[20, 50, 100, 200]"
-        :total="total"
-        layout="total, sizes, prev, pager, next, jumper"
-        @size-change="handleSizeChange"
-        @current-change="handlePageChange"
-      />
-    </div>
+          <el-table-column
+            label="词根长度"
+            width="100"
+            sortable
+            :sort-method="(a: Root, b: Root) => a.word.length - b.word.length"
+          >
+            <template #default="{ row }">
+              {{ row.word.length }}
+            </template>
+          </el-table-column>
+
+          <el-table-column
+            prop="contains_count"
+            label="包含词"
+            width="100"
+            sortable
+            :sort-orders="['descending', 'ascending']"
+          >
+            <template #header>
+              <span class="sortable-header" @click="handleSort('contains_count')">
+                包含词
+                <el-icon v-if="sortBy === 'contains_count'">
+                  <ArrowUp v-if="sortOrder === 'asc'" />
+                  <ArrowDown v-else />
+                </el-icon>
+              </span>
+            </template>
+            <template #default="{ row }">
+              {{ row.contains_count }}个
+            </template>
+          </el-table-column>
+
+          <el-table-column label="词根占比" width="100">
+            <template #default="{ row }">
+              {{ row.percentage.toFixed(2) }}%
+            </template>
+          </el-table-column>
+
+          <el-table-column label="分类" min-width="200">
+            <template #default="{ row }">
+              <div class="category-cell">
+                <el-tag
+                  v-for="catId in row.categories"
+                  :key="catId"
+                  size="small"
+                  closable
+                  @close="toggleRootCategory(row, catId)"
+                >
+                  {{ getCategoryName(catId) }}
+                </el-tag>
+                <el-dropdown trigger="click" @visible-change="(v: boolean) => categoryDropdownVisible[row.id] = v">
+                  <el-button size="small" circle>
+                    <el-icon><Plus /></el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item
+                        v-for="cat in categories"
+                        :key="cat.id"
+                        :disabled="row.categories.includes(cat.id)"
+                        @click="toggleRootCategory(row, cat.id)"
+                      >
+                        {{ cat.name }}
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <!-- 无产品提示 -->
+      <div class="no-product-main" v-else>
+        <el-empty description="请先选择或创建一个产品">
+          <el-button type="primary" @click="openAddProductDialog">创建产品</el-button>
+        </el-empty>
+      </div>
+
+      <!-- 分页 -->
+      <div class="pagination" v-if="selectedProduct">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :page-sizes="[20, 50, 100, 200]"
+          :total="total"
+          layout="total, sizes, prev, pager, next, jumper"
+          @size-change="handleSizeChange"
+          @current-change="handlePageChange"
+        />
+      </div>
+    </main>
+
+    <!-- 产品编辑对话框 -->
+    <el-dialog
+      v-model="showProductDialog"
+      :title="isEditingProduct ? '编辑产品' : '创建产品'"
+      width="400px"
+    >
+      <el-form :model="productForm" label-width="80px">
+        <el-form-item label="产品名称" required>
+          <el-input v-model="productForm.name" placeholder="请输入产品名称" />
+        </el-form-item>
+        <el-form-item label="SKU">
+          <el-input v-model="productForm.sku" placeholder="请输入SKU（可选）" />
+        </el-form-item>
+        <el-form-item label="ASIN">
+          <el-input v-model="productForm.asin" placeholder="请输入ASIN（可选）" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showProductDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveProduct">确定</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -603,7 +892,6 @@ body,
 .app-container {
   height: 100vh;
   display: flex;
-  flex-direction: column;
   background-color: #f5f7fa;
   position: relative;
 }
@@ -635,6 +923,105 @@ body,
 .drop-content p {
   font-size: 20px;
   font-weight: 500;
+}
+
+/* 侧边栏样式 */
+.sidebar {
+  width: 240px;
+  background: #fff;
+  border-right: 1px solid #e4e7ed;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.sidebar-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.product-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.product-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  margin-bottom: 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.product-item:hover {
+  background-color: #f5f7fa;
+}
+
+.product-item.active {
+  background-color: #ecf5ff;
+  border: 1px solid #409eff;
+}
+
+.product-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.product-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #303133;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.product-meta {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+  display: flex;
+  gap: 8px;
+}
+
+.product-action {
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.product-item:hover .product-action {
+  opacity: 1;
+}
+
+.no-product {
+  text-align: center;
+  padding: 40px 20px;
+  color: #909399;
+}
+
+.no-product p {
+  margin-bottom: 16px;
+}
+
+/* 主内容区 */
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .header {
@@ -715,7 +1102,6 @@ body,
   min-height: 0;
 }
 
-/* 增加表格行高 */
 .table-container :deep(.el-table__row) {
   height: 52px;
 }
@@ -774,5 +1160,12 @@ body,
   background: #fff;
   border-top: 1px solid #e4e7ed;
   flex-shrink: 0;
+}
+
+.no-product-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 </style>

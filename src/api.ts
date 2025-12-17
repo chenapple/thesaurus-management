@@ -1,15 +1,59 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Category, Root } from "./types";
+import type { Category, Product, Root } from "./types";
+
+// ==================== 产品管理 ====================
+
+export async function getProducts(): Promise<Product[]> {
+  return await invoke("get_products");
+}
+
+export async function createProduct(
+  name: string,
+  sku?: string,
+  asin?: string
+): Promise<number> {
+  return await invoke("create_product", {
+    name,
+    sku: sku || null,
+    asin: asin || null,
+  });
+}
+
+export async function updateProduct(
+  id: number,
+  name: string,
+  sku?: string,
+  asin?: string
+): Promise<void> {
+  return await invoke("update_product", {
+    id,
+    name,
+    sku: sku || null,
+    asin: asin || null,
+  });
+}
+
+export async function deleteProduct(id: number): Promise<void> {
+  return await invoke("delete_product", { id });
+}
+
+// ==================== 分类 ====================
 
 export async function getCategories(): Promise<Category[]> {
   return await invoke("get_categories");
 }
 
-export async function importKeywords(keywords: string[]): Promise<void> {
-  return await invoke("import_keywords", { keywords });
+// ==================== 关键词和词根 ====================
+
+export async function importKeywords(
+  productId: number,
+  keywords: string[]
+): Promise<void> {
+  return await invoke("import_keywords", { productId, keywords });
 }
 
 export async function getRoots(params: {
+  productId?: number;
   search?: string;
   categoryIds?: number[];
   sortBy?: string;
@@ -18,6 +62,7 @@ export async function getRoots(params: {
   pageSize: number;
 }): Promise<[Root[], number]> {
   return await invoke("get_roots", {
+    productId: params.productId || null,
     search: params.search || null,
     categoryIds: params.categoryIds?.length ? params.categoryIds : null,
     sortBy: params.sortBy || null,
@@ -48,20 +93,21 @@ export async function removeRootCategory(
   return await invoke("remove_root_category", { rootId, categoryId });
 }
 
-export async function getStats(): Promise<[number, number]> {
-  return await invoke("get_stats");
+export async function getStats(productId?: number): Promise<[number, number]> {
+  return await invoke("get_stats", { productId: productId || null });
 }
 
-export async function clearAllData(): Promise<void> {
-  return await invoke("clear_all_data");
+export async function clearProductData(productId: number): Promise<void> {
+  return await invoke("clear_product_data", { productId });
 }
 
-export async function getUntranslatedRoots(): Promise<string[]> {
-  return await invoke("get_untranslated_roots");
+export async function getUntranslatedRoots(productId: number): Promise<string[]> {
+  return await invoke("get_untranslated_roots", { productId });
 }
 
 export async function batchUpdateRootAnalysis(
+  productId: number,
   updates: [string, string, string[]][]
 ): Promise<void> {
-  return await invoke("batch_update_root_analysis", { updates });
+  return await invoke("batch_update_root_analysis", { productId, updates });
 }

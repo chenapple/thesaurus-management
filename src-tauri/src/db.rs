@@ -103,6 +103,15 @@ fn is_valid_root(word: &str) -> bool {
     !stopwords.contains(word_lower.as_str())
 }
 
+// 产品结构体
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Product {
+    pub id: i64,
+    pub name: String,
+    pub sku: Option<String>,
+    pub asin: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Root {
     pub id: i64,
@@ -135,31 +144,16 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
     let db_path = app_data_dir.join("thesaurus.db");
     let conn = Connection::open(db_path)?;
 
-    // 创建表
+    // 先创建产品表（不依赖其他表）
     conn.execute_batch(
         "
-        -- 搜索词表
-        CREATE TABLE IF NOT EXISTS keywords (
+        -- 产品表
+        CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            keyword TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            sku TEXT,
+            asin TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-
-        -- 词根表
-        CREATE TABLE IF NOT EXISTS roots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            word TEXT NOT NULL UNIQUE,
-            translation TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-
-        -- 搜索词-词根关联表
-        CREATE TABLE IF NOT EXISTS keyword_roots (
-            keyword_id INTEGER NOT NULL,
-            root_id INTEGER NOT NULL,
-            PRIMARY KEY (keyword_id, root_id),
-            FOREIGN KEY (keyword_id) REFERENCES keywords(id) ON DELETE CASCADE,
-            FOREIGN KEY (root_id) REFERENCES roots(id) ON DELETE CASCADE
         );
 
         -- 分类表
@@ -180,9 +174,27 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
             FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
         );
 
-        -- 创建索引
+        -- 搜索词-词根关联表
+        CREATE TABLE IF NOT EXISTS keyword_roots (
+            keyword_id INTEGER NOT NULL,
+            root_id INTEGER NOT NULL,
+            PRIMARY KEY (keyword_id, root_id),
+            FOREIGN KEY (keyword_id) REFERENCES keywords(id) ON DELETE CASCADE,
+            FOREIGN KEY (root_id) REFERENCES roots(id) ON DELETE CASCADE
+        );
+        ",
+    )?;
+
+    // 数据库迁移：为旧数据添加产品支持（在创建新表结构之前）
+    migrate_add_product_support(&conn)?;
+
+    // 创建索引（迁移完成后）
+    conn.execute_batch(
+        "
         CREATE INDEX IF NOT EXISTS idx_roots_word ON roots(word);
+        CREATE INDEX IF NOT EXISTS idx_roots_product ON roots(product_id);
         CREATE INDEX IF NOT EXISTS idx_keywords_keyword ON keywords(keyword);
+        CREATE INDEX IF NOT EXISTS idx_keywords_product ON keywords(product_id);
         ",
     )?;
 
@@ -191,6 +203,118 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
 
     DB.set(Mutex::new(conn))
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
+
+    Ok(())
+}
+
+// 数据库迁移：检查并添加产品支持
+fn migrate_add_product_support(conn: &Connection) -> Result<()> {
+    // 检查keywords表是否存在
+    let table_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='keywords'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)
+        .unwrap_or(false);
+
+    if !table_exists {
+        // 表不存在，创建新表结构
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS keywords (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword TEXT NOT NULL,
+                product_id INTEGER NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(keyword, product_id),
+                FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS roots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                word TEXT NOT NULL,
+                product_id INTEGER NOT NULL,
+                translation TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(word, product_id),
+                FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+            );
+            ",
+        )?;
+        return Ok(());
+    }
+
+    // 检查keywords表是否有product_id列
+    let has_product_id: bool = conn
+        .prepare("SELECT product_id FROM keywords LIMIT 1")
+        .is_ok();
+
+    if !has_product_id {
+        // 旧表结构，需要迁移
+        // 1. 创建默认产品
+        conn.execute(
+            "INSERT OR IGNORE INTO products (id, name, sku, asin) VALUES (1, '默认产品', NULL, NULL)",
+            [],
+        )?;
+
+        // 2. 重命名旧表
+        conn.execute_batch(
+            "
+            ALTER TABLE keywords RENAME TO keywords_old;
+            ALTER TABLE roots RENAME TO roots_old;
+            ALTER TABLE keyword_roots RENAME TO keyword_roots_old;
+            ",
+        )?;
+
+        // 3. 创建新表
+        conn.execute_batch(
+            "
+            CREATE TABLE keywords (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword TEXT NOT NULL,
+                product_id INTEGER NOT NULL DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(keyword, product_id),
+                FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE roots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                word TEXT NOT NULL,
+                product_id INTEGER NOT NULL DEFAULT 1,
+                translation TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(word, product_id),
+                FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+            );
+            ",
+        )?;
+
+        // 4. 迁移数据
+        conn.execute_batch(
+            "
+            INSERT INTO keywords (id, keyword, product_id, created_at)
+            SELECT id, keyword, 1, created_at FROM keywords_old;
+
+            INSERT INTO roots (id, word, product_id, translation, created_at)
+            SELECT id, word, 1, translation, created_at FROM roots_old;
+
+            INSERT INTO keyword_roots (keyword_id, root_id)
+            SELECT keyword_id, root_id FROM keyword_roots_old;
+            ",
+        )?;
+
+        // 5. 删除旧表
+        conn.execute_batch(
+            "
+            DROP TABLE keyword_roots_old;
+            DROP TABLE keywords_old;
+            DROP TABLE roots_old;
+            ",
+        )?;
+    }
 
     Ok(())
 }
@@ -262,8 +386,57 @@ pub fn get_categories() -> Result<Vec<Category>> {
     Ok(categories)
 }
 
-// 导入关键词并分析词根
-pub fn import_keywords(keywords: Vec<String>) -> Result<()> {
+// ==================== 产品管理 ====================
+
+// 获取所有产品
+pub fn get_products() -> Result<Vec<Product>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare("SELECT id, name, sku, asin FROM products ORDER BY id")?;
+    let products = stmt
+        .query_map([], |row| {
+            Ok(Product {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                sku: row.get(2)?,
+                asin: row.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
+    Ok(products)
+}
+
+// 创建产品
+pub fn create_product(name: String, sku: Option<String>, asin: Option<String>) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT INTO products (name, sku, asin) VALUES (?1, ?2, ?3)",
+        rusqlite::params![name, sku, asin],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+// 更新产品
+pub fn update_product(id: i64, name: String, sku: Option<String>, asin: Option<String>) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE products SET name = ?1, sku = ?2, asin = ?3 WHERE id = ?4",
+        rusqlite::params![name, sku, asin, id],
+    )?;
+    Ok(())
+}
+
+// 删除产品（同时删除关联的关键词和词根）
+pub fn delete_product(id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    // 由于外键级联删除，只需要删除产品即可
+    conn.execute("DELETE FROM products WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+// ==================== 关键词和词根 ====================
+
+// 导入关键词并分析词根（关联到指定产品）
+pub fn import_keywords(product_id: i64, keywords: Vec<String>) -> Result<()> {
     let conn = get_db().lock();
 
     for keyword in keywords {
@@ -274,14 +447,14 @@ pub fn import_keywords(keywords: Vec<String>) -> Result<()> {
 
         // 插入关键词（忽略重复）
         conn.execute(
-            "INSERT OR IGNORE INTO keywords (keyword) VALUES (?1)",
-            [&keyword],
+            "INSERT OR IGNORE INTO keywords (keyword, product_id) VALUES (?1, ?2)",
+            rusqlite::params![&keyword, product_id],
         )?;
 
         // 获取关键词ID
         let keyword_id: i64 = conn.query_row(
-            "SELECT id FROM keywords WHERE keyword = ?1",
-            [&keyword],
+            "SELECT id FROM keywords WHERE keyword = ?1 AND product_id = ?2",
+            rusqlite::params![&keyword, product_id],
             |row| row.get(0),
         )?;
 
@@ -298,14 +471,18 @@ pub fn import_keywords(keywords: Vec<String>) -> Result<()> {
                 continue;
             }
 
-            // 插入词根（忽略重复）
-            conn.execute("INSERT OR IGNORE INTO roots (word) VALUES (?1)", [word])?;
+            // 插入词根（忽略重复，按产品独立）
+            conn.execute(
+                "INSERT OR IGNORE INTO roots (word, product_id) VALUES (?1, ?2)",
+                rusqlite::params![word, product_id],
+            )?;
 
             // 获取词根ID
-            let root_id: i64 =
-                conn.query_row("SELECT id FROM roots WHERE word = ?1", [word], |row| {
-                    row.get(0)
-                })?;
+            let root_id: i64 = conn.query_row(
+                "SELECT id FROM roots WHERE word = ?1 AND product_id = ?2",
+                rusqlite::params![word, product_id],
+                |row| row.get(0),
+            )?;
 
             // 建立关联（忽略重复）
             conn.execute(
@@ -318,8 +495,9 @@ pub fn import_keywords(keywords: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-// 获取词根列表（带统计信息）
+// 获取词根列表（带统计信息，按产品筛选）
 pub fn get_roots(
+    product_id: Option<i64>,
     search: Option<String>,
     category_ids: Option<Vec<i64>>,
     sort_by: Option<String>,
@@ -329,9 +507,16 @@ pub fn get_roots(
 ) -> Result<(Vec<RootWithCategories>, i64)> {
     let conn = get_db().lock();
 
-    // 获取总关键词数
-    let total_keywords: i64 =
-        conn.query_row("SELECT COUNT(*) FROM keywords", [], |row| row.get(0))?;
+    // 获取该产品的总关键词数
+    let total_keywords: i64 = if let Some(pid) = product_id {
+        conn.query_row(
+            "SELECT COUNT(*) FROM keywords WHERE product_id = ?1",
+            [pid],
+            |row| row.get(0),
+        )?
+    } else {
+        conn.query_row("SELECT COUNT(*) FROM keywords", [], |row| row.get(0))?
+    };
 
     // 构建查询
     let mut sql = String::from(
@@ -344,6 +529,12 @@ pub fn get_roots(
 
     let mut conditions = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+    // 按产品筛选
+    if let Some(pid) = product_id {
+        conditions.push("r.product_id = ?".to_string());
+        params.push(Box::new(pid));
+    }
 
     if let Some(ref cat_ids) = category_ids {
         if !cat_ids.is_empty() {
@@ -429,12 +620,16 @@ pub fn get_roots(
         root.categories = cat_ids;
     }
 
-    // 获取总数
-    let total: i64 = conn.query_row(
-        "SELECT COUNT(DISTINCT id) FROM roots",
-        [],
-        |row| row.get(0),
-    )?;
+    // 获取总数（按产品筛选）
+    let total: i64 = if let Some(pid) = product_id {
+        conn.query_row(
+            "SELECT COUNT(DISTINCT id) FROM roots WHERE product_id = ?1",
+            [pid],
+            |row| row.get(0),
+        )?
+    } else {
+        conn.query_row("SELECT COUNT(DISTINCT id) FROM roots", [], |row| row.get(0))?
+    };
 
     Ok((roots_with_categories, total))
 }
@@ -469,43 +664,62 @@ pub fn remove_root_category(root_id: i64, category_id: i64) -> Result<()> {
     Ok(())
 }
 
-// 获取统计信息
-pub fn get_stats() -> Result<(i64, i64)> {
+// 获取统计信息（按产品筛选）
+pub fn get_stats(product_id: Option<i64>) -> Result<(i64, i64)> {
     let conn = get_db().lock();
-    let keyword_count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM keywords", [], |row| row.get(0))?;
-    let root_count: i64 = conn.query_row("SELECT COUNT(*) FROM roots", [], |row| row.get(0))?;
+    let (keyword_count, root_count) = if let Some(pid) = product_id {
+        let kw: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM keywords WHERE product_id = ?1",
+            [pid],
+            |row| row.get(0),
+        )?;
+        let rt: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM roots WHERE product_id = ?1",
+            [pid],
+            |row| row.get(0),
+        )?;
+        (kw, rt)
+    } else {
+        let kw: i64 = conn.query_row("SELECT COUNT(*) FROM keywords", [], |row| row.get(0))?;
+        let rt: i64 = conn.query_row("SELECT COUNT(*) FROM roots", [], |row| row.get(0))?;
+        (kw, rt)
+    };
     Ok((keyword_count, root_count))
 }
 
-// 清空所有数据
-pub fn clear_all_data() -> Result<()> {
+// 清空产品数据（只删除指定产品的关键词和词根）
+pub fn clear_product_data(product_id: i64) -> Result<()> {
     let conn = get_db().lock();
-    conn.execute_batch(
-        "
-        DELETE FROM keyword_roots;
-        DELETE FROM root_categories;
-        DELETE FROM keywords;
-        DELETE FROM roots;
-        ",
+    // 先删除关联表数据
+    conn.execute(
+        "DELETE FROM keyword_roots WHERE keyword_id IN (SELECT id FROM keywords WHERE product_id = ?1)",
+        [product_id],
     )?;
+    conn.execute(
+        "DELETE FROM root_categories WHERE root_id IN (SELECT id FROM roots WHERE product_id = ?1)",
+        [product_id],
+    )?;
+    // 再删除关键词和词根
+    conn.execute("DELETE FROM keywords WHERE product_id = ?1", [product_id])?;
+    conn.execute("DELETE FROM roots WHERE product_id = ?1", [product_id])?;
     Ok(())
 }
 
-// 获取未翻译的词根
-pub fn get_untranslated_roots() -> Result<Vec<String>> {
+// 获取未翻译的词根（按产品筛选）
+pub fn get_untranslated_roots(product_id: i64) -> Result<Vec<String>> {
     let conn = get_db().lock();
     let mut stmt = conn.prepare(
-        "SELECT word FROM roots WHERE translation IS NULL OR translation = '' ORDER BY id",
+        "SELECT word FROM roots WHERE product_id = ?1 AND (translation IS NULL OR translation = '') ORDER BY id",
     )?;
     let words = stmt
-        .query_map([], |row| row.get(0))?
+        .query_map([product_id], |row| row.get(0))?
         .collect::<Result<Vec<String>>>()?;
     Ok(words)
 }
 
-// 批量更新词根翻译和分类
+// 批量更新词根翻译和分类（按产品筛选）
 pub fn batch_update_root_analysis(
+    product_id: i64,
     updates: Vec<(String, String, Vec<String>)>, // (word, translation, category_names)
 ) -> Result<()> {
     let conn = get_db().lock();
@@ -513,15 +727,17 @@ pub fn batch_update_root_analysis(
     for (word, translation, category_names) in updates {
         // 更新翻译
         conn.execute(
-            "UPDATE roots SET translation = ?1 WHERE word = ?2",
-            rusqlite::params![translation, word],
+            "UPDATE roots SET translation = ?1 WHERE word = ?2 AND product_id = ?3",
+            rusqlite::params![translation, word, product_id],
         )?;
 
         // 获取词根ID
         let root_id: Option<i64> = conn
-            .query_row("SELECT id FROM roots WHERE word = ?1", [&word], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT id FROM roots WHERE word = ?1 AND product_id = ?2",
+                rusqlite::params![&word, product_id],
+                |row| row.get(0),
+            )
             .ok();
 
         if let Some(root_id) = root_id {
