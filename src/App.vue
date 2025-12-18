@@ -11,6 +11,7 @@ import * as api from "./api";
 import { batchAnalyzeWords } from "./deepseek";
 import type { Category, Product, Root } from "./types";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import WordCloud from "./components/WordCloud.vue";
 
 // ==================== 产品相关状态 ====================
 const products = ref<Product[]>([]);
@@ -52,6 +53,14 @@ const categoryDropdownVisible = ref<{ [key: number]: boolean }>({});
 
 // 主题
 const isDarkMode = ref(false);
+
+// 快捷键帮助弹窗
+const showShortcutsDialog = ref(false);
+
+// 视图模式: 'table' | 'wordcloud'
+const viewMode = ref<'table' | 'wordcloud'>('table');
+const wordCloudRef = ref<InstanceType<typeof WordCloud> | null>(null);
+const allRootsForCloud = ref<Root[]>([]);
 
 // 一级分类和二级分类
 const primaryCategories = computed(() =>
@@ -214,6 +223,47 @@ async function loadRoots() {
   } finally {
     loading.value = false;
   }
+}
+
+// 加载所有词根用于词云显示
+async function loadAllRootsForCloud() {
+  if (!selectedProduct.value) {
+    allRootsForCloud.value = [];
+    return;
+  }
+
+  try {
+    const [data] = await api.getRoots({
+      productId: selectedProduct.value.id,
+      sortBy: 'contains_count',
+      sortOrder: 'desc',
+      page: 1,
+      pageSize: 500, // 加载前500个词根用于词云
+    });
+    allRootsForCloud.value = data;
+  } catch (e) {
+    console.error("加载词云数据失败:", e);
+  }
+}
+
+// 切换视图模式
+function switchViewMode(mode: 'table' | 'wordcloud') {
+  viewMode.value = mode;
+  if (mode === 'wordcloud' && allRootsForCloud.value.length === 0) {
+    loadAllRootsForCloud();
+  }
+}
+
+// 词云点击处理
+function handleWordCloudClick(word: string) {
+  searchText.value = word;
+  viewMode.value = 'table';
+  handleSearch();
+}
+
+// 导出词云图片
+function exportWordCloudImage() {
+  wordCloudRef.value?.exportImage();
 }
 
 async function loadStats() {
@@ -617,6 +667,109 @@ function toggleTheme() {
   applyTheme();
 }
 
+// ==================== 键盘快捷键 ====================
+
+function handleKeyboard(e: KeyboardEvent) {
+  // 检测 Ctrl (Windows) 或 Cmd (Mac)
+  const isMod = e.ctrlKey || e.metaKey;
+
+  // 如果正在输入框中，只响应 Escape
+  const isInputting =
+    document.activeElement?.tagName === "INPUT" ||
+    document.activeElement?.tagName === "TEXTAREA";
+
+  if (isInputting && e.key !== "Escape") {
+    return;
+  }
+
+  // Ctrl/Cmd + N: 创建新产品
+  if (isMod && e.key === "n") {
+    e.preventDefault();
+    openAddProductDialog();
+    return;
+  }
+
+  // Ctrl/Cmd + I: 导入 Excel
+  if (isMod && e.key === "i") {
+    e.preventDefault();
+    if (selectedProduct.value) {
+      handleImport();
+    }
+    return;
+  }
+
+  // Ctrl/Cmd + E: 导出 Excel
+  if (isMod && e.key === "e") {
+    e.preventDefault();
+    if (selectedProduct.value) {
+      handleExport();
+    }
+    return;
+  }
+
+  // Ctrl/Cmd + F: 聚焦搜索框
+  if (isMod && e.key === "f") {
+    e.preventDefault();
+    const searchInput = document.querySelector(
+      ".header-right .el-input__inner"
+    ) as HTMLInputElement;
+    searchInput?.focus();
+    return;
+  }
+
+  // Ctrl/Cmd + Enter: 开始智能分析
+  if (isMod && e.key === "Enter") {
+    e.preventDefault();
+    if (selectedProduct.value && !analyzing.value) {
+      handleAIAnalysis();
+    }
+    return;
+  }
+
+  // Ctrl/Cmd + D: 切换深色模式
+  if (isMod && e.key === "d") {
+    e.preventDefault();
+    toggleTheme();
+    return;
+  }
+
+  // ? 或 Ctrl/Cmd + /: 显示快捷键帮助
+  if (e.key === "?" || (isMod && e.key === "/")) {
+    e.preventDefault();
+    showShortcutsDialog.value = true;
+    return;
+  }
+
+  // Escape: 关闭对话框 / 取消编辑
+  if (e.key === "Escape") {
+    if (showShortcutsDialog.value) {
+      showShortcutsDialog.value = false;
+    } else if (editingId.value !== null) {
+      cancelEdit();
+    }
+    return;
+  }
+
+  // 上下箭头: 在产品列表中导航
+  if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+    if (products.value.length === 0) return;
+
+    const currentIndex = selectedProduct.value
+      ? products.value.findIndex((p) => p.id === selectedProduct.value?.id)
+      : -1;
+
+    let newIndex: number;
+    if (e.key === "ArrowUp") {
+      newIndex = currentIndex > 0 ? currentIndex - 1 : products.value.length - 1;
+    } else {
+      newIndex = currentIndex < products.value.length - 1 ? currentIndex + 1 : 0;
+    }
+
+    selectProduct(products.value[newIndex]);
+    return;
+  }
+}
+
 // ==================== 自动更新 ====================
 
 async function checkForUpdates() {
@@ -661,6 +814,9 @@ onMounted(async () => {
   // 初始化主题
   initTheme();
 
+  // 注册键盘快捷键
+  window.addEventListener("keydown", handleKeyboard);
+
   await loadProducts();
   await loadCategories();
   if (selectedProduct.value) {
@@ -674,6 +830,9 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  // 移除键盘监听
+  window.removeEventListener("keydown", handleKeyboard);
+
   if (unlistenDragDrop) {
     unlistenDragDrop();
   }
@@ -808,6 +967,26 @@ onUnmounted(() => {
           <span>词根: {{ stats.rootCount }}</span>
         </div>
         <div class="actions">
+          <!-- 视图切换按钮组 -->
+          <el-button-group class="view-toggle">
+            <el-button
+              :type="viewMode === 'table' ? 'primary' : 'default'"
+              @click="switchViewMode('table')"
+            >
+              <el-icon><Grid /></el-icon>
+              表格
+            </el-button>
+            <el-button
+              :type="viewMode === 'wordcloud' ? 'primary' : 'default'"
+              @click="switchViewMode('wordcloud')"
+            >
+              <el-icon><PieChart /></el-icon>
+              词云
+            </el-button>
+          </el-button-group>
+
+          <el-divider direction="vertical" />
+
           <el-button type="primary" :loading="importing" @click="handleImport">
             <el-icon><Upload /></el-icon>
             导入Excel
@@ -815,6 +994,13 @@ onUnmounted(() => {
           <el-button :loading="exporting" @click="handleExport">
             <el-icon><Download /></el-icon>
             导出Excel
+          </el-button>
+          <el-button
+            v-if="viewMode === 'wordcloud'"
+            @click="exportWordCloudImage"
+          >
+            <el-icon><Picture /></el-icon>
+            导出词云
           </el-button>
           <el-button
             v-if="!analyzing"
@@ -839,8 +1025,19 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- 词云视图 -->
+      <div class="wordcloud-container" v-if="selectedProduct && viewMode === 'wordcloud'">
+        <WordCloud
+          ref="wordCloudRef"
+          :roots="allRootsForCloud"
+          :categories="categories"
+          :loading="loading"
+          @wordClick="handleWordCloudClick"
+        />
+      </div>
+
       <!-- 词根表格 -->
-      <div class="table-container" v-if="selectedProduct">
+      <div class="table-container" v-if="selectedProduct && viewMode === 'table'">
         <el-table
           :data="roots"
           v-loading="loading"
@@ -951,14 +1148,14 @@ onUnmounted(() => {
       </div>
 
       <!-- 无产品提示 -->
-      <div class="no-product-main" v-else>
+      <div class="no-product-main" v-if="!selectedProduct">
         <el-empty description="请先选择或创建一个产品">
           <el-button type="primary" @click="openAddProductDialog">创建产品</el-button>
         </el-empty>
       </div>
 
-      <!-- 分页 -->
-      <div class="pagination" v-if="selectedProduct">
+      <!-- 分页 (仅表格视图显示) -->
+      <div class="pagination" v-if="selectedProduct && viewMode === 'table'">
         <el-pagination
           v-model:current-page="currentPage"
           v-model:page-size="pageSize"
@@ -991,6 +1188,65 @@ onUnmounted(() => {
       <template #footer>
         <el-button @click="showProductDialog = false">取消</el-button>
         <el-button type="primary" @click="saveProduct">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 快捷键帮助弹窗 -->
+    <el-dialog
+      v-model="showShortcutsDialog"
+      title="键盘快捷键"
+      width="480px"
+      :show-close="true"
+    >
+      <div class="shortcuts-list">
+        <div class="shortcut-group">
+          <h4>通用操作</h4>
+          <div class="shortcut-item">
+            <span class="shortcut-desc">创建新产品</span>
+            <span class="shortcut-key"><kbd>⌘</kbd> <kbd>N</kbd></span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-desc">切换深色模式</span>
+            <span class="shortcut-key"><kbd>⌘</kbd> <kbd>D</kbd></span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-desc">显示快捷键帮助</span>
+            <span class="shortcut-key"><kbd>?</kbd></span>
+          </div>
+        </div>
+        <div class="shortcut-group">
+          <h4>数据操作</h4>
+          <div class="shortcut-item">
+            <span class="shortcut-desc">导入 Excel</span>
+            <span class="shortcut-key"><kbd>⌘</kbd> <kbd>I</kbd></span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-desc">导出 Excel</span>
+            <span class="shortcut-key"><kbd>⌘</kbd> <kbd>E</kbd></span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-desc">开始智能分析</span>
+            <span class="shortcut-key"><kbd>⌘</kbd> <kbd>↵</kbd></span>
+          </div>
+        </div>
+        <div class="shortcut-group">
+          <h4>导航</h4>
+          <div class="shortcut-item">
+            <span class="shortcut-desc">聚焦搜索框</span>
+            <span class="shortcut-key"><kbd>⌘</kbd> <kbd>F</kbd></span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-desc">切换产品</span>
+            <span class="shortcut-key"><kbd>↑</kbd> <kbd>↓</kbd></span>
+          </div>
+          <div class="shortcut-item">
+            <span class="shortcut-desc">取消/关闭</span>
+            <span class="shortcut-key"><kbd>Esc</kbd></span>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <span class="shortcuts-tip">Windows 用户请将 ⌘ 替换为 Ctrl</span>
       </template>
     </el-dialog>
   </div>
@@ -1268,6 +1524,20 @@ body,
   min-height: 0;
 }
 
+.wordcloud-container {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  min-height: 0;
+  background: var(--el-bg-color);
+  border-radius: 8px;
+  margin: 0 16px;
+}
+
+.view-toggle {
+  margin-right: 8px;
+}
+
 .table-container :deep(.el-table__row) {
   height: 52px;
 }
@@ -1333,5 +1603,60 @@ body,
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* 快捷键帮助弹窗 */
+.shortcuts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.shortcut-group h4 {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.shortcut-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.shortcut-item:last-child {
+  border-bottom: none;
+}
+
+.shortcut-desc {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.shortcut-key {
+  display: flex;
+  gap: 4px;
+}
+
+.shortcut-key kbd {
+  display: inline-block;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  min-width: 28px;
+  text-align: center;
+}
+
+.shortcuts-tip {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 </style>
