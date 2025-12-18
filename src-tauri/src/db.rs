@@ -744,36 +744,55 @@ pub fn batch_update_root_analysis(
 
     let result = (|| {
         for (word, translation, category_names) in updates {
-            // 更新翻译
-            conn.execute(
-                "UPDATE roots SET translation = ?1 WHERE word = ?2 AND product_id = ?3",
-                rusqlite::params![translation, word, product_id],
-            )?;
+            // 使用 LOWER() 进行大小写不敏感匹配（DeepSeek 可能改变大小写）
+            let word_lower = word.to_lowercase();
 
-            // 获取词根ID
+            // 先查询词根ID（大小写不敏感）
             let root_id: Option<i64> = conn
                 .query_row(
-                    "SELECT id FROM roots WHERE word = ?1 AND product_id = ?2",
-                    rusqlite::params![&word, product_id],
+                    "SELECT id FROM roots WHERE LOWER(word) = ?1 AND product_id = ?2",
+                    rusqlite::params![&word_lower, product_id],
                     |row| row.get(0),
                 )
                 .ok();
 
-            if let Some(root_id) = root_id {
-                // 清除现有分类
-                conn.execute("DELETE FROM root_categories WHERE root_id = ?1", [root_id])?;
+            // 如果找不到词根，跳过
+            let Some(root_id) = root_id else {
+                continue;
+            };
 
-                // 添加新分类
-                for cat_name in category_names {
-                    let cat_id: Option<i64> = conn
-                        .query_row(
-                            "SELECT id FROM categories WHERE name = ?1",
-                            [&cat_name],
-                            |row| row.get(0),
-                        )
-                        .ok();
+            // 更新翻译（使用ID更可靠）
+            conn.execute(
+                "UPDATE roots SET translation = ?1 WHERE id = ?2",
+                rusqlite::params![&translation, root_id],
+            )?;
 
-                    if let Some(cat_id) = cat_id {
+            // 清除现有分类
+            conn.execute("DELETE FROM root_categories WHERE root_id = ?1", [root_id])?;
+
+            // 添加新分类（只添加存在的分类）
+            for cat_name in category_names {
+                // 查询分类ID
+                let cat_id: Option<i64> = conn
+                    .query_row(
+                        "SELECT id FROM categories WHERE name = ?1",
+                        [&cat_name],
+                        |row| row.get(0),
+                    )
+                    .ok();
+
+                // 只有分类存在时才插入（避免外键约束错误）
+                if let Some(cat_id) = cat_id {
+                    // 再次确认 root 存在（防止并发问题）
+                    let root_exists: bool = conn
+                        .query_row("SELECT 1 FROM roots WHERE id = ?1", [root_id], |_| Ok(true))
+                        .unwrap_or(false);
+
+                    let cat_exists: bool = conn
+                        .query_row("SELECT 1 FROM categories WHERE id = ?1", [cat_id], |_| Ok(true))
+                        .unwrap_or(false);
+
+                    if root_exists && cat_exists {
                         conn.execute(
                             "INSERT OR IGNORE INTO root_categories (root_id, category_id) VALUES (?1, ?2)",
                             [root_id, cat_id],
