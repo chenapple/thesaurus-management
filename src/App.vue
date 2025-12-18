@@ -50,6 +50,9 @@ const editingTranslation = ref("");
 // 分类下拉
 const categoryDropdownVisible = ref<{ [key: number]: boolean }>({});
 
+// 主题
+const isDarkMode = ref(false);
+
 // 一级分类和二级分类
 const primaryCategories = computed(() =>
   categories.value.filter((c) =>
@@ -596,6 +599,24 @@ function getCategoryCount(categoryId: number): number {
   return categoryCounts.value.get(categoryId) || 0;
 }
 
+// ==================== 主题切换 ====================
+
+function initTheme() {
+  const saved = localStorage.getItem("theme");
+  isDarkMode.value = saved === "dark";
+  applyTheme();
+}
+
+function applyTheme() {
+  document.documentElement.classList.toggle("dark", isDarkMode.value);
+}
+
+function toggleTheme() {
+  isDarkMode.value = !isDarkMode.value;
+  localStorage.setItem("theme", isDarkMode.value ? "dark" : "light");
+  applyTheme();
+}
+
 // ==================== 自动更新 ====================
 
 async function checkForUpdates() {
@@ -637,6 +658,9 @@ async function checkForUpdates() {
 // ==================== 初始化 ====================
 
 onMounted(async () => {
+  // 初始化主题
+  initTheme();
+
   await loadProducts();
   await loadCategories();
   if (selectedProduct.value) {
@@ -712,6 +736,12 @@ onUnmounted(() => {
             创建产品
           </el-button>
         </div>
+      </div>
+      <div class="sidebar-footer">
+        <el-button text @click="toggleTheme" class="theme-toggle">
+          <el-icon><Sunny v-if="isDarkMode" /><Moon v-else /></el-icon>
+          <span>{{ isDarkMode ? '浅色模式' : '深色模式' }}</span>
+        </el-button>
       </div>
     </aside>
 
@@ -967,6 +997,32 @@ onUnmounted(() => {
 </template>
 
 <style>
+:root {
+  /* 亮色主题 */
+  --bg-primary: #f5f7fa;
+  --bg-secondary: #fff;
+  --bg-hover: #f5f7fa;
+  --bg-active: #ecf5ff;
+  --text-primary: #303133;
+  --text-secondary: #606266;
+  --text-muted: #909399;
+  --border-color: #e4e7ed;
+  --accent-color: var(--accent-color);
+}
+
+html.dark {
+  /* 深色主题 */
+  --bg-primary: #1a1a1a;
+  --bg-secondary: #242424;
+  --bg-hover: #2c2c2c;
+  --bg-active: #1a3a5c;
+  --text-primary: #e5e5e5;
+  --text-secondary: #a3a3a3;
+  --text-muted: #737373;
+  --border-color: #3a3a3a;
+  --accent-color: var(--accent-color);
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -986,7 +1042,7 @@ body,
 .app-container {
   height: 100vh;
   display: flex;
-  background-color: #f5f7fa;
+  background-color: var(--bg-primary);
   position: relative;
 }
 
@@ -1022,8 +1078,8 @@ body,
 /* 侧边栏样式 */
 .sidebar {
   width: 240px;
-  background: #fff;
-  border-right: 1px solid #e4e7ed;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -1034,13 +1090,13 @@ body,
   justify-content: space-between;
   align-items: center;
   padding: 16px;
-  border-bottom: 1px solid #e4e7ed;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .sidebar-title {
   font-size: 16px;
   font-weight: 600;
-  color: #303133;
+  color: var(--text-primary);
 }
 
 .product-list {
@@ -1061,12 +1117,12 @@ body,
 }
 
 .product-item:hover {
-  background-color: #f5f7fa;
+  background-color: var(--bg-primary);
 }
 
 .product-item.active {
-  background-color: #ecf5ff;
-  border: 1px solid #409eff;
+  background-color: var(--bg-active);
+  border: 1px solid var(--accent-color);
 }
 
 .product-info {
@@ -1077,7 +1133,7 @@ body,
 .product-name {
   font-size: 14px;
   font-weight: 500;
-  color: #303133;
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1085,7 +1141,7 @@ body,
 
 .product-meta {
   font-size: 12px;
-  color: #909399;
+  color: var(--text-muted);
   margin-top: 4px;
   display: flex;
   gap: 8px;
@@ -1103,11 +1159,27 @@ body,
 .no-product {
   text-align: center;
   padding: 40px 20px;
-  color: #909399;
+  color: var(--text-muted);
 }
 
 .no-product p {
   margin-bottom: 16px;
+}
+
+.sidebar-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.theme-toggle {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+
+.theme-toggle:hover {
+  color: var(--accent-color);
 }
 
 /* 主内容区 */
@@ -1122,8 +1194,8 @@ body,
   display: flex;
   align-items: center;
   padding: 16px 24px;
-  background: #fff;
-  border-bottom: 1px solid #e4e7ed;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
   gap: 24px;
   flex-shrink: 0;
 }
@@ -1137,7 +1209,7 @@ body,
 .title {
   font-size: 20px;
   font-weight: 600;
-  color: #303133;
+  color: var(--text-primary);
 }
 
 .category-tabs {
@@ -1158,7 +1230,7 @@ body,
 }
 
 .more-tag {
-  background-color: #f0f0f0;
+  background-color: var(--bg-hover);
 }
 
 .header-right {
@@ -1172,8 +1244,8 @@ body,
   justify-content: space-between;
   align-items: center;
   padding: 12px 20px;
-  background: #fff;
-  border-bottom: 1px solid #e4e7ed;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
 }
 
@@ -1181,7 +1253,7 @@ body,
   display: flex;
   gap: 20px;
   font-size: 14px;
-  color: #606266;
+  color: var(--text-secondary);
 }
 
 .actions {
@@ -1206,7 +1278,7 @@ body,
 
 .word-cell {
   font-weight: 500;
-  color: #409eff;
+  color: var(--accent-color);
 }
 
 .translation-cell {
@@ -1214,7 +1286,7 @@ body,
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  color: #606266;
+  color: var(--text-secondary);
 }
 
 .translation-cell:hover .edit-icon {
@@ -1224,7 +1296,7 @@ body,
 .edit-icon {
   opacity: 0;
   transition: opacity 0.2s;
-  color: #909399;
+  color: var(--text-muted);
 }
 
 .edit-cell {
@@ -1251,8 +1323,8 @@ body,
   display: flex;
   justify-content: center;
   padding: 16px;
-  background: #fff;
-  border-top: 1px solid #e4e7ed;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
   flex-shrink: 0;
 }
 
