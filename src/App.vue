@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { readFile } from "@tauri-apps/plugin-fs";
+import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import * as XLSX from "xlsx";
 import * as api from "./api";
 import { batchAnalyzeWords } from "./deepseek";
@@ -370,6 +370,20 @@ async function handleExport() {
   }
 
   try {
+    // 生成默认文件名
+    const defaultFileName = `${selectedProduct.value.name}_词库分析_${new Date().toISOString().slice(0, 10)}.xlsx`;
+
+    // 弹出保存对话框让用户选择位置
+    const filePath = await save({
+      defaultPath: defaultFileName,
+      filters: [{ name: "Excel文件", extensions: ["xlsx"] }],
+    });
+
+    // 用户取消了保存
+    if (!filePath) {
+      return;
+    }
+
     exporting.value = true;
 
     // 获取所有词根数据（使用大的pageSize获取全部）
@@ -404,11 +418,12 @@ async function handleExport() {
       { wch: 30 }, // 分类
     ];
 
-    // 生成文件名
-    const fileName = `${selectedProduct.value.name}_词库分析_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    // 生成二进制数据
+    const excelBuffer = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
 
-    // 下载文件
-    XLSX.writeFile(workbook, fileName);
+    // 使用 Tauri API 写入文件
+    await writeFile(filePath, new Uint8Array(excelBuffer));
+
     ElMessage.success(`成功导出 ${allRoots.length} 条词根数据`);
   } catch (e) {
     ElMessage.error("导出失败: " + e);
