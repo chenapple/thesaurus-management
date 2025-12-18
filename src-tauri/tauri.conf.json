@@ -36,7 +36,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJDOUE2NjVGREJGNzY3MjQKUldRa1ovZmJYMmFhTEVqM3JkQTI1TXAwMTlpRmg4VE9iTDdSUXc0eUVMU0gwNE5pZFNJcEI4RVUK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDBGMUYzMDgxOEYwREJBQUIKUldTcnVnMlBnVEFmRDFZUU52MnhHc0pKR05od21jOG1QODFCdFY0MlVGbDE0b05vN0h6QTlEQjIK",
       "endpoints": [
         "https://github.com/chenapple/thesaurus-management/releases/latest/download/latest.json"
       ]
