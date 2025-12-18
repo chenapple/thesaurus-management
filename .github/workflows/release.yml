@@ -70,10 +70,10 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ""
         with:
           tagName: ${{ github.ref_name }}
           releaseName: '词库管理 ${{ github.ref_name }}'
           releaseBody: '请下载对应平台的安装包。'
           releaseDraft: true
           prerelease: false
+          args: --config "bundle.createUpdaterArtifacts=false"
