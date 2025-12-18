@@ -144,6 +144,9 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
     let db_path = app_data_dir.join("thesaurus.db");
     let conn = Connection::open(db_path)?;
 
+    // 显式禁用外键约束（解决 Windows 上的兼容性问题）
+    conn.execute("PRAGMA foreign_keys = OFF", [])?;
+
     // 先创建产品表（不依赖其他表）
     conn.execute_batch(
         "
@@ -428,8 +431,18 @@ pub fn update_product(id: i64, name: String, sku: Option<String>, asin: Option<S
 // 删除产品（同时删除关联的关键词和词根）
 pub fn delete_product(id: i64) -> Result<()> {
     let conn = get_db().lock();
-    // 由于外键级联删除，只需要删除产品即可
+
+    // 显式禁用外键约束（解决 Windows 兼容性问题）
+    // 注意：禁用外键后级联删除不会自动工作，需要手动删除关联数据
+    conn.execute("PRAGMA foreign_keys = OFF", [])?;
+
+    // 手动删除关联数据（因为外键被禁用，CASCADE 不会工作）
+    conn.execute("DELETE FROM keyword_roots WHERE root_id IN (SELECT id FROM roots WHERE product_id = ?1)", [id])?;
+    conn.execute("DELETE FROM root_categories WHERE root_id IN (SELECT id FROM roots WHERE product_id = ?1)", [id])?;
+    conn.execute("DELETE FROM roots WHERE product_id = ?1", [id])?;
+    conn.execute("DELETE FROM keywords WHERE product_id = ?1", [id])?;
     conn.execute("DELETE FROM products WHERE id = ?1", [id])?;
+
     Ok(())
 }
 
@@ -438,6 +451,9 @@ pub fn delete_product(id: i64) -> Result<()> {
 // 导入关键词并分析词根（关联到指定产品）
 pub fn import_keywords(product_id: i64, keywords: Vec<String>) -> Result<()> {
     let conn = get_db().lock();
+
+    // 显式禁用外键约束（解决 Windows 兼容性问题）
+    conn.execute("PRAGMA foreign_keys = OFF", [])?;
 
     // 使用事务大幅提升导入速度（特别是在 Windows 上）
     conn.execute("BEGIN TRANSACTION", [])?;
@@ -705,6 +721,10 @@ pub fn get_stats(product_id: Option<i64>) -> Result<(i64, i64)> {
 // 清空产品数据（只删除指定产品的关键词和词根）
 pub fn clear_product_data(product_id: i64) -> Result<()> {
     let conn = get_db().lock();
+
+    // 显式禁用外键约束（解决 Windows 兼容性问题）
+    conn.execute("PRAGMA foreign_keys = OFF", [])?;
+
     // 先删除关联表数据
     conn.execute(
         "DELETE FROM keyword_roots WHERE keyword_id IN (SELECT id FROM keywords WHERE product_id = ?1)",
@@ -738,6 +758,9 @@ pub fn batch_update_root_analysis(
     updates: Vec<(String, String, Vec<String>)>, // (word, translation, category_names)
 ) -> Result<()> {
     let conn = get_db().lock();
+
+    // 显式禁用外键约束（解决 Windows 兼容性问题）
+    conn.execute("PRAGMA foreign_keys = OFF", [])?;
 
     // 使用事务提升批量更新性能
     conn.execute("BEGIN TRANSACTION", [])?;
