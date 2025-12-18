@@ -718,6 +718,23 @@ pub fn get_stats(product_id: Option<i64>) -> Result<(i64, i64)> {
     Ok((keyword_count, root_count))
 }
 
+// 获取各分类的词根数量（按产品筛选）
+pub fn get_category_counts(product_id: i64) -> Result<Vec<(i64, i64)>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT c.id, COUNT(DISTINCT rc.root_id) as count
+         FROM categories c
+         LEFT JOIN root_categories rc ON c.id = rc.category_id
+         LEFT JOIN roots r ON rc.root_id = r.id AND r.product_id = ?1
+         GROUP BY c.id
+         ORDER BY c.id",
+    )?;
+    let counts = stmt
+        .query_map([product_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<Vec<(i64, i64)>>>()?;
+    Ok(counts)
+}
+
 // 清空产品数据（只删除指定产品的关键词和词根）
 pub fn clear_product_data(product_id: i64) -> Result<()> {
     let conn = get_db().lock();

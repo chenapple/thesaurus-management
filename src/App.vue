@@ -39,6 +39,7 @@ const sortOrder = ref("desc");
 
 // 统计
 const stats = ref({ keywordCount: 0, rootCount: 0 });
+const categoryCounts = ref<Map<number, number>>(new Map());
 
 // 编辑翻译
 const editingId = ref<number | null>(null);
@@ -213,12 +214,17 @@ async function loadRoots() {
 async function loadStats() {
   if (!selectedProduct.value) {
     stats.value = { keywordCount: 0, rootCount: 0 };
+    categoryCounts.value = new Map();
     return;
   }
 
   try {
     const [keywordCount, rootCount] = await api.getStats(selectedProduct.value.id);
     stats.value = { keywordCount, rootCount };
+
+    // 加载分类统计
+    const counts = await api.getCategoryCounts(selectedProduct.value.id);
+    categoryCounts.value = new Map(counts);
   } catch (e) {
     console.error("加载统计失败:", e);
   }
@@ -585,7 +591,7 @@ function getCategoryName(id: number): string {
 }
 
 function getCategoryCount(categoryId: number): number {
-  return roots.value.filter((r) => r.categories.includes(categoryId)).length;
+  return categoryCounts.value.get(categoryId) || 0;
 }
 
 // ==================== 初始化 ====================

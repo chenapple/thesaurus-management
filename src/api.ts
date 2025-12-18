@@ -97,6 +97,12 @@ export async function getStats(productId?: number): Promise<[number, number]> {
   return await invoke("get_stats", { productId: productId || null });
 }
 
+export async function getCategoryCounts(
+  productId: number
+): Promise<[number, number][]> {
+  return await invoke("get_category_counts", { productId });
+}
+
 export async function clearProductData(productId: number): Promise<void> {
   return await invoke("clear_product_data", { productId });
 }

@@ -74,6 +74,11 @@ fn get_stats(product_id: Option<i64>) -> Result<(i64, i64), String> {
 }
 
 #[tauri::command]
+fn get_category_counts(product_id: i64) -> Result<Vec<(i64, i64)>, String> {
+    db::get_category_counts(product_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn clear_product_data(product_id: i64) -> Result<(), String> {
     db::clear_product_data(product_id).map_err(|e| e.to_string())
 }
@@ -117,6 +122,7 @@ pub fn run() {
             add_root_category,
             remove_root_category,
             get_stats,
+            get_category_counts,
             clear_product_data,
             get_untranslated_roots,
             batch_update_root_analysis,
