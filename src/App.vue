@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch } from "vue";
+import { ref, onMounted, onUnmounted, computed } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -296,7 +296,7 @@ async function setupDragDrop() {
   unlistenDragDrop = await webview.onDragDropEvent(async (event) => {
     if (event.payload.type === "over") {
       isDragging.value = true;
-    } else if (event.payload.type === "leave" || event.payload.type === "cancel") {
+    } else if (event.payload.type === "leave") {
       isDragging.value = false;
     } else if (event.payload.type === "drop") {
       isDragging.value = false;
