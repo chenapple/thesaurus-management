@@ -4,6 +4,8 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { readFile, writeFile } from "@tauri-apps/plugin-fs";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import * as XLSX from "xlsx";
 import * as api from "./api";
 import { batchAnalyzeWords } from "./deepseek";
@@ -594,6 +596,44 @@ function getCategoryCount(categoryId: number): number {
   return categoryCounts.value.get(categoryId) || 0;
 }
 
+// ==================== 自动更新 ====================
+
+async function checkForUpdates() {
+  try {
+    const update = await check();
+    if (update) {
+      const confirm = await ElMessageBox.confirm(
+        `发现新版本 ${update.version}，是否立即更新？`,
+        "版本更新",
+        {
+          confirmButtonText: "立即更新",
+          cancelButtonText: "稍后提醒",
+          type: "info",
+        }
+      );
+
+      if (confirm) {
+        ElMessage.info("正在下载更新...");
+
+        await update.downloadAndInstall((progress) => {
+          if (progress.event === "Progress" && progress.data) {
+            console.log(`已下载: ${progress.data.chunkLength} bytes`);
+          }
+        });
+
+        await ElMessageBox.alert("更新已下载完成，点击确定重启应用", "更新完成", {
+          confirmButtonText: "确定",
+        });
+
+        await relaunch();
+      }
+    }
+  } catch (e) {
+    // 检查更新失败时静默处理，不影响用户使用
+    console.log("检查更新失败:", e);
+  }
+}
+
 // ==================== 初始化 ====================
 
 onMounted(async () => {
@@ -604,6 +644,9 @@ onMounted(async () => {
     await loadStats();
   }
   await setupDragDrop();
+
+  // 启动后检查更新
+  checkForUpdates();
 });
 
 onUnmounted(() => {
