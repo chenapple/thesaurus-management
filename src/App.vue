@@ -96,6 +96,7 @@ async function loadProducts() {
 function selectProduct(product: Product) {
   selectedProduct.value = product;
   currentPage.value = 1;
+  allRootsForCloud.value = []; // 清空词云数据，切换视图时会重新加载
   loadRoots();
   loadStats();
 }
