@@ -6,6 +6,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { getVersion } from "@tauri-apps/api/app";
 import * as XLSX from "xlsx";
 import * as api from "./api";
 import { batchAnalyzeWords } from "./deepseek";
@@ -56,6 +57,9 @@ const isDarkMode = ref(false);
 
 // 快捷键帮助弹窗
 const showShortcutsDialog = ref(false);
+
+// 应用版本
+const appVersion = ref("");
 
 // 视图模式: 'table' | 'wordcloud'
 const viewMode = ref<'table' | 'wordcloud'>('table');
@@ -809,6 +813,9 @@ onMounted(async () => {
   // 初始化主题
   initTheme();
 
+  // 获取应用版本
+  appVersion.value = await getVersion();
+
   // 注册键盘快捷键
   window.addEventListener("keydown", handleKeyboard);
 
@@ -896,6 +903,7 @@ onUnmounted(() => {
           <el-icon><Sunny v-if="isDarkMode" /><Moon v-else /></el-icon>
           <span>{{ isDarkMode ? '浅色模式' : '深色模式' }}</span>
         </el-button>
+        <div class="app-version">v{{ appVersion }}</div>
       </div>
     </aside>
 
@@ -1424,6 +1432,13 @@ body,
 
 .theme-toggle:hover {
   color: var(--accent-color);
+}
+
+.app-version {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 8px 0 4px;
 }
 
 /* 主内容区 */
