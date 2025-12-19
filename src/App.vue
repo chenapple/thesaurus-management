@@ -65,6 +65,7 @@ const appVersion = ref("");
 const viewMode = ref<'table' | 'wordcloud'>('table');
 const wordCloudRef = ref<InstanceType<typeof WordCloud> | null>(null);
 const allRootsForCloud = ref<Root[]>([]);
+const loadingCloud = ref(false);
 
 // 一级分类和二级分类
 const primaryCategories = computed(() =>
@@ -96,9 +97,13 @@ async function loadProducts() {
 function selectProduct(product: Product) {
   selectedProduct.value = product;
   currentPage.value = 1;
-  allRootsForCloud.value = []; // 清空词云数据，切换视图时会重新加载
+  allRootsForCloud.value = []; // 清空词云数据
   loadRoots();
   loadStats();
+  // 如果当前是词云视图，重新加载词云数据
+  if (viewMode.value === 'wordcloud') {
+    loadAllRootsForCloud();
+  }
 }
 
 function openAddProductDialog() {
@@ -237,6 +242,7 @@ async function loadAllRootsForCloud() {
     return;
   }
 
+  loadingCloud.value = true;
   try {
     const [data] = await api.getRoots({
       productId: selectedProduct.value.id,
@@ -248,6 +254,8 @@ async function loadAllRootsForCloud() {
     allRootsForCloud.value = data;
   } catch (e) {
     console.error("加载词云数据失败:", e);
+  } finally {
+    loadingCloud.value = false;
   }
 }
 
@@ -1028,7 +1036,7 @@ onUnmounted(() => {
           ref="wordCloudRef"
           :roots="allRootsForCloud"
           :categories="categories"
-          :loading="loading"
+          :loading="loadingCloud"
           @wordClick="handleWordCloudClick"
         />
       </div>
