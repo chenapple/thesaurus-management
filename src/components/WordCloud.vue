@@ -177,10 +177,24 @@ function exportImage() {
   link.click();
 }
 
-// 监听数据变化
+// 监听 loading 状态变化 - 关键：当 loading 从 true 变为 false 时，chartRef 才存在于 DOM 中
+watch(() => props.loading, (newLoading, oldLoading) => {
+  // 当 loading 从 true 变为 false，且有数据时，初始化图表
+  if (oldLoading && !newLoading && props.roots && props.roots.length > 0) {
+    nextTick(() => {
+      if (chartInstance) {
+        updateChart();
+      } else {
+        initChart();
+      }
+    });
+  }
+});
+
+// 监听数据变化 - 处理已加载完成后数据变化的情况
 watch(() => props.roots, (newRoots) => {
-  if (newRoots && newRoots.length > 0) {
-    // 数据加载完成，需要等待 DOM 更新后初始化或更新图表
+  // 只有在不是 loading 状态时才处理，避免与 loading watch 冲突
+  if (!props.loading && newRoots && newRoots.length > 0) {
     nextTick(() => {
       if (chartInstance) {
         updateChart();
