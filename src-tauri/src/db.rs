@@ -722,7 +722,7 @@ pub fn get_stats(product_id: Option<i64>) -> Result<(i64, i64)> {
 pub fn get_category_counts(product_id: i64) -> Result<Vec<(i64, i64)>> {
     let conn = get_db().lock();
     let mut stmt = conn.prepare(
-        "SELECT c.id, COUNT(DISTINCT rc.root_id) as count
+        "SELECT c.id, COUNT(DISTINCT r.id) as count
          FROM categories c
          LEFT JOIN root_categories rc ON c.id = rc.category_id
          LEFT JOIN roots r ON rc.root_id = r.id AND r.product_id = ?1
