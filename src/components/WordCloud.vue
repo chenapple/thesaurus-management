@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, nextTick } from 'vue';
 import * as echarts from 'echarts';
 import 'echarts-wordcloud';
 
@@ -178,9 +178,16 @@ function exportImage() {
 }
 
 // 监听数据变化
-watch(() => props.roots, () => {
-  if (chartInstance) {
-    updateChart();
+watch(() => props.roots, (newRoots) => {
+  if (newRoots && newRoots.length > 0) {
+    // 数据加载完成，需要等待 DOM 更新后初始化或更新图表
+    nextTick(() => {
+      if (chartInstance) {
+        updateChart();
+      } else {
+        initChart();
+      }
+    });
   }
 }, { deep: true });
 
