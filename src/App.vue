@@ -261,11 +261,6 @@ function handleWordCloudClick(word: string) {
   handleSearch();
 }
 
-// 导出词云图片
-function exportWordCloudImage() {
-  wordCloudRef.value?.exportImage();
-}
-
 async function loadStats() {
   if (!selectedProduct.value) {
     stats.value = { keywordCount: 0, rootCount: 0 };
@@ -333,8 +328,8 @@ async function handleImport() {
     if (!selected) return;
 
     importing.value = true;
-    const response = await fetch(`file://${selected}`);
-    const buffer = await response.arrayBuffer();
+    const fileData = await readFile(selected);
+    const buffer = fileData.buffer;
     await processExcelBuffer(buffer);
   } catch (e) {
     ElMessage.error("导入失败: " + e);
@@ -994,13 +989,6 @@ onUnmounted(() => {
           <el-button :loading="exporting" @click="handleExport">
             <el-icon><Download /></el-icon>
             导出Excel
-          </el-button>
-          <el-button
-            v-if="viewMode === 'wordcloud'"
-            @click="exportWordCloudImage"
-          >
-            <el-icon><Picture /></el-icon>
-            导出词云
           </el-button>
           <el-button
             v-if="!analyzing"
