@@ -1537,16 +1537,6 @@ function toggleCategory(id: number) {
   loadRoots();
 }
 
-function handleSort(column: string) {
-  if (sortBy.value === column) {
-    sortOrder.value = sortOrder.value === "asc" ? "desc" : "asc";
-  } else {
-    sortBy.value = column;
-    sortOrder.value = "desc";
-  }
-  loadRoots();
-}
-
 function handlePageChange(page: number) {
   currentPage.value = page;
   loadRoots();
