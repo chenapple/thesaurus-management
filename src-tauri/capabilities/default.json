@@ -11,6 +11,8 @@
     "fs:allow-read",
     "fs:write-all",
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "clipboard-manager:default",
+    "clipboard-manager:allow-write-text"
   ]
 }

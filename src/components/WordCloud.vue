@@ -146,6 +146,10 @@ function updateChart() {
       textStyle: {
         fontFamily: 'sans-serif',
         fontWeight: 'bold',
+        color: function(params: any) {
+          // 使用数据项中的颜色
+          return params.data?.textStyle?.color || '#666666';
+        },
       },
       emphasis: {
         focus: 'self',

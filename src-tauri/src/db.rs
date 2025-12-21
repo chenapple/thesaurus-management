@@ -108,17 +108,19 @@ fn is_valid_root(word: &str) -> bool {
 pub struct Product {
     pub id: i64,
     pub name: String,
-    pub sku: Option<String>,
-    pub asin: Option<String>,
+    pub country: Option<String>,            // 国家代码: US, UK, DE, FR, IT, ES
+    pub cpc_header: Option<String>,         // Excel中CPC列的表头（包含货币符号）
+    pub bid_range_header: Option<String>,   // Excel中竞价范围列的表头（包含货币符号）
+    pub big_word_threshold: Option<i64>,    // 大词阈值（默认20000）
+    pub medium_word_threshold: Option<i64>, // 中词阈值（默认100000）
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Root {
-    pub id: i64,
-    pub word: String,
-    pub translation: Option<String>,
-    pub contains_count: i64,
-    pub percentage: f64,
+// 流量级别统计
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TrafficLevelStats {
+    pub big_count: i64,
+    pub medium_count: i64,
+    pub small_count: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -137,6 +139,41 @@ pub struct RootWithCategories {
     pub contains_count: i64,
     pub percentage: f64,
     pub categories: Vec<i64>,
+}
+
+// 关键词完整数据结构
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KeywordData {
+    pub id: i64,
+    pub product_id: i64,
+    // 原始Excel列 (A-P)
+    pub keyword: String,                        // A: 关键词
+    pub translation: Option<String>,            // B: 翻译
+    pub relevance_score: Option<String>,        // C: 相关性得分
+    pub relevance_level: Option<String>,        // D: 相关性档位
+    pub traffic_total: Option<f64>,             // E: 流量总和
+    pub avg_keyword_rank: Option<String>,       // F: 周平均关键词排名
+    pub avg_search_volume: Option<f64>,         // G: 周平均搜索量
+    pub cpc_bid: Option<String>,                // H: CPC建议竞价(元)
+    pub bid_range: Option<String>,              // I: 建议竞价范围(元)
+    pub click_rate: Option<String>,             // J: 点击转化率/周
+    pub conversion_competition: Option<String>, // K: 周转化竞争
+    pub competition_level: Option<String>,      // L: 竞争度档位
+    pub natural_position_flow: Option<String>,  // M: 自然位流动率%
+    pub top3_click_share: Option<String>,       // N: Top3周平均点击份额
+    pub avg_conversion_share: Option<String>,   // O: 周平均转化份额
+    pub asin_count: Option<i64>,                // P: asin数量
+    // 新增计算列
+    pub traffic_level: Option<String>,          // 流量级别 (大词/中词/小词)
+    pub negative_word: Option<String>,          // 否词
+    pub orderliness: Option<String>,            // 有序性
+    pub phrase_tag: Option<String>,             // 词组标签
+    pub primary_category: Option<String>,       // 一级分类
+    pub secondary_category: Option<String>,     // 二级分类
+    pub search_intent: Option<String>,          // 搜索意图
+    pub traffic_share: Option<f64>,             // 流量占比
+    // ASIN动态列（JSON格式存储）
+    pub asin_data: Option<String>,
 }
 
 pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
@@ -191,6 +228,59 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
     // 数据库迁移：为旧数据添加产品支持（在创建新表结构之前）
     migrate_add_product_support(&conn)?;
 
+    // 迁移产品表：添加表头字段
+    migrate_product_headers(&conn)?;
+
+    // 迁移产品表：添加阈值字段
+    migrate_product_thresholds(&conn)?;
+
+    // 迁移产品表：添加国家字段
+    migrate_product_country(&conn)?;
+
+    // 迁移 keyword_data 表：检查是否需要重建表（列名变更）
+    migrate_keyword_data_table(&conn)?;
+
+    // 创建 keyword_data 表（存储完整Excel数据）
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS keyword_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER NOT NULL,
+            -- 原始Excel列 (A-P)
+            keyword TEXT NOT NULL,
+            translation TEXT,
+            relevance_score TEXT,
+            relevance_level TEXT,
+            traffic_total REAL,
+            avg_keyword_rank TEXT,
+            avg_search_volume REAL,
+            cpc_bid TEXT,
+            bid_range TEXT,
+            click_rate TEXT,
+            conversion_competition TEXT,
+            competition_level TEXT,
+            natural_position_flow TEXT,
+            top3_click_share TEXT,
+            avg_conversion_share TEXT,
+            asin_count INTEGER,
+            -- 新增计算列
+            traffic_level TEXT,
+            negative_word TEXT,
+            orderliness TEXT,
+            phrase_tag TEXT,
+            primary_category TEXT,
+            secondary_category TEXT,
+            search_intent TEXT,
+            traffic_share REAL,
+            -- ASIN动态列
+            asin_data TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(keyword, product_id),
+            FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+        );
+        ",
+    )?;
+
     // 创建索引（迁移完成后）
     conn.execute_batch(
         "
@@ -198,6 +288,60 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_roots_product ON roots(product_id);
         CREATE INDEX IF NOT EXISTS idx_keywords_keyword ON keywords(keyword);
         CREATE INDEX IF NOT EXISTS idx_keywords_product ON keywords(product_id);
+        CREATE INDEX IF NOT EXISTS idx_keyword_data_product ON keyword_data(product_id);
+        CREATE INDEX IF NOT EXISTS idx_keyword_data_keyword ON keyword_data(keyword);
+        ",
+    )?;
+
+    // 创建备份表
+    conn.execute_batch(
+        "
+        -- 备份元数据表
+        CREATE TABLE IF NOT EXISTS backups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER NOT NULL,
+            backup_name TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            keyword_data_count INTEGER DEFAULT 0,
+            FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+        );
+
+        -- 备份 keyword_data 表
+        CREATE TABLE IF NOT EXISTS backup_keyword_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            backup_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            keyword TEXT NOT NULL,
+            translation TEXT,
+            relevance_score TEXT,
+            relevance_level TEXT,
+            traffic_total REAL,
+            avg_keyword_rank TEXT,
+            avg_search_volume REAL,
+            cpc_bid TEXT,
+            bid_range TEXT,
+            click_rate TEXT,
+            conversion_competition TEXT,
+            competition_level TEXT,
+            natural_position_flow TEXT,
+            top3_click_share TEXT,
+            avg_conversion_share TEXT,
+            asin_count INTEGER,
+            traffic_level TEXT,
+            negative_word TEXT,
+            orderliness TEXT,
+            phrase_tag TEXT,
+            primary_category TEXT,
+            secondary_category TEXT,
+            search_intent TEXT,
+            traffic_share REAL,
+            asin_data TEXT,
+            FOREIGN KEY (backup_id) REFERENCES backups(id) ON DELETE CASCADE
+        );
+
+        -- 备份表索引
+        CREATE INDEX IF NOT EXISTS idx_backups_product ON backups(product_id);
+        CREATE INDEX IF NOT EXISTS idx_backup_keyword_data_backup ON backup_keyword_data(backup_id);
         ",
     )?;
 
@@ -206,6 +350,83 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
 
     DB.set(Mutex::new(conn))
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
+
+    Ok(())
+}
+
+// 数据库迁移：为产品表添加表头字段
+fn migrate_product_headers(conn: &Connection) -> Result<()> {
+    // 检查 products 表是否存在 cpc_header 列
+    let has_cpc_header: bool = conn
+        .prepare("SELECT cpc_header FROM products LIMIT 1")
+        .is_ok();
+
+    if !has_cpc_header {
+        // 添加新列
+        conn.execute("ALTER TABLE products ADD COLUMN cpc_header TEXT", [])?;
+        conn.execute("ALTER TABLE products ADD COLUMN bid_range_header TEXT", [])?;
+    }
+
+    Ok(())
+}
+
+// 数据库迁移：为产品表添加阈值字段
+fn migrate_product_thresholds(conn: &Connection) -> Result<()> {
+    // 检查 products 表是否存在 big_word_threshold 列
+    let has_threshold: bool = conn
+        .prepare("SELECT big_word_threshold FROM products LIMIT 1")
+        .is_ok();
+
+    if !has_threshold {
+        // 添加阈值列
+        conn.execute("ALTER TABLE products ADD COLUMN big_word_threshold INTEGER", [])?;
+        conn.execute("ALTER TABLE products ADD COLUMN medium_word_threshold INTEGER", [])?;
+    }
+
+    Ok(())
+}
+
+// 数据库迁移：为产品表添加国家字段
+fn migrate_product_country(conn: &Connection) -> Result<()> {
+    // 检查 products 表是否存在 country 列
+    let has_country: bool = conn
+        .prepare("SELECT country FROM products LIMIT 1")
+        .is_ok();
+
+    if !has_country {
+        // 添加国家列
+        conn.execute("ALTER TABLE products ADD COLUMN country TEXT", [])?;
+    }
+
+    Ok(())
+}
+
+// 数据库迁移：检查并重建 keyword_data 表（列名变更）
+fn migrate_keyword_data_table(conn: &Connection) -> Result<()> {
+    // 检查 keyword_data 表是否存在
+    let table_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='keyword_data'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)
+        .unwrap_or(false);
+
+    if !table_exists {
+        return Ok(()); // 表不存在，稍后会创建
+    }
+
+    // 检查是否有新列 relevance_level（如果没有说明是旧表结构）
+    let has_new_column: bool = conn
+        .prepare("SELECT relevance_level FROM keyword_data LIMIT 1")
+        .is_ok();
+
+    if !has_new_column {
+        // 旧表结构，需要删除并重建（因为列名变更太多，直接重建更简单）
+        // 注意：这会清空现有数据，但由于这是新功能，影响应该很小
+        conn.execute("DROP TABLE IF EXISTS keyword_data", [])?;
+    }
 
     Ok(())
 }
@@ -394,14 +615,17 @@ pub fn get_categories() -> Result<Vec<Category>> {
 // 获取所有产品
 pub fn get_products() -> Result<Vec<Product>> {
     let conn = get_db().lock();
-    let mut stmt = conn.prepare("SELECT id, name, sku, asin FROM products ORDER BY id")?;
+    let mut stmt = conn.prepare("SELECT id, name, country, cpc_header, bid_range_header, big_word_threshold, medium_word_threshold FROM products ORDER BY id")?;
     let products = stmt
         .query_map([], |row| {
             Ok(Product {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                sku: row.get(2)?,
-                asin: row.get(3)?,
+                country: row.get(2)?,
+                cpc_header: row.get(3)?,
+                bid_range_header: row.get(4)?,
+                big_word_threshold: row.get(5)?,
+                medium_word_threshold: row.get(6)?,
             })
         })?
         .collect::<Result<Vec<_>>>()?;
@@ -409,21 +633,31 @@ pub fn get_products() -> Result<Vec<Product>> {
 }
 
 // 创建产品
-pub fn create_product(name: String, sku: Option<String>, asin: Option<String>) -> Result<i64> {
+pub fn create_product(name: String, country: Option<String>) -> Result<i64> {
     let conn = get_db().lock();
     conn.execute(
-        "INSERT INTO products (name, sku, asin) VALUES (?1, ?2, ?3)",
-        rusqlite::params![name, sku, asin],
+        "INSERT INTO products (name, country) VALUES (?1, ?2)",
+        rusqlite::params![name, country],
     )?;
     Ok(conn.last_insert_rowid())
 }
 
 // 更新产品
-pub fn update_product(id: i64, name: String, sku: Option<String>, asin: Option<String>) -> Result<()> {
+pub fn update_product(id: i64, name: String, country: Option<String>) -> Result<()> {
     let conn = get_db().lock();
     conn.execute(
-        "UPDATE products SET name = ?1, sku = ?2, asin = ?3 WHERE id = ?4",
-        rusqlite::params![name, sku, asin, id],
+        "UPDATE products SET name = ?1, country = ?2 WHERE id = ?3",
+        rusqlite::params![name, country, id],
+    )?;
+    Ok(())
+}
+
+// 更新产品的Excel表头信息
+pub fn update_product_headers(id: i64, cpc_header: Option<String>, bid_range_header: Option<String>) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE products SET cpc_header = ?1, bid_range_header = ?2 WHERE id = ?3",
+        rusqlite::params![cpc_header, bid_range_header, id],
     )?;
     Ok(())
 }
@@ -604,15 +838,6 @@ pub fn get_roots(
     };
     sql.push_str(&format!(" ORDER BY {} {}", sort_column, order));
 
-    // 获取总数
-    let count_sql = format!(
-        "SELECT COUNT(*) FROM ({}) as t",
-        sql.replace("SELECT DISTINCT r.id, r.word, r.translation,", "SELECT DISTINCT r.id FROM roots r")
-            .split(" ORDER BY")
-            .next()
-            .unwrap_or("")
-    );
-
     // 分页
     sql.push_str(&format!(" LIMIT {} OFFSET {}", page_size, (page - 1) * page_size));
 
@@ -754,6 +979,8 @@ pub fn clear_product_data(product_id: i64) -> Result<()> {
     // 再删除关键词和词根
     conn.execute("DELETE FROM keywords WHERE product_id = ?1", [product_id])?;
     conn.execute("DELETE FROM roots WHERE product_id = ?1", [product_id])?;
+    // 删除关键词完整数据
+    conn.execute("DELETE FROM keyword_data WHERE product_id = ?1", [product_id])?;
     Ok(())
 }
 
@@ -854,4 +1081,786 @@ pub fn batch_update_root_analysis(
             Err(e)
         }
     }
+}
+
+// ==================== 关键词完整数据管理 ====================
+
+// 导入关键词完整数据
+pub fn import_keyword_data(product_id: i64, data_list: Vec<KeywordData>) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("PRAGMA foreign_keys = OFF", [])?;
+    conn.execute("BEGIN TRANSACTION", [])?;
+
+    let result = (|| {
+        for data in data_list {
+            conn.execute(
+                "INSERT OR REPLACE INTO keyword_data (
+                    product_id, keyword, translation, relevance_score, relevance_level,
+                    traffic_total, avg_keyword_rank, avg_search_volume, cpc_bid, bid_range,
+                    click_rate, conversion_competition, competition_level, natural_position_flow,
+                    top3_click_share, avg_conversion_share, asin_count, traffic_level, negative_word, orderliness,
+                    phrase_tag, primary_category, secondary_category, search_intent, traffic_share, asin_data
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+                rusqlite::params![
+                    product_id,
+                    data.keyword,
+                    data.translation,
+                    data.relevance_score,
+                    data.relevance_level,
+                    data.traffic_total,
+                    data.avg_keyword_rank,
+                    data.avg_search_volume,
+                    data.cpc_bid,
+                    data.bid_range,
+                    data.click_rate,
+                    data.conversion_competition,
+                    data.competition_level,
+                    data.natural_position_flow,
+                    data.top3_click_share,
+                    data.avg_conversion_share,
+                    data.asin_count,
+                    data.traffic_level,
+                    data.negative_word,
+                    data.orderliness,
+                    data.phrase_tag,
+                    data.primary_category,
+                    data.secondary_category,
+                    data.search_intent,
+                    data.traffic_share,
+                    data.asin_data,
+                ],
+            )?;
+        }
+        Ok::<(), rusqlite::Error>(())
+    })();
+
+    match result {
+        Ok(_) => {
+            conn.execute("COMMIT", [])?;
+            Ok(())
+        }
+        Err(e) => {
+            conn.execute("ROLLBACK", []).ok();
+            Err(e)
+        }
+    }
+}
+
+// 获取关键词数据（分页）
+pub fn get_keyword_data(
+    product_id: i64,
+    search: Option<String>,
+    traffic_levels: Option<Vec<String>>,
+    relevance_levels: Option<Vec<String>>,
+    primary_categories: Option<Vec<String>>,
+    orderliness_values: Option<Vec<String>>,
+    sort_by: Option<String>,
+    sort_order: Option<String>,
+    page: i64,
+    page_size: i64,
+) -> Result<(Vec<KeywordData>, i64)> {
+    let conn = get_db().lock();
+
+    let mut sql = String::from(
+        "SELECT id, product_id, keyword, translation, relevance_score, relevance_level,
+                traffic_total, avg_keyword_rank, avg_search_volume, cpc_bid, bid_range,
+                click_rate, conversion_competition, competition_level, natural_position_flow,
+                top3_click_share, avg_conversion_share, asin_count, traffic_level, negative_word, orderliness,
+                phrase_tag, primary_category, secondary_category, search_intent, traffic_share, asin_data
+         FROM keyword_data WHERE product_id = ?1",
+    );
+
+    let mut count_sql = String::from("SELECT COUNT(*) FROM keyword_data WHERE product_id = ?1");
+
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(product_id)];
+    let mut param_index = 2;
+
+    // 搜索条件
+    if let Some(ref search_term) = search {
+        if !search_term.is_empty() {
+            let condition = format!(" AND keyword LIKE ?{}", param_index);
+            sql.push_str(&condition);
+            count_sql.push_str(&condition);
+            params.push(Box::new(format!("%{}%", search_term)));
+            param_index += 1;
+        }
+    }
+
+    // 流量级别筛选
+    if let Some(ref levels) = traffic_levels {
+        if !levels.is_empty() {
+            let placeholders: Vec<String> = levels.iter().enumerate()
+                .map(|(i, _)| format!("?{}", param_index + i))
+                .collect();
+            let condition = format!(" AND traffic_level IN ({})", placeholders.join(","));
+            sql.push_str(&condition);
+            count_sql.push_str(&condition);
+            for level in levels {
+                params.push(Box::new(level.clone()));
+            }
+            param_index += levels.len();
+        }
+    }
+
+    // 相关性档位筛选
+    if let Some(ref levels) = relevance_levels {
+        if !levels.is_empty() {
+            let placeholders: Vec<String> = levels.iter().enumerate()
+                .map(|(i, _)| format!("?{}", param_index + i))
+                .collect();
+            let condition = format!(" AND relevance_level IN ({})", placeholders.join(","));
+            sql.push_str(&condition);
+            count_sql.push_str(&condition);
+            for level in levels {
+                params.push(Box::new(level.clone()));
+            }
+            param_index += levels.len();
+        }
+    }
+
+    // 一级分类筛选
+    if let Some(ref categories) = primary_categories {
+        if !categories.is_empty() {
+            let placeholders: Vec<String> = categories.iter().enumerate()
+                .map(|(i, _)| format!("?{}", param_index + i))
+                .collect();
+            let condition = format!(" AND primary_category IN ({})", placeholders.join(","));
+            sql.push_str(&condition);
+            count_sql.push_str(&condition);
+            for cat in categories {
+                params.push(Box::new(cat.clone()));
+            }
+            param_index += categories.len();
+        }
+    }
+
+    // 有序性筛选
+    if let Some(ref values) = orderliness_values {
+        if !values.is_empty() {
+            let placeholders: Vec<String> = values.iter().enumerate()
+                .map(|(i, _)| format!("?{}", param_index + i))
+                .collect();
+            let condition = format!(" AND orderliness IN ({})", placeholders.join(","));
+            sql.push_str(&condition);
+            count_sql.push_str(&condition);
+            for val in values {
+                params.push(Box::new(val.clone()));
+            }
+        }
+    }
+
+    // 排序 - 空值始终排在最后
+    let (sort_expr, null_check) = match sort_by.as_deref() {
+        Some("keyword") => ("keyword", "keyword IS NULL OR keyword = ''"),
+        Some("traffic_total") => ("traffic_total", "traffic_total IS NULL"),
+        Some("avg_keyword_rank") => ("CAST(avg_keyword_rank AS REAL)", "avg_keyword_rank IS NULL OR avg_keyword_rank = ''"),
+        Some("avg_search_volume") => ("avg_search_volume", "avg_search_volume IS NULL"),
+        Some("traffic_level") => ("traffic_level", "traffic_level IS NULL OR traffic_level = ''"),
+        Some("asin_count") => ("asin_count", "asin_count IS NULL"),
+        _ => ("id", ""),
+    };
+    let order = match sort_order.as_deref() {
+        Some("asc") => "ASC",
+        _ => "DESC",
+    };
+    if null_check.is_empty() {
+        sql.push_str(&format!(" ORDER BY {} {}", sort_expr, order));
+    } else {
+        // 空值始终排在最后：先按是否为空排序，再按实际值排序
+        sql.push_str(&format!(" ORDER BY CASE WHEN {} THEN 1 ELSE 0 END, {} {}", null_check, sort_expr, order));
+    }
+
+    // 分页
+    sql.push_str(&format!(" LIMIT {} OFFSET {}", page_size, (page - 1) * page_size));
+
+    let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+    let mut stmt = conn.prepare(&sql)?;
+    let data = stmt
+        .query_map(params_refs.as_slice(), |row| {
+            Ok(KeywordData {
+                id: row.get(0)?,
+                product_id: row.get(1)?,
+                keyword: row.get(2)?,
+                translation: row.get(3)?,
+                relevance_score: row.get(4)?,
+                relevance_level: row.get(5)?,
+                traffic_total: row.get(6)?,
+                avg_keyword_rank: row.get(7)?,
+                avg_search_volume: row.get(8)?,
+                cpc_bid: row.get(9)?,
+                bid_range: row.get(10)?,
+                click_rate: row.get(11)?,
+                conversion_competition: row.get(12)?,
+                competition_level: row.get(13)?,
+                natural_position_flow: row.get(14)?,
+                top3_click_share: row.get(15)?,
+                avg_conversion_share: row.get(16)?,
+                asin_count: row.get(17)?,
+                traffic_level: row.get(18)?,
+                negative_word: row.get(19)?,
+                orderliness: row.get(20)?,
+                phrase_tag: row.get(21)?,
+                primary_category: row.get(22)?,
+                secondary_category: row.get(23)?,
+                search_intent: row.get(24)?,
+                traffic_share: row.get(25)?,
+                asin_data: row.get(26)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
+
+    // 获取总数（使用相同的筛选条件）
+    let count_params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let total: i64 = conn.query_row(
+        &count_sql,
+        count_params_refs.as_slice(),
+        |row| row.get(0),
+    )?;
+
+    Ok((data, total))
+}
+
+// 更新关键词数据的单个字段
+pub fn update_keyword_field(id: i64, field: &str, value: &str) -> Result<()> {
+    let conn = get_db().lock();
+
+    // 只允许更新特定字段（安全考虑）
+    let allowed_fields = [
+        "traffic_level", "negative_word", "orderliness", "phrase_tag",
+        "primary_category", "secondary_category", "search_intent", "traffic_share"
+    ];
+
+    if !allowed_fields.contains(&field) {
+        return Err(rusqlite::Error::InvalidParameterName(format!("Field '{}' is not allowed", field)));
+    }
+
+    let sql = format!("UPDATE keyword_data SET {} = ?1 WHERE id = ?2", field);
+    conn.execute(&sql, rusqlite::params![value, id])?;
+    Ok(())
+}
+
+// 清空产品的关键词数据
+pub fn clear_keyword_data(product_id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("DELETE FROM keyword_data WHERE product_id = ?1", [product_id])?;
+    Ok(())
+}
+
+// 获取关键词数据统计
+pub fn get_keyword_data_stats(product_id: i64) -> Result<i64> {
+    let conn = get_db().lock();
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM keyword_data WHERE product_id = ?1",
+        [product_id],
+        |row| row.get(0),
+    )?;
+    Ok(count)
+}
+
+// ==================== 流量级别管理 ====================
+
+// 更新产品阈值
+pub fn update_product_thresholds(id: i64, big_word_threshold: i64, medium_word_threshold: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE products SET big_word_threshold = ?1, medium_word_threshold = ?2 WHERE id = ?3",
+        rusqlite::params![big_word_threshold, medium_word_threshold, id],
+    )?;
+    Ok(())
+}
+
+// 根据阈值计算并更新流量级别
+pub fn calculate_traffic_levels(product_id: i64, big_threshold: i64, medium_threshold: i64) -> Result<()> {
+    let conn = get_db().lock();
+
+    // 使用 CASE WHEN 批量更新流量级别（基于周平均排名）
+    // 大词: avg_keyword_rank <= big_threshold
+    // 中词: big_threshold < avg_keyword_rank <= medium_threshold
+    // 小词: avg_keyword_rank > medium_threshold
+    conn.execute(
+        "UPDATE keyword_data SET traffic_level = CASE
+            WHEN avg_keyword_rank IS NULL OR avg_keyword_rank = '' THEN NULL
+            WHEN CAST(avg_keyword_rank AS REAL) <= ?1 THEN '大词'
+            WHEN CAST(avg_keyword_rank AS REAL) <= ?2 THEN '中词'
+            ELSE '小词'
+        END
+        WHERE product_id = ?3",
+        rusqlite::params![big_threshold, medium_threshold, product_id],
+    )?;
+
+    Ok(())
+}
+
+// 获取流量级别统计
+pub fn get_traffic_level_stats(product_id: i64) -> Result<TrafficLevelStats> {
+    let conn = get_db().lock();
+
+    let big_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM keyword_data WHERE product_id = ?1 AND traffic_level = '大词'",
+        [product_id],
+        |row| row.get(0),
+    ).unwrap_or(0);
+
+    let medium_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM keyword_data WHERE product_id = ?1 AND traffic_level = '中词'",
+        [product_id],
+        |row| row.get(0),
+    ).unwrap_or(0);
+
+    let small_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM keyword_data WHERE product_id = ?1 AND traffic_level = '小词'",
+        [product_id],
+        |row| row.get(0),
+    ).unwrap_or(0);
+
+    Ok(TrafficLevelStats {
+        big_count,
+        medium_count,
+        small_count,
+    })
+}
+
+// 智能推荐阈值：让大词数量接近目标数量（默认20）
+pub fn recommend_threshold(product_id: i64, target_big_count: i64) -> Result<i64> {
+    let conn = get_db().lock();
+
+    // 获取所有非空排名值，按升序排列（基于周平均排名）
+    let mut stmt = conn.prepare(
+        "SELECT CAST(avg_keyword_rank AS REAL) FROM keyword_data
+         WHERE product_id = ?1 AND avg_keyword_rank IS NOT NULL AND avg_keyword_rank != ''
+         ORDER BY CAST(avg_keyword_rank AS REAL) ASC"
+    )?;
+
+    let ranks: Vec<i64> = stmt
+        .query_map([product_id], |row| row.get::<_, f64>(0))?
+        .filter_map(|r| r.ok())
+        .map(|v| v as i64)
+        .collect();
+
+    if ranks.is_empty() {
+        return Ok(20000); // 默认值
+    }
+
+    // 取第 target_big_count 个值作为大词阈值（索引从0开始，所以用 target_big_count - 1）
+    let index = std::cmp::min(target_big_count as usize, ranks.len()) - 1;
+    let threshold = ranks.get(index).copied().unwrap_or(20000);
+
+    // 向上取整到千位，使阈值更整齐
+    let rounded = ((threshold + 999) / 1000) * 1000;
+
+    Ok(rounded)
+}
+
+// ==================== 流量占比计算 ====================
+
+// 计算并更新流量占比
+pub fn calculate_traffic_share(product_id: i64) -> Result<()> {
+    let conn = get_db().lock();
+
+    // 1. 计算该产品所有关键词的流量总和
+    let total_traffic: f64 = conn.query_row(
+        "SELECT COALESCE(SUM(traffic_total), 0) FROM keyword_data WHERE product_id = ?1",
+        [product_id],
+        |row| row.get(0),
+    )?;
+
+    if total_traffic <= 0.0 {
+        // 没有流量数据，清空流量占比
+        conn.execute(
+            "UPDATE keyword_data SET traffic_share = NULL WHERE product_id = ?1",
+            [product_id],
+        )?;
+        return Ok(());
+    }
+
+    // 2. 批量更新每行的流量占比 = (traffic_total / total_traffic) * 100
+    conn.execute(
+        "UPDATE keyword_data SET traffic_share =
+            CASE
+                WHEN traffic_total IS NOT NULL THEN ROUND((traffic_total / ?1) * 100, 2)
+                ELSE NULL
+            END
+         WHERE product_id = ?2",
+        rusqlite::params![total_traffic, product_id],
+    )?;
+
+    Ok(())
+}
+
+// ==================== 关键词分类管理 ====================
+
+// 未分类关键词结构体
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UncategorizedKeyword {
+    pub id: i64,
+    pub keyword: String,
+    pub translation: Option<String>,
+}
+
+// 获取未分类的关键词（primary_category为空）
+pub fn get_uncategorized_keywords(product_id: i64) -> Result<Vec<UncategorizedKeyword>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, keyword, translation FROM keyword_data
+         WHERE product_id = ?1 AND (primary_category IS NULL OR primary_category = '')
+         ORDER BY id",
+    )?;
+    let keywords = stmt
+        .query_map([product_id], |row| {
+            Ok(UncategorizedKeyword {
+                id: row.get(0)?,
+                keyword: row.get(1)?,
+                translation: row.get(2)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
+    Ok(keywords)
+}
+
+// 批量更新关键词分类（使用事务提升性能）
+pub fn batch_update_keyword_categories(
+    product_id: i64,
+    updates: Vec<(String, String, String, String)>, // (keyword, primary_category, secondary_category, search_intent)
+) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("BEGIN TRANSACTION", [])?;
+
+    let result = (|| {
+        for (keyword, primary_category, secondary_category, search_intent) in updates {
+            conn.execute(
+                "UPDATE keyword_data SET primary_category = ?1, secondary_category = ?2, search_intent = ?3
+                 WHERE keyword = ?4 AND product_id = ?5",
+                rusqlite::params![primary_category, secondary_category, search_intent, keyword, product_id],
+            )?;
+        }
+        Ok::<(), rusqlite::Error>(())
+    })();
+
+    match result {
+        Ok(_) => {
+            conn.execute("COMMIT", [])?;
+            Ok(())
+        }
+        Err(e) => {
+            conn.execute("ROLLBACK", []).ok();
+            Err(e)
+        }
+    }
+}
+
+// 词组打标：自动为关键词打上匹配的词组标签
+pub fn calculate_phrase_tags(product_id: i64) -> Result<()> {
+    let conn = get_db().lock();
+
+    // 1. 查询候选词组：(大词 OR 中词) AND (强相关 OR 高相关) AND 单词数 ≤ 5
+    let mut stmt = conn.prepare(
+        "SELECT keyword FROM keyword_data
+         WHERE product_id = ?1
+           AND traffic_level IN ('大词', '中词')
+           AND relevance_level IN ('强相关', '高相关')
+           AND (LENGTH(keyword) - LENGTH(REPLACE(keyword, ' ', '')) + 1) <= 5
+         ORDER BY (LENGTH(keyword) - LENGTH(REPLACE(keyword, ' ', '')) + 1) DESC",
+    )?;
+
+    let candidates: Vec<String> = stmt
+        .query_map([product_id], |row| row.get(0))?
+        .collect::<Result<Vec<_>>>()?;
+
+    // 2. 使用事务批量更新
+    conn.execute("BEGIN TRANSACTION", [])?;
+
+    let result = (|| {
+        for candidate in &candidates {
+            // 使用 LIKE 匹配包含该词组的关键词，且 phrase_tag 为空
+            let pattern = format!("%{}%", candidate);
+            conn.execute(
+                "UPDATE keyword_data
+                 SET phrase_tag = ?1
+                 WHERE product_id = ?2
+                   AND keyword LIKE ?3
+                   AND (phrase_tag IS NULL OR phrase_tag = '')",
+                rusqlite::params![candidate, product_id, pattern],
+            )?;
+        }
+        Ok::<(), rusqlite::Error>(())
+    })();
+
+    match result {
+        Ok(_) => {
+            conn.execute("COMMIT", [])?;
+            Ok(())
+        }
+        Err(e) => {
+            conn.execute("ROLLBACK", []).ok();
+            Err(e)
+        }
+    }
+}
+
+// 计算有序性：根据 phrase_tag 出现次数判断
+pub fn calculate_orderliness(product_id: i64) -> Result<()> {
+    let conn = get_db().lock();
+
+    // 使用子查询统计每个 phrase_tag 的出现次数，然后更新 orderliness
+    // - phrase_tag 为空 → orderliness = NULL
+    // - phrase_tag 出现次数 < 4 → orderliness = '无序'
+    // - phrase_tag 出现次数 >= 4 → orderliness = '有序'
+    conn.execute(
+        "UPDATE keyword_data
+         SET orderliness =
+           CASE
+             WHEN phrase_tag IS NULL OR phrase_tag = '' THEN NULL
+             WHEN (SELECT COUNT(*) FROM keyword_data k2
+                   WHERE k2.product_id = keyword_data.product_id
+                   AND k2.phrase_tag = keyword_data.phrase_tag) >= 4
+             THEN '有序'
+             ELSE '无序'
+           END
+         WHERE product_id = ?1",
+        [product_id],
+    )?;
+
+    Ok(())
+}
+
+// ==================== 流程状态 ====================
+
+// 流程状态结构体
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WorkflowStatus {
+    pub has_data: bool,           // 是否有关键词数据
+    pub has_traffic_level: bool,  // 是否有流量级别
+    pub has_category: bool,       // 是否有AI分类
+    pub has_phrase_tag: bool,     // 是否有词组打标
+    pub has_orderliness: bool,    // 是否有有序性
+}
+
+// 获取流程状态
+pub fn get_workflow_status(product_id: i64) -> Result<WorkflowStatus> {
+    let conn = get_db().lock();
+
+    // 检查是否有数据
+    let has_data: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM keyword_data WHERE product_id = ?1)",
+        [product_id],
+        |row| row.get(0),
+    )?;
+
+    // 检查是否有流量级别
+    let has_traffic_level: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM keyword_data WHERE product_id = ?1 AND traffic_level IS NOT NULL AND traffic_level != '')",
+        [product_id],
+        |row| row.get(0),
+    )?;
+
+    // 检查是否有AI分类
+    let has_category: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM keyword_data WHERE product_id = ?1 AND primary_category IS NOT NULL AND primary_category != '')",
+        [product_id],
+        |row| row.get(0),
+    )?;
+
+    // 检查是否有词组打标
+    let has_phrase_tag: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM keyword_data WHERE product_id = ?1 AND phrase_tag IS NOT NULL AND phrase_tag != '')",
+        [product_id],
+        |row| row.get(0),
+    )?;
+
+    // 检查是否有有序性
+    let has_orderliness: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM keyword_data WHERE product_id = ?1 AND orderliness IS NOT NULL AND orderliness != '')",
+        [product_id],
+        |row| row.get(0),
+    )?;
+
+    Ok(WorkflowStatus {
+        has_data,
+        has_traffic_level,
+        has_category,
+        has_phrase_tag,
+        has_orderliness,
+    })
+}
+
+// ==================== 备份功能 ====================
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BackupInfo {
+    pub id: i64,
+    pub product_id: i64,
+    pub backup_name: Option<String>,
+    pub created_at: String,
+    pub keyword_data_count: i64,
+}
+
+// 创建备份
+pub fn create_backup(product_id: i64, backup_name: Option<String>) -> Result<i64> {
+    let conn = get_db().lock();
+
+    // 开始事务
+    conn.execute("BEGIN TRANSACTION", [])?;
+
+    let result = (|| -> Result<i64> {
+        // 1. 插入备份元数据
+        conn.execute(
+            "INSERT INTO backups (product_id, backup_name) VALUES (?1, ?2)",
+            rusqlite::params![product_id, backup_name],
+        )?;
+        let backup_id = conn.last_insert_rowid();
+
+        // 2. 复制 keyword_data 到 backup_keyword_data
+        conn.execute(
+            "INSERT INTO backup_keyword_data (
+                backup_id, product_id, keyword, translation, relevance_score, relevance_level,
+                traffic_total, avg_keyword_rank, avg_search_volume, cpc_bid, bid_range,
+                click_rate, conversion_competition, competition_level, natural_position_flow,
+                top3_click_share, avg_conversion_share, asin_count, traffic_level,
+                negative_word, orderliness, phrase_tag, primary_category, secondary_category,
+                search_intent, traffic_share, asin_data
+            )
+            SELECT
+                ?1, product_id, keyword, translation, relevance_score, relevance_level,
+                traffic_total, avg_keyword_rank, avg_search_volume, cpc_bid, bid_range,
+                click_rate, conversion_competition, competition_level, natural_position_flow,
+                top3_click_share, avg_conversion_share, asin_count, traffic_level,
+                negative_word, orderliness, phrase_tag, primary_category, secondary_category,
+                search_intent, traffic_share, asin_data
+            FROM keyword_data WHERE product_id = ?2",
+            rusqlite::params![backup_id, product_id],
+        )?;
+
+        // 3. 更新备份元数据中的数据量
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM backup_keyword_data WHERE backup_id = ?1",
+            [backup_id],
+            |row| row.get(0),
+        )?;
+        conn.execute(
+            "UPDATE backups SET keyword_data_count = ?1 WHERE id = ?2",
+            rusqlite::params![count, backup_id],
+        )?;
+
+        // 4. 清理旧备份（保留最近3个）
+        cleanup_old_backups(&conn, product_id, 3)?;
+
+        Ok(backup_id)
+    })();
+
+    match result {
+        Ok(backup_id) => {
+            conn.execute("COMMIT", [])?;
+            Ok(backup_id)
+        }
+        Err(e) => {
+            conn.execute("ROLLBACK", []).ok();
+            Err(e)
+        }
+    }
+}
+
+// 清理旧备份（保留最近 max_backups 个）
+fn cleanup_old_backups(conn: &Connection, product_id: i64, max_backups: i64) -> Result<()> {
+    // 获取需要删除的备份ID
+    let mut stmt = conn.prepare(
+        "SELECT id FROM backups WHERE product_id = ?1 ORDER BY created_at DESC LIMIT -1 OFFSET ?2",
+    )?;
+    let backup_ids: Vec<i64> = stmt
+        .query_map(rusqlite::params![product_id, max_backups], |row| row.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // 删除旧备份（CASCADE 会自动删除 backup_keyword_data 中的数据）
+    for backup_id in backup_ids {
+        conn.execute("DELETE FROM backups WHERE id = ?1", [backup_id])?;
+    }
+
+    Ok(())
+}
+
+// 获取产品的所有备份
+pub fn get_backups(product_id: i64) -> Result<Vec<BackupInfo>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, product_id, backup_name, created_at, keyword_data_count
+         FROM backups WHERE product_id = ?1 ORDER BY created_at DESC",
+    )?;
+
+    let backups = stmt
+        .query_map([product_id], |row| {
+            Ok(BackupInfo {
+                id: row.get(0)?,
+                product_id: row.get(1)?,
+                backup_name: row.get(2)?,
+                created_at: row.get(3)?,
+                keyword_data_count: row.get(4)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(backups)
+}
+
+// 恢复备份
+pub fn restore_backup(backup_id: i64) -> Result<()> {
+    let conn = get_db().lock();
+
+    // 开始事务
+    conn.execute("BEGIN TRANSACTION", [])?;
+
+    let result = (|| -> Result<()> {
+        // 1. 获取备份对应的产品ID
+        let product_id: i64 = conn.query_row(
+            "SELECT product_id FROM backups WHERE id = ?1",
+            [backup_id],
+            |row| row.get(0),
+        )?;
+
+        // 2. 删除当前产品的 keyword_data
+        conn.execute("DELETE FROM keyword_data WHERE product_id = ?1", [product_id])?;
+
+        // 3. 从备份恢复数据
+        conn.execute(
+            "INSERT INTO keyword_data (
+                product_id, keyword, translation, relevance_score, relevance_level,
+                traffic_total, avg_keyword_rank, avg_search_volume, cpc_bid, bid_range,
+                click_rate, conversion_competition, competition_level, natural_position_flow,
+                top3_click_share, avg_conversion_share, asin_count, traffic_level,
+                negative_word, orderliness, phrase_tag, primary_category, secondary_category,
+                search_intent, traffic_share, asin_data
+            )
+            SELECT
+                product_id, keyword, translation, relevance_score, relevance_level,
+                traffic_total, avg_keyword_rank, avg_search_volume, cpc_bid, bid_range,
+                click_rate, conversion_competition, competition_level, natural_position_flow,
+                top3_click_share, avg_conversion_share, asin_count, traffic_level,
+                negative_word, orderliness, phrase_tag, primary_category, secondary_category,
+                search_intent, traffic_share, asin_data
+            FROM backup_keyword_data WHERE backup_id = ?1",
+            [backup_id],
+        )?;
+
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => {
+            conn.execute("COMMIT", [])?;
+            Ok(())
+        }
+        Err(e) => {
+            conn.execute("ROLLBACK", []).ok();
+            Err(e)
+        }
+    }
+}
+
+// 删除备份
+pub fn delete_backup(backup_id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    // CASCADE 会自动删除 backup_keyword_data 中的数据
+    conn.execute("DELETE FROM backups WHERE id = ?1", [backup_id])?;
+    Ok(())
 }
