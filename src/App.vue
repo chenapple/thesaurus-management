@@ -2184,7 +2184,6 @@ onUnmounted(() => {
           v-loading="keywordLoading"
           stripe
           style="width: 100%"
-          :max-height="600"
           @sort-change="handleKeywordSortChange"
         >
           <el-table-column type="index" label="#" width="50" fixed="left" />
