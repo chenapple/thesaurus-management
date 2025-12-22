@@ -43,7 +43,11 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: '词库管理 ${{ github.ref_name }}'
-          releaseBody: '请下载对应平台的安装包。'
+          releaseBody: |
+            请下载对应平台的安装包：
+            - **Windows**: 下载 `.exe` 文件
+            - **Mac M芯片**: 下载 `aarch64.dmg` 文件
+            - **Mac Intel芯片**: 下载 `x64.dmg` 文件
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }}
