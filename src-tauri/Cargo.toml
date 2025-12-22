@@ -1,6 +1,6 @@
 [package]
 name = "thesaurus-management"
-version = "0.1.0"
+version = "0.4.2"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -30,4 +30,5 @@ tauri-plugin-fs = "2.4.4"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-clipboard-manager = "2"
+tauri-plugin-window-state = "2"
 

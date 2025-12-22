@@ -284,3 +284,40 @@ export async function restoreBackup(backupId: number): Promise<void> {
 export async function deleteBackup(backupId: number): Promise<void> {
   return await invoke("delete_backup", { backupId });
 }
+
+// ==================== API Key 安全存储 ====================
+
+/**
+ * 保存 API Key 到系统密钥链
+ * @param keyName 密钥名称，如 "deepseek"
+ * @param apiKey API Key 值
+ */
+export async function setApiKey(keyName: string, apiKey: string): Promise<void> {
+  return await invoke("set_api_key", { keyName, apiKey });
+}
+
+/**
+ * 从系统密钥链获取 API Key
+ * @param keyName 密钥名称
+ * @returns API Key 值，如果不存在返回 null
+ */
+export async function getApiKey(keyName: string): Promise<string | null> {
+  return await invoke("get_api_key", { keyName });
+}
+
+/**
+ * 从系统密钥链删除 API Key
+ * @param keyName 密钥名称
+ */
+export async function deleteApiKey(keyName: string): Promise<void> {
+  return await invoke("delete_api_key", { keyName });
+}
+
+/**
+ * 检查 API Key 是否存在
+ * @param keyName 密钥名称
+ * @returns 是否存在
+ */
+export async function hasApiKey(keyName: string): Promise<boolean> {
+  return await invoke("has_api_key", { keyName });
+}

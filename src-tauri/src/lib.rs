@@ -223,6 +223,32 @@ fn delete_backup(backup_id: i64) -> Result<(), String> {
     db::delete_backup(backup_id).map_err(|e| e.to_string())
 }
 
+// ==================== API Key 存储 ====================
+
+#[tauri::command]
+fn set_api_key(key_name: String, api_key: String) -> Result<(), String> {
+    db::set_setting(&key_name, &api_key).map_err(|e| format!("保存 API Key 失败: {}", e))
+}
+
+#[tauri::command]
+fn get_api_key(key_name: String) -> Result<Option<String>, String> {
+    db::get_setting(&key_name).map_err(|e| format!("获取 API Key 失败: {}", e))
+}
+
+#[tauri::command]
+fn delete_api_key(key_name: String) -> Result<(), String> {
+    db::delete_setting(&key_name).map_err(|e| format!("删除 API Key 失败: {}", e))
+}
+
+#[tauri::command]
+fn has_api_key(key_name: String) -> Result<bool, String> {
+    match db::get_setting(&key_name) {
+        Ok(Some(_)) => Ok(true),
+        Ok(None) => Ok(false),
+        Err(e) => Err(format!("检查 API Key 失败: {}", e)),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -232,6 +258,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_window_state::Builder::new().build())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
             db::init_db(app_data_dir).expect("Failed to initialize database");
@@ -284,6 +311,11 @@ pub fn run() {
             get_backups,
             restore_backup,
             delete_backup,
+            // API Key 安全存储
+            set_api_key,
+            get_api_key,
+            delete_api_key,
+            has_api_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

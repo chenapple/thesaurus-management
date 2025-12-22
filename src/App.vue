@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from "vue";
+import { ref, onMounted, onUnmounted, computed, defineAsyncComponent } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -12,9 +12,18 @@ import { getVersion } from "@tauri-apps/api/app";
 import * as XLSX from "xlsx";
 import * as api from "./api";
 import { batchAnalyzeWords, batchAnalyzeKeywordCategories } from "./deepseek";
-import type { BackupInfo, Category, KeywordData, Product, Root, TrafficLevelStats, WorkflowStatus } from "./types";
+import type { BackupInfo, Category, KeywordData, Product, Root, WorkflowStatus } from "./types";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import WordCloud from "./components/WordCloud.vue";
+
+// 懒加载组件 - 只在需要时才加载
+const WordCloud = defineAsyncComponent(() => import("./components/WordCloud.vue"));
+const TrafficSettingsDialog = defineAsyncComponent(() => import("./components/TrafficSettingsDialog.vue"));
+const KeywordExportDialog = defineAsyncComponent(() => import("./components/KeywordExportDialog.vue"));
+const BackupDialog = defineAsyncComponent(() => import("./components/BackupDialog.vue"));
+const ColumnConfigDialog = defineAsyncComponent(() => import("./components/ColumnConfigDialog.vue"));
+const ProductDialog = defineAsyncComponent(() => import("./components/ProductDialog.vue"));
+const ShortcutsDialog = defineAsyncComponent(() => import("./components/ShortcutsDialog.vue"));
+const ApiKeyDialog = defineAsyncComponent(() => import("./components/ApiKeyDialog.vue"));
 
 // ==================== 产品相关状态 ====================
 const products = ref<Product[]>([]);
@@ -152,8 +161,18 @@ const MAX_SIDEBAR_WIDTH = 400;
 // 快捷键帮助弹窗
 const showShortcutsDialog = ref(false);
 
+// API Key 设置弹窗
+const showApiKeyDialog = ref(false);
+
 // 应用版本
 const appVersion = ref("");
+
+// 自动更新相关状态
+const showUpdateDialog = ref(false);
+const updateVersion = ref("");
+const updateDownloading = ref(false);
+const updateProgress = ref(0);
+const updateTotal = ref(0);
 
 // 视图模式: 'keywords' | 'roots' | 'wordcloud'
 const viewMode = ref<'keywords' | 'roots' | 'wordcloud'>('keywords');
@@ -163,12 +182,6 @@ const loadingCloud = ref(false);
 
 // ==================== 流量设置相关状态 ====================
 const showTrafficDialog = ref(false);
-const trafficForm = ref({
-  bigThreshold: 20000,
-  mediumThreshold: 100000,
-});
-const trafficStats = ref<TrafficLevelStats>({ big_count: 0, medium_count: 0, small_count: 0 });
-const calculatingTraffic = ref(false);
 
 // ==================== 关键词数据相关状态 ====================
 const keywordData = ref<KeywordData[]>([]);
@@ -214,11 +227,11 @@ function handleFilterChange() {
 
 // 是否有活跃筛选
 const hasActiveFilters = computed(() => {
-  return keywordSearch.value ||
+  return !!(keywordSearch.value ||
     keywordFilters.value.trafficLevel.length > 0 ||
     keywordFilters.value.relevanceLevel.length > 0 ||
     keywordFilters.value.primaryCategory.length > 0 ||
-    keywordFilters.value.orderliness.length > 0;
+    keywordFilters.value.orderliness.length > 0);
 });
 
 // 列配置
@@ -616,93 +629,30 @@ const currentWorkflowStep = computed(() => {
 
 // ==================== 流量设置功能 ====================
 
-async function openTrafficDialog() {
+function openTrafficDialog() {
   if (!selectedProduct.value) {
     ElMessage.warning("请先选择一个产品");
     return;
   }
-
-  // 初始化表单值
-  trafficForm.value.bigThreshold = selectedProduct.value.big_word_threshold || 20000;
-  trafficForm.value.mediumThreshold = selectedProduct.value.medium_word_threshold || 100000;
-
-  // 加载当前统计
-  await loadTrafficStats();
-
   showTrafficDialog.value = true;
 }
 
-async function loadTrafficStats() {
+async function onTrafficApplied(bigThreshold: number, mediumThreshold: number) {
   if (!selectedProduct.value) return;
 
-  try {
-    trafficStats.value = await api.getTrafficLevelStats(selectedProduct.value.id);
-  } catch (e) {
-    console.error("加载流量统计失败:", e);
-  }
-}
+  // 更新本地产品数据
+  selectedProduct.value.big_word_threshold = bigThreshold;
+  selectedProduct.value.medium_word_threshold = mediumThreshold;
 
-async function applyTrafficLevels() {
-  if (!selectedProduct.value) return;
-
-  if (trafficForm.value.bigThreshold >= trafficForm.value.mediumThreshold) {
-    ElMessage.warning("大词阈值必须小于中词阈值");
-    return;
+  // 更新产品列表
+  const idx = products.value.findIndex(p => p.id === selectedProduct.value!.id);
+  if (idx >= 0) {
+    products.value[idx].big_word_threshold = bigThreshold;
+    products.value[idx].medium_word_threshold = mediumThreshold;
   }
 
-  calculatingTraffic.value = true;
-  try {
-    // 保存阈值到产品
-    await api.updateProductThresholds(
-      selectedProduct.value.id,
-      trafficForm.value.bigThreshold,
-      trafficForm.value.mediumThreshold
-    );
-
-    // 计算流量级别
-    await api.calculateTrafficLevels(
-      selectedProduct.value.id,
-      trafficForm.value.bigThreshold,
-      trafficForm.value.mediumThreshold
-    );
-
-    // 更新本地产品数据
-    selectedProduct.value.big_word_threshold = trafficForm.value.bigThreshold;
-    selectedProduct.value.medium_word_threshold = trafficForm.value.mediumThreshold;
-
-    // 更新产品列表
-    const idx = products.value.findIndex(p => p.id === selectedProduct.value!.id);
-    if (idx >= 0) {
-      products.value[idx].big_word_threshold = trafficForm.value.bigThreshold;
-      products.value[idx].medium_word_threshold = trafficForm.value.mediumThreshold;
-    }
-
-    // 重新加载统计和数据
-    await loadTrafficStats();
-    await loadKeywordData();
-
-    ElMessage.success("流量级别已更新");
-  } catch (e) {
-    ElMessage.error("更新失败: " + e);
-  } finally {
-    calculatingTraffic.value = false;
-  }
-}
-
-async function recommendBigThreshold() {
-  if (!selectedProduct.value) return;
-
-  try {
-    const recommendedThreshold = await api.recommendThreshold(selectedProduct.value.id, 20);
-    if (recommendedThreshold > 0) {
-      trafficForm.value.bigThreshold = recommendedThreshold;
-      ElMessage.success(`推荐大词阈值: ${recommendedThreshold.toLocaleString()}`);
-    } else {
-      ElMessage.info("数据不足，无法推荐阈值");
-    }
-  } catch (e) {
-    ElMessage.error("推荐失败: " + e);
-  }
+  // 重新加载数据
+  await loadKeywordData();
 }
 
 // ==================== 导入功能 ====================
@@ -915,9 +865,10 @@ async function openBackupDialog() {
 }
 
 async function handleRestoreBackup(backup: BackupInfo) {
+  const backupName = backup.backup_name || new Date(backup.created_at).toLocaleString('zh-CN');
   try {
     await ElMessageBox.confirm(
-      `确定要回滚到"${backup.backup_name || formatBackupTime(backup.created_at)}"吗？当前数据将被覆盖！`,
+      `确定要回滚到"${backupName}"吗？当前数据将被覆盖！`,
       '确认回滚',
       {
         confirmButtonText: '确认回滚',
@@ -964,15 +915,6 @@ async function handleDeleteBackup(backup: BackupInfo) {
     if (e !== 'cancel') {
       ElMessage.error('删除失败: ' + e);
     }
-  }
-}
-
-function formatBackupTime(dateStr: string): string {
-  try {
-    const date = new Date(dateStr);
-    return date.toLocaleString('zh-CN');
-  } catch {
-    return dateStr;
   }
 }
 
@@ -1774,24 +1716,60 @@ async function checkForUpdates() {
       );
 
       if (confirm) {
-        ElMessage.info("正在下载更新...");
+        // 显示下载进度弹窗
+        updateVersion.value = update.version;
+        updateProgress.value = 0;
+        updateTotal.value = 0;
+        updateDownloading.value = true;
+        showUpdateDialog.value = true;
+
+        let downloaded = 0;
 
         await update.downloadAndInstall((progress) => {
-          if (progress.event === "Progress" && progress.data) {
-            console.log(`已下载: ${progress.data.chunkLength} bytes`);
+          if (progress.event === "Started" && progress.data) {
+            updateTotal.value = progress.data.contentLength || 0;
+          } else if (progress.event === "Progress" && progress.data) {
+            downloaded += progress.data.chunkLength || 0;
+            if (updateTotal.value > 0) {
+              updateProgress.value = Math.round((downloaded / updateTotal.value) * 100);
+            }
+          } else if (progress.event === "Finished") {
+            updateProgress.value = 100;
           }
         });
+
+        updateDownloading.value = false;
 
         await ElMessageBox.alert("更新已下载完成，点击确定重启应用", "更新完成", {
           confirmButtonText: "确定",
         });
 
+        showUpdateDialog.value = false;
         await relaunch();
       }
     }
   } catch (e) {
     // 检查更新失败时静默处理，不影响用户使用
     console.log("检查更新失败:", e);
+    showUpdateDialog.value = false;
+    updateDownloading.value = false;
+  }
+}
+
+// ==================== API Key 迁移 ====================
+
+async function migrateApiKey() {
+  try {
+    // 检查是否已经配置了 API Key
+    const hasKey = await api.hasApiKey("deepseek");
+    if (!hasKey) {
+      // 迁移旧的 API Key 到系统密钥链
+      const oldApiKey = "sk-260241b985f243a78114c8f8d360c34c";
+      await api.setApiKey("deepseek", oldApiKey);
+      console.log("API Key 已迁移到系统密钥链");
+    }
+  } catch (e) {
+    console.error("API Key 迁移失败:", e);
   }
 }
 
@@ -1800,6 +1778,9 @@ async function checkForUpdates() {
 onMounted(async () => {
   // 初始化主题
   initTheme();
+
+  // 迁移 API Key（一次性）
+  await migrateApiKey();
 
   // 初始化侧边栏宽度
   initSidebarWidth();
@@ -1888,10 +1869,15 @@ onUnmounted(() => {
             </template>
           </el-dropdown>
         </div>
-        <div v-if="products.length === 0" class="no-product">
-          <p>暂无产品</p>
-          <el-button type="primary" size="small" @click="openAddProductDialog">
-            创建产品
+        <div v-if="products.length === 0" class="empty-state sidebar-empty">
+          <div class="empty-icon">
+            <el-icon :size="48"><Box /></el-icon>
+          </div>
+          <p class="empty-title">还没有产品</p>
+          <p class="empty-desc">创建第一个产品开始分析</p>
+          <el-button type="primary" @click="openAddProductDialog">
+            <el-icon><Plus /></el-icon>
+            新建产品
           </el-button>
         </div>
       </div>
@@ -2090,6 +2076,9 @@ onUnmounted(() => {
                 <el-dropdown-item divided @click="openBackupDialog">
                   <el-icon><FolderOpened /></el-icon> 备份管理
                 </el-dropdown-item>
+                <el-dropdown-item @click="showApiKeyDialog = true">
+                  <el-icon><Key /></el-icon> API Key 设置
+                </el-dropdown-item>
                 <el-dropdown-item divided @click="handleClearData">
                   <el-icon color="#f56c6c"><Delete /></el-icon>
                   <span style="color: #f56c6c">重置词库</span>
@@ -2187,6 +2176,23 @@ onUnmounted(() => {
           height="100%"
           @sort-change="handleKeywordSortChange"
         >
+          <template #empty>
+            <div class="table-empty-state">
+              <div class="empty-icon">
+                <el-icon :size="48"><Document /></el-icon>
+              </div>
+              <p class="empty-title">{{ hasActiveFilters ? '没有匹配的数据' : '还没有关键词数据' }}</p>
+              <p class="empty-desc">{{ hasActiveFilters ? '尝试调整筛选条件' : '导入 Excel 文件开始分析' }}</p>
+              <el-button v-if="!hasActiveFilters" type="primary" @click="handleImport">
+                <el-icon><Upload /></el-icon>
+                导入 Excel
+              </el-button>
+              <el-button v-else @click="resetKeywordFilters">
+                <el-icon><RefreshLeft /></el-icon>
+                重置筛选
+              </el-button>
+            </div>
+          </template>
           <el-table-column type="index" label="#" width="50" fixed="left" />
 
           <!-- 原始Excel列 -->
@@ -2371,6 +2377,23 @@ onUnmounted(() => {
           style="width: 100%"
           :default-sort="{ prop: 'contains_count', order: 'descending' }"
         >
+          <template #empty>
+            <div class="table-empty-state">
+              <div class="empty-icon">
+                <el-icon :size="48"><Collection /></el-icon>
+              </div>
+              <p class="empty-title">{{ searchText ? '没有匹配的词根' : '还没有词根数据' }}</p>
+              <p class="empty-desc">{{ searchText ? '尝试其他搜索关键词' : '请先在关键词视图导入数据' }}</p>
+              <el-button v-if="searchText" @click="searchText = ''; loadRoots()">
+                <el-icon><RefreshLeft /></el-icon>
+                清空搜索
+              </el-button>
+              <el-button v-else type="primary" @click="viewMode = 'keywords'">
+                <el-icon><ArrowLeft /></el-icon>
+                返回关键词视图
+              </el-button>
+            </div>
+          </template>
           <el-table-column type="index" label="#" width="50" />
 
           <el-table-column label="词根" min-width="120">
@@ -2465,10 +2488,16 @@ onUnmounted(() => {
       </div>
 
       <!-- 无产品提示 -->
-      <div class="no-product-main" v-if="!selectedProduct">
-        <el-empty description="请先选择或创建一个产品">
-          <el-button type="primary" @click="openAddProductDialog">创建产品</el-button>
-        </el-empty>
+      <div class="empty-state main-empty" v-if="!selectedProduct">
+        <div class="empty-icon">
+          <el-icon :size="64"><Pointer /></el-icon>
+        </div>
+        <p class="empty-title">请先选择一个产品</p>
+        <p class="empty-desc">从左侧列表选择产品，或创建新产品开始分析</p>
+        <el-button type="primary" @click="openAddProductDialog">
+          <el-icon><Plus /></el-icon>
+          新建产品
+        </el-button>
       </div>
 
       <!-- 分页 (仅词根视图显示) -->
@@ -2486,334 +2515,92 @@ onUnmounted(() => {
     </main>
 
     <!-- 产品编辑对话框 -->
-    <el-dialog
-      v-model="showProductDialog"
-      :title="isEditingProduct ? '编辑产品' : '创建产品'"
-      width="400px"
-    >
-      <el-form :model="productForm" label-width="80px">
-        <el-form-item label="产品名称" required>
-          <el-input v-model="productForm.name" placeholder="请输入产品名称" />
-        </el-form-item>
-        <el-form-item label="国家">
-          <el-select v-model="productForm.country" placeholder="请选择国家" clearable style="width: 100%">
-            <el-option
-              v-for="country in countryOptions"
-              :key="country.code"
-              :label="country.name"
-              :value="country.code"
-            >
-              <span class="country-option">
-                <span class="country-flag" v-html="country.flag"></span>
-                <span>{{ country.name }}</span>
-              </span>
-            </el-option>
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showProductDialog = false">取消</el-button>
-        <el-button type="primary" @click="saveProduct">确定</el-button>
-      </template>
-    </el-dialog>
+    <ProductDialog
+      v-model:visible="showProductDialog"
+      v-model:form="productForm"
+      :is-editing="isEditingProduct"
+      :country-options="countryOptions"
+      @save="saveProduct"
+    />
 
     <!-- 快捷键帮助弹窗 -->
-    <el-dialog
-      v-model="showShortcutsDialog"
-      title="键盘快捷键"
-      width="480px"
-      :show-close="true"
-    >
-      <div class="shortcuts-list">
-        <div class="shortcut-group">
-          <h4>通用操作</h4>
-          <div class="shortcut-item">
-            <span class="shortcut-desc">创建新产品</span>
-            <span class="shortcut-key"><kbd>⌘</kbd> <kbd>N</kbd></span>
-          </div>
-          <div class="shortcut-item">
-            <span class="shortcut-desc">切换深色模式</span>
-            <span class="shortcut-key"><kbd>⌘</kbd> <kbd>D</kbd></span>
-          </div>
-          <div class="shortcut-item">
-            <span class="shortcut-desc">显示快捷键帮助</span>
-            <span class="shortcut-key"><kbd>?</kbd></span>
-          </div>
-        </div>
-        <div class="shortcut-group">
-          <h4>数据操作</h4>
-          <div class="shortcut-item">
-            <span class="shortcut-desc">导入 Excel</span>
-            <span class="shortcut-key"><kbd>⌘</kbd> <kbd>I</kbd></span>
-          </div>
-          <div class="shortcut-item">
-            <span class="shortcut-desc">导出 Excel</span>
-            <span class="shortcut-key"><kbd>⌘</kbd> <kbd>E</kbd></span>
-          </div>
-          <div class="shortcut-item">
-            <span class="shortcut-desc">AI分类 / 智能分析</span>
-            <span class="shortcut-key"><kbd>⌘</kbd> <kbd>↵</kbd></span>
-          </div>
-        </div>
-        <div class="shortcut-group">
-          <h4>导航</h4>
-          <div class="shortcut-item">
-            <span class="shortcut-desc">聚焦搜索框</span>
-            <span class="shortcut-key"><kbd>⌘</kbd> <kbd>F</kbd></span>
-          </div>
-          <div class="shortcut-item">
-            <span class="shortcut-desc">切换产品</span>
-            <span class="shortcut-key"><kbd>↑</kbd> <kbd>↓</kbd></span>
-          </div>
-          <div class="shortcut-item">
-            <span class="shortcut-desc">取消/关闭</span>
-            <span class="shortcut-key"><kbd>Esc</kbd></span>
-          </div>
-        </div>
-      </div>
-      <template #footer>
-        <div class="shortcuts-footer">
-          <span class="shortcuts-tip">Windows 用户请将 ⌘ 替换为 Ctrl</span>
-          <span class="app-version">版本号：v{{ appVersion }}</span>
-        </div>
-      </template>
-    </el-dialog>
+    <ShortcutsDialog
+      v-model:visible="showShortcutsDialog"
+      :app-version="appVersion"
+    />
 
     <!-- 列配置弹窗 -->
-    <el-dialog
-      v-model="showColumnConfig"
-      title="列配置"
-      width="500px"
-    >
-      <div class="column-config">
-        <p class="column-config-desc">选择要显示的列（关键词列始终显示）</p>
-        <div class="column-config-select-all">
-          <el-checkbox
-            :model-value="isAllColumnsSelected"
-            @change="toggleSelectAllColumns"
-          >
-            全选
-          </el-checkbox>
-        </div>
-        <div class="column-config-grid">
-          <div
-            v-for="col in columnDefinitions"
-            :key="col.key"
-            class="column-config-item"
-          >
-            <el-checkbox
-              v-model="columnConfig[col.key]"
-              :disabled="col.required"
-              @change="saveColumnConfig"
-            >
-              {{ col.label }}
-            </el-checkbox>
-          </div>
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="columnConfig = getDefaultColumnConfig(); saveColumnConfig()">
-          恢复默认
-        </el-button>
-        <el-button type="primary" @click="showColumnConfig = false">
-          确定
-        </el-button>
-      </template>
-    </el-dialog>
+    <ColumnConfigDialog
+      v-model:visible="showColumnConfig"
+      :column-definitions="columnDefinitions"
+      :column-config="columnConfig"
+      :is-all-columns-selected="isAllColumnsSelected"
+      @update:column-config="(key, val) => { columnConfig[key] = val; saveColumnConfig(); }"
+      @toggle-all="toggleSelectAllColumns"
+      @reset-default="columnConfig = getDefaultColumnConfig(); saveColumnConfig()"
+    />
 
     <!-- 关键词导出弹窗 -->
-    <el-dialog
-      v-model="showKeywordExportDialog"
-      title="导出关键词数据"
-      width="480px"
-    >
-      <div class="keyword-export-settings">
-        <p class="export-desc">选择导出范围（将使用当前列配置）</p>
-
-        <!-- 导出范围选择 -->
-        <div class="export-section">
-          <h4 class="section-title">导出范围</h4>
-          <el-radio-group v-model="keywordExportScope" class="export-scope-group">
-            <el-radio value="filtered" class="export-scope-item">
-              <div class="scope-content">
-                <span class="scope-label">导出当前筛选结果</span>
-                <span class="scope-count">
-                  共 {{ keywordTotal }} 条数据
-                  <el-tag v-if="hasActiveFilters" size="small" type="info" style="margin-left: 8px">已筛选</el-tag>
-                </span>
-              </div>
-            </el-radio>
-            <el-radio value="all" class="export-scope-item">
-              <div class="scope-content">
-                <span class="scope-label">导出全部数据</span>
-                <span class="scope-count">忽略当前筛选条件</span>
-              </div>
-            </el-radio>
-          </el-radio-group>
-        </div>
-
-        <!-- 列配置预览 -->
-        <div class="export-section">
-          <h4 class="section-title">
-            导出列
-            <el-button type="primary" link size="small" @click="showColumnConfig = true; showKeywordExportDialog = false">
-              修改列配置
-            </el-button>
-          </h4>
-          <div class="export-columns-preview">
-            <el-tag
-              v-for="col in columnDefinitions.filter(c => columnConfig[c.key])"
-              :key="col.key"
-              size="small"
-              type="info"
-            >
-              {{ col.label }}
-            </el-tag>
-          </div>
-          <p class="columns-count">
-            共 {{ columnDefinitions.filter(c => columnConfig[c.key]).length }} 列
-          </p>
-        </div>
-      </div>
-
-      <template #footer>
-        <el-button @click="showKeywordExportDialog = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="keywordExporting"
-          @click="executeKeywordExport"
-        >
-          <el-icon v-if="!keywordExporting"><Download /></el-icon>
-          {{ keywordExporting ? '导出中...' : '导出' }}
-        </el-button>
-      </template>
-    </el-dialog>
+    <KeywordExportDialog
+      v-model:visible="showKeywordExportDialog"
+      v-model:scope="keywordExportScope"
+      :keyword-total="keywordTotal"
+      :has-active-filters="hasActiveFilters"
+      :column-definitions="columnDefinitions"
+      :column-config="columnConfig"
+      :loading="keywordExporting"
+      @export="executeKeywordExport"
+      @edit-columns="showColumnConfig = true"
+    />
 
     <!-- 备份管理弹窗 -->
-    <el-dialog
-      v-model="showBackupDialog"
-      title="备份管理"
-      width="600px"
-    >
-      <div class="backup-dialog">
-        <p class="backup-desc">
-          每次导入Excel前会自动创建备份，最多保留3个历史版本
-        </p>
-
-        <div v-if="backups.length === 0" class="backup-empty">
-          <el-empty description="暂无备份" :image-size="80" />
-        </div>
-
-        <div v-else class="backup-list">
-          <div
-            v-for="backup in backups"
-            :key="backup.id"
-            class="backup-item"
-          >
-            <div class="backup-info">
-              <div class="backup-name">
-                {{ backup.backup_name || '自动备份' }}
-              </div>
-              <div class="backup-meta">
-                <span class="backup-time">
-                  <el-icon><Clock /></el-icon>
-                  {{ formatBackupTime(backup.created_at) }}
-                </span>
-                <span class="backup-count">
-                  <el-icon><Document /></el-icon>
-                  {{ backup.keyword_data_count }} 条数据
-                </span>
-              </div>
-            </div>
-            <div class="backup-actions">
-              <el-button
-                type="primary"
-                size="small"
-                :loading="restoring"
-                @click="handleRestoreBackup(backup)"
-              >
-                <el-icon><RefreshLeft /></el-icon>
-                回滚
-              </el-button>
-              <el-button
-                type="danger"
-                size="small"
-                plain
-                @click="handleDeleteBackup(backup)"
-              >
-                <el-icon><Delete /></el-icon>
-              </el-button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <template #footer>
-        <el-button @click="showBackupDialog = false">关闭</el-button>
-      </template>
-    </el-dialog>
+    <BackupDialog
+      v-model:visible="showBackupDialog"
+      :backups="backups"
+      :restoring="restoring"
+      @restore="handleRestoreBackup"
+      @delete="handleDeleteBackup"
+    />
 
     <!-- 流量设置弹窗 -->
+    <TrafficSettingsDialog
+      v-model:visible="showTrafficDialog"
+      :product="selectedProduct"
+      @applied="onTrafficApplied"
+    />
+
+    <!-- API Key 设置弹窗 -->
+    <ApiKeyDialog
+      v-model:visible="showApiKeyDialog"
+    />
+
+    <!-- 更新下载进度弹窗 -->
     <el-dialog
-      v-model="showTrafficDialog"
-      title="流量级别设置"
-      width="480px"
+      v-model="showUpdateDialog"
+      title="正在下载更新"
+      width="400px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      :show-close="false"
     >
-      <div class="traffic-settings">
-        <p class="traffic-desc">
-          根据周平均排名划分关键词流量级别：大词、中词、小词
-        </p>
-
-        <el-form :model="trafficForm" label-width="100px">
-          <el-form-item label="大词阈值">
-            <el-input-number
-              v-model="trafficForm.bigThreshold"
-              :min="1"
-              :max="trafficForm.mediumThreshold - 1"
-              :step="1000"
-              style="width: 200px"
-            />
-            <span class="threshold-hint">排名 ≤ 此值为大词</span>
-          </el-form-item>
-          <el-form-item label="中词阈值">
-            <el-input-number
-              v-model="trafficForm.mediumThreshold"
-              :min="trafficForm.bigThreshold + 1"
-              :step="10000"
-              style="width: 200px"
-            />
-            <span class="threshold-hint">排名 > 此值为小词</span>
-          </el-form-item>
-        </el-form>
-
-        <div class="traffic-stats-preview">
-          <div class="stat-item big">
-            <span class="stat-label">大词</span>
-            <span class="stat-value">{{ trafficStats.big_count }}</span>
-          </div>
-          <div class="stat-item medium">
-            <span class="stat-label">中词</span>
-            <span class="stat-value">{{ trafficStats.medium_count }}</span>
-          </div>
-          <div class="stat-item small">
-            <span class="stat-label">小词</span>
-            <span class="stat-value">{{ trafficStats.small_count }}</span>
-          </div>
+      <div class="update-progress">
+        <div class="update-version">
+          <el-icon class="update-icon"><Download /></el-icon>
+          <span>正在下载 v{{ updateVersion }}</span>
         </div>
-
-        <div class="traffic-tips">
-          <el-button type="info" plain size="small" @click="recommendBigThreshold">
-            <el-icon><MagicStick /></el-icon>
-            智能推荐（约20个大词）
-          </el-button>
+        <el-progress
+          :percentage="updateProgress"
+          :status="updateProgress >= 100 ? 'success' : undefined"
+          :stroke-width="20"
+          :text-inside="true"
+        />
+        <div class="update-hint" v-if="updateDownloading">
+          请勿关闭应用，下载完成后将自动提示重启
+        </div>
+        <div class="update-hint success" v-else>
+          下载完成！
         </div>
       </div>
-      <template #footer>
-        <el-button @click="showTrafficDialog = false">取消</el-button>
-        <el-button type="primary" :loading="calculatingTraffic" @click="applyTrafficLevels">
-          应用
-        </el-button>
-      </template>
     </el-dialog>
   </div>
 </template>
@@ -2875,6 +2662,38 @@ body,
   vertical-align: middle;
   overflow: initial;
   margin-left: 4px;
+}
+
+/* 更新下载进度弹窗样式 */
+.update-progress {
+  padding: 10px 0;
+}
+
+.update-version {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.update-icon {
+  font-size: 24px;
+  color: var(--el-color-primary);
+}
+
+.update-hint {
+  text-align: center;
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.update-hint.success {
+  color: var(--el-color-success);
+  font-weight: 500;
 }
 </style>
 
@@ -3047,14 +2866,76 @@ body,
   opacity: 1;
 }
 
-.no-product {
+/* 空状态样式 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   padding: 40px 20px;
-  color: var(--text-muted);
 }
 
-.no-product p {
+.empty-state .empty-icon {
+  color: var(--el-color-info-light-3);
   margin-bottom: 16px;
+}
+
+.empty-state .empty-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin: 0 0 8px 0;
+}
+
+.empty-state .empty-desc {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin: 0 0 20px 0;
+}
+
+.sidebar-empty {
+  flex: 1;
+  padding: 60px 20px;
+}
+
+.sidebar-empty .empty-icon {
+  color: var(--el-color-primary-light-5);
+}
+
+.main-empty {
+  flex: 1;
+  height: 100%;
+}
+
+.main-empty .empty-icon {
+  color: var(--el-color-primary-light-3);
+}
+
+.table-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+}
+
+.table-empty-state .empty-icon {
+  color: var(--el-color-info-light-3);
+  margin-bottom: 16px;
+}
+
+.table-empty-state .empty-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin: 0 0 8px 0;
+}
+
+.table-empty-state .empty-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 16px 0;
 }
 
 .sidebar-footer {
@@ -3265,80 +3146,6 @@ body,
   flex-shrink: 0;
 }
 
-.no-product-main {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* 快捷键帮助弹窗 */
-.shortcuts-list {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.shortcut-group h4 {
-  font-size: 13px;
-  color: var(--text-muted);
-  margin-bottom: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.shortcut-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.shortcut-item:last-child {
-  border-bottom: none;
-}
-
-.shortcut-desc {
-  color: var(--text-primary);
-  font-size: 14px;
-}
-
-.shortcut-key {
-  display: flex;
-  gap: 4px;
-}
-
-.shortcut-key kbd {
-  display: inline-block;
-  padding: 4px 8px;
-  font-size: 12px;
-  font-family: inherit;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  color: var(--text-secondary);
-  min-width: 28px;
-  text-align: center;
-}
-
-.shortcuts-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  width: 100%;
-}
-
-.shortcuts-tip {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.app-version {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
 /* 关键词筛选栏 */
 .keyword-filter-bar {
   display: flex;
@@ -3353,262 +3160,6 @@ body,
   margin-left: auto;
   color: var(--el-text-color-secondary);
   font-size: 13px;
-}
-
-/* 列配置弹窗 */
-.column-config {
-  padding: 0 10px;
-}
-
-.column-config-desc {
-  margin-bottom: 12px;
-  color: var(--el-text-color-secondary);
-  font-size: 14px;
-}
-
-.column-config-select-all {
-  margin-bottom: 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
-}
-
-.column-config-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-}
-
-.column-config-item {
-  padding: 4px 0;
-}
-
-/* 关键词导出弹窗 */
-.keyword-export-settings {
-  padding: 0 10px;
-}
-
-.export-desc {
-  color: var(--el-text-color-secondary);
-  font-size: 14px;
-  margin-bottom: 20px;
-}
-
-.export-section {
-  margin-bottom: 24px;
-}
-
-.section-title {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--el-text-color-primary);
-  margin-bottom: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.export-scope-group {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: 100%;
-}
-
-.export-scope-item {
-  display: flex;
-  align-items: flex-start;
-  padding: 12px 16px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 8px;
-  transition: all 0.2s;
-  width: 100%;
-  margin-right: 0 !important;
-  height: auto !important;
-}
-
-.export-scope-item :deep(.el-radio__label) {
-  flex: 1;
-  white-space: normal;
-  line-height: 1.5;
-  padding-left: 8px;
-}
-
-.export-scope-item:hover {
-  border-color: var(--el-color-primary-light-5);
-}
-
-.export-scope-item.is-checked {
-  border-color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-}
-
-.scope-content {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.scope-label {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--el-text-color-primary);
-}
-
-.scope-count {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  display: flex;
-  align-items: center;
-}
-
-.export-columns-preview {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  max-height: 120px;
-  overflow-y: auto;
-  padding: 12px;
-  background: var(--el-fill-color-light);
-  border-radius: 6px;
-}
-
-.columns-count {
-  margin-top: 8px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  text-align: right;
-}
-
-/* 备份管理弹窗 */
-.backup-dialog {
-  padding: 0 10px;
-}
-
-.backup-desc {
-  color: var(--el-text-color-secondary);
-  font-size: 14px;
-  margin-bottom: 20px;
-}
-
-.backup-empty {
-  padding: 20px 0;
-}
-
-.backup-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.backup-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px;
-  background: var(--el-fill-color-light);
-  border-radius: 8px;
-  border: 1px solid var(--el-border-color-light);
-  transition: all 0.2s;
-}
-
-.backup-item:hover {
-  border-color: var(--el-color-primary-light-5);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-}
-
-.backup-info {
-  flex: 1;
-}
-
-.backup-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--el-text-color-primary);
-  margin-bottom: 6px;
-}
-
-.backup-meta {
-  display: flex;
-  gap: 16px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-
-.backup-time,
-.backup-count {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.backup-time .el-icon,
-.backup-count .el-icon {
-  font-size: 14px;
-}
-
-.backup-actions {
-  display: flex;
-  gap: 8px;
-}
-
-/* 流量设置弹窗 */
-.traffic-settings {
-  padding: 0 10px;
-}
-
-.traffic-desc {
-  color: var(--text-secondary);
-  font-size: 14px;
-  margin-bottom: 20px;
-}
-
-.threshold-hint {
-  margin-left: 12px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.traffic-stats-preview {
-  display: flex;
-  justify-content: space-around;
-  margin: 24px 0;
-  padding: 16px;
-  background: var(--bg-primary);
-  border-radius: 8px;
-}
-
-.stat-item {
-  text-align: center;
-}
-
-.stat-item .stat-label {
-  display: block;
-  font-size: 14px;
-  color: var(--text-secondary);
-  margin-bottom: 8px;
-}
-
-.stat-item .stat-value {
-  display: block;
-  font-size: 28px;
-  font-weight: 600;
-}
-
-.stat-item.big .stat-value {
-  color: #f56c6c;
-}
-
-.stat-item.medium .stat-value {
-  color: #e6a23c;
-}
-
-.stat-item.small .stat-value {
-  color: #909399;
-}
-
-.traffic-tips {
-  text-align: center;
-  margin-top: 16px;
 }
 
 .workflow-steps-header {

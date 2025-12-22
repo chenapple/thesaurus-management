@@ -1,6 +1,16 @@
+import { getApiKey } from "./api";
+
 // DeepSeek API 配置
-const DEEPSEEK_API_KEY = "sk-260241b985f243a78114c8f8d360c34c";
 const DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions";
+
+// 获取 API Key（从系统密钥链）
+async function getDeepSeekApiKey(): Promise<string> {
+  const apiKey = await getApiKey("deepseek");
+  if (!apiKey) {
+    throw new Error("请先在设置中配置 DeepSeek API Key");
+  }
+  return apiKey;
+}
 
 // 分类列表
 const CATEGORIES = [
@@ -65,6 +75,9 @@ export async function analyzeWords(
   words: string[],
   signal?: AbortSignal
 ): Promise<AnalysisResult[]> {
+  // 获取 API Key
+  const apiKey = await getDeepSeekApiKey();
+
   const prompt = `你是一个电商关键词分析专家。请分析以下英文词根，为每个词提供：
 1. 中文翻译（简洁准确）
 2. 分类标签（从以下分类中选择1-3个最合适的）
@@ -87,7 +100,7 @@ ${words.join("\n")}
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model: "deepseek-chat",
@@ -249,6 +262,9 @@ export async function analyzeKeywordCategories(
   keywords: { keyword: string; translation: string | null }[],
   signal?: AbortSignal
 ): Promise<KeywordCategoryResult[]> {
+  // 获取 API Key
+  const apiKey = await getDeepSeekApiKey();
+
   const keywordList = keywords
     .map((k) => `${k.keyword} | ${k.translation || ""}`)
     .join("\n");
@@ -275,7 +291,7 @@ ${keywordList}
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model: "deepseek-chat",

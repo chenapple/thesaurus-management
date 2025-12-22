@@ -342,6 +342,12 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
         -- 备份表索引
         CREATE INDEX IF NOT EXISTS idx_backups_product ON backups(product_id);
         CREATE INDEX IF NOT EXISTS idx_backup_keyword_data_backup ON backup_keyword_data(backup_id);
+
+        -- 设置表（存储API Key等配置）
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         ",
     )?;
 
@@ -1940,5 +1946,39 @@ pub fn delete_backup(backup_id: i64) -> Result<()> {
     let conn = get_db().lock();
     // CASCADE 会自动删除 backup_keyword_data 中的数据
     conn.execute("DELETE FROM backups WHERE id = ?1", [backup_id])?;
+    Ok(())
+}
+
+// ==================== 设置管理 ====================
+
+// 获取设置值
+pub fn get_setting(key: &str) -> Result<Option<String>> {
+    let conn = get_db().lock();
+    let result = conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        [key],
+        |row| row.get(0),
+    );
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+// 设置值
+pub fn set_setting(key: &str, value: &str) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+        rusqlite::params![key, value],
+    )?;
+    Ok(())
+}
+
+// 删除设置
+pub fn delete_setting(key: &str) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
     Ok(())
 }
