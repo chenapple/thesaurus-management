@@ -1549,9 +1549,85 @@ pub fn batch_update_keyword_categories(
     }
 }
 
+// 将单词转换为单数形式（根据语言）
+fn to_singular(word: &str, country: &str) -> String {
+    let word_lower = word.to_lowercase();
+
+    // 单词太短不处理
+    if word_lower.len() < 3 {
+        return word.to_string();
+    }
+
+    match country {
+        // 英语: US, UK, CA, AU
+        "US" | "UK" | "CA" | "AU" => {
+            if word_lower.ends_with("es") && word_lower.len() > 3 {
+                // boxes -> box, brushes -> brush
+                word[..word.len() - 2].to_string()
+            } else if word_lower.ends_with("s") {
+                // files -> file
+                word[..word.len() - 1].to_string()
+            } else {
+                word.to_string()
+            }
+        }
+        // 德语: DE
+        "DE" => {
+            if word_lower.ends_with("en") && word_lower.len() > 3 {
+                word[..word.len() - 2].to_string()
+            } else if word_lower.ends_with("e") && word_lower.len() > 2 {
+                word[..word.len() - 1].to_string()
+            } else if word_lower.ends_with("s") {
+                word[..word.len() - 1].to_string()
+            } else {
+                word.to_string()
+            }
+        }
+        // 法语: FR
+        "FR" => {
+            if word_lower.ends_with("x") {
+                word[..word.len() - 1].to_string()
+            } else if word_lower.ends_with("s") {
+                word[..word.len() - 1].to_string()
+            } else {
+                word.to_string()
+            }
+        }
+        // 西班牙语: ES, MX
+        "ES" | "MX" => {
+            if word_lower.ends_with("es") && word_lower.len() > 3 {
+                word[..word.len() - 2].to_string()
+            } else if word_lower.ends_with("s") {
+                word[..word.len() - 1].to_string()
+            } else {
+                word.to_string()
+            }
+        }
+        // 意大利语或其他语言不处理
+        _ => word.to_string(),
+    }
+}
+
+// 将词组中的每个单词转换为单数形式
+fn phrase_to_singular(phrase: &str, country: &str) -> String {
+    phrase
+        .split_whitespace()
+        .map(|word| to_singular(word, country))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 // 词组打标：自动为关键词打上匹配的词组标签
 pub fn calculate_phrase_tags(product_id: i64) -> Result<()> {
     let conn = get_db().lock();
+
+    // 获取产品的国家代码
+    let country: Option<String> = conn.query_row(
+        "SELECT country FROM products WHERE id = ?1",
+        [product_id],
+        |row| row.get(0),
+    ).unwrap_or(None);
+    let country_code = country.as_deref().unwrap_or("US");
 
     // 1. 查询候选词组：(大词 OR 中词) AND (强相关 OR 高相关) AND 单词数 ≤ 5
     let mut stmt = conn.prepare(
@@ -1572,15 +1648,17 @@ pub fn calculate_phrase_tags(product_id: i64) -> Result<()> {
 
     let result = (|| {
         for candidate in &candidates {
+            // 将候选词组转换为单数形式用于匹配
+            let singular_candidate = phrase_to_singular(candidate, country_code);
             // 使用 LIKE 匹配包含该词组的关键词，且 phrase_tag 为空
-            let pattern = format!("%{}%", candidate);
+            let pattern = format!("%{}%", singular_candidate);
             conn.execute(
                 "UPDATE keyword_data
                  SET phrase_tag = ?1
                  WHERE product_id = ?2
                    AND keyword LIKE ?3
                    AND (phrase_tag IS NULL OR phrase_tag = '')",
-                rusqlite::params![candidate, product_id, pattern],
+                rusqlite::params![singular_candidate, product_id, pattern],
             )?;
         }
         Ok::<(), rusqlite::Error>(())
