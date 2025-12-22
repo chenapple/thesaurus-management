@@ -2184,6 +2184,7 @@ onUnmounted(() => {
           v-loading="keywordLoading"
           stripe
           style="width: 100%"
+          height="100%"
           @sort-change="handleKeywordSortChange"
         >
           <el-table-column type="index" label="#" width="50" fixed="left" />
@@ -3167,9 +3168,15 @@ body,
 
 .keyword-table-container {
   flex: 1;
-  overflow: auto;
+  overflow: hidden;
   padding: 16px;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.keyword-table-container :deep(.el-table) {
+  flex: 1;
 }
 
 .keyword-table-container :deep(.el-table__row) {
