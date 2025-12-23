@@ -7,15 +7,15 @@ on:
   workflow_dispatch:
 
 jobs:
-  release-macos:
-    permissions:
-      contents: write
+  build-macos:
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: 'aarch64-apple-darwin'
+            arch: 'aarch64'
           - target: 'x86_64-apple-darwin'
+            arch: 'x64'
 
     runs-on: macos-latest
     steps:
@@ -29,7 +29,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.target }}
 
       - name: Install frontend dependencies
         run: npm install
@@ -41,20 +41,18 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: '词库管理 ${{ github.ref_name }}'
-          releaseBody: |
-            请下载对应平台的安装包：
-            - **Windows**: 下载 `.exe` 文件
-            - **Mac M芯片**: 下载 `aarch64.dmg` 文件
-            - **Mac Intel芯片**: 下载 `x64.dmg` 文件
-          releaseDraft: false
-          prerelease: false
           args: --target ${{ matrix.target }}
 
-  release-windows:
-    permissions:
-      contents: write
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
+
+  build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -76,13 +74,136 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: '词库管理 ${{ github.ref_name }}'
-          releaseBody: |
+          name: windows-x64
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.exe.sig
+
+  publish:
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display artifacts
+        run: find artifacts -type f | head -50
+
+      - name: Get version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Generate latest.json
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          REPO="${{ github.repository }}"
+
+          # Find signature files and read their content
+          WINDOWS_SIG=""
+          MACOS_AARCH64_SIG=""
+          MACOS_X64_SIG=""
+
+          # Windows signature
+          if [ -f "artifacts/windows-x64/nsis/"*".exe.sig" ]; then
+            WINDOWS_SIG=$(cat artifacts/windows-x64/nsis/*.exe.sig | base64 -w 0)
+          fi
+
+          # macOS aarch64 signature
+          if ls artifacts/macos-aarch64/macos/*.app.tar.gz.sig 1> /dev/null 2>&1; then
+            MACOS_AARCH64_SIG=$(cat artifacts/macos-aarch64/macos/*.app.tar.gz.sig | base64 -w 0)
+          fi
+
+          # macOS x64 signature
+          if ls artifacts/macos-x64/macos/*.app.tar.gz.sig 1> /dev/null 2>&1; then
+            MACOS_X64_SIG=$(cat artifacts/macos-x64/macos/*.app.tar.gz.sig | base64 -w 0)
+          fi
+
+          # Get actual filenames
+          WINDOWS_EXE=$(basename artifacts/windows-x64/nsis/*.exe 2>/dev/null | head -1)
+          MACOS_AARCH64_TAR=$(basename artifacts/macos-aarch64/macos/*.app.tar.gz 2>/dev/null | head -1)
+          MACOS_X64_TAR=$(basename artifacts/macos-x64/macos/*.app.tar.gz 2>/dev/null | head -1)
+
+          # Build platforms JSON
+          cat > latest.json << EOF
+          {
+            "version": "${VERSION}",
+            "notes": "请下载对应平台的安装包：\n- **Windows**: 下载 .exe 文件\n- **Mac M芯片**: 下载 aarch64.dmg 文件\n- **Mac Intel芯片**: 下载 x64.dmg 文件",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)",
+            "platforms": {
+          EOF
+
+          FIRST=true
+
+          # Add Windows platform
+          if [ -n "$WINDOWS_SIG" ] && [ -n "$WINDOWS_EXE" ]; then
+            echo "    \"windows-x86_64\": {" >> latest.json
+            echo "      \"signature\": \"$(cat artifacts/windows-x64/nsis/*.exe.sig)\"," >> latest.json
+            echo "      \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${WINDOWS_EXE}\"" >> latest.json
+            echo -n "    }" >> latest.json
+            FIRST=false
+          fi
+
+          # Add macOS aarch64 platform
+          if [ -n "$MACOS_AARCH64_SIG" ] && [ -n "$MACOS_AARCH64_TAR" ]; then
+            if [ "$FIRST" = false ]; then echo "," >> latest.json; fi
+            echo "    \"darwin-aarch64\": {" >> latest.json
+            echo "      \"signature\": \"$(cat artifacts/macos-aarch64/macos/*.app.tar.gz.sig)\"," >> latest.json
+            echo "      \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${MACOS_AARCH64_TAR}\"" >> latest.json
+            echo -n "    }" >> latest.json
+            FIRST=false
+          fi
+
+          # Add macOS x64 platform
+          if [ -n "$MACOS_X64_SIG" ] && [ -n "$MACOS_X64_TAR" ]; then
+            if [ "$FIRST" = false ]; then echo "," >> latest.json; fi
+            echo "    \"darwin-x86_64\": {" >> latest.json
+            echo "      \"signature\": \"$(cat artifacts/macos-x64/macos/*.app.tar.gz.sig)\"," >> latest.json
+            echo "      \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${MACOS_X64_TAR}\"" >> latest.json
+            echo -n "    }" >> latest.json
+          fi
+
+          echo "" >> latest.json
+          echo "  }" >> latest.json
+          echo "}" >> latest.json
+
+          echo "=== Generated latest.json ==="
+          cat latest.json
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release-files
+
+          # Copy all artifacts to release-files
+          find artifacts -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.exe.sig" -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" \) -exec cp {} release-files/ \;
+
+          # Copy latest.json
+          cp latest.json release-files/
+
+          echo "=== Release files ==="
+          ls -la release-files/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: '词库管理 ${{ github.ref_name }}'
+          body: |
             请下载对应平台的安装包：
             - **Windows**: 下载 `.exe` 文件
             - **Mac M芯片**: 下载 `aarch64.dmg` 文件
             - **Mac Intel芯片**: 下载 `x64.dmg` 文件
-          releaseDraft: false
+          draft: false
           prerelease: false
+          files: release-files/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
