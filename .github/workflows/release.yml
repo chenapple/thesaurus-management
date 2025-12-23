@@ -35,6 +35,7 @@ jobs:
         run: npm install
 
       - name: Build the app
+        id: build
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -42,6 +43,13 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           args: --target ${{ matrix.target }}
+
+      - name: List build output
+        run: |
+          echo "=== All bundle files ==="
+          find src-tauri/target -type f \( -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.sig" \) 2>/dev/null || true
+          echo "=== Artifact paths from action ==="
+          echo "${{ steps.build.outputs.artifactPaths }}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -51,6 +59,7 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
             src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
             src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
+          if-no-files-found: warn
 
   build-windows:
     runs-on: windows-latest
@@ -69,11 +78,20 @@ jobs:
         run: npm install
 
       - name: Build the app
+        id: build
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: List build output
+        shell: bash
+        run: |
+          echo "=== All bundle files ==="
+          find src-tauri/target -type f \( -name "*.exe" -o -name "*.sig" \) 2>/dev/null || true
+          echo "=== Artifact paths from action ==="
+          echo "${{ steps.build.outputs.artifactPaths }}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -82,6 +100,7 @@ jobs:
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/nsis/*.exe.sig
+          if-no-files-found: warn
 
   publish:
     needs: [build-macos, build-windows]
@@ -96,8 +115,11 @@ jobs:
         with:
           path: artifacts
 
-      - name: Display artifacts
-        run: find artifacts -type f | head -50
+      - name: Display artifacts structure
+        run: |
+          echo "=== Artifacts structure ==="
+          find artifacts -type f
+          echo "=== End of artifacts ==="
 
       - name: Get version
         id: version
@@ -108,71 +130,70 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           REPO="${{ github.repository }}"
 
-          # Find signature files and read their content
-          WINDOWS_SIG=""
-          MACOS_AARCH64_SIG=""
-          MACOS_X64_SIG=""
+          echo "Building latest.json for version ${VERSION}"
 
-          # Windows signature
-          if [ -f "artifacts/windows-x64/nsis/"*".exe.sig" ]; then
-            WINDOWS_SIG=$(cat artifacts/windows-x64/nsis/*.exe.sig | base64 -w 0)
-          fi
-
-          # macOS aarch64 signature
-          if ls artifacts/macos-aarch64/macos/*.app.tar.gz.sig 1> /dev/null 2>&1; then
-            MACOS_AARCH64_SIG=$(cat artifacts/macos-aarch64/macos/*.app.tar.gz.sig | base64 -w 0)
-          fi
-
-          # macOS x64 signature
-          if ls artifacts/macos-x64/macos/*.app.tar.gz.sig 1> /dev/null 2>&1; then
-            MACOS_X64_SIG=$(cat artifacts/macos-x64/macos/*.app.tar.gz.sig | base64 -w 0)
-          fi
-
-          # Get actual filenames
-          WINDOWS_EXE=$(basename artifacts/windows-x64/nsis/*.exe 2>/dev/null | head -1)
-          MACOS_AARCH64_TAR=$(basename artifacts/macos-aarch64/macos/*.app.tar.gz 2>/dev/null | head -1)
-          MACOS_X64_TAR=$(basename artifacts/macos-x64/macos/*.app.tar.gz 2>/dev/null | head -1)
-
-          # Build platforms JSON
-          cat > latest.json << EOF
+          # Initialize JSON
+          cat > latest.json << 'HEADER'
           {
-            "version": "${VERSION}",
-            "notes": "请下载对应平台的安装包：\n- **Windows**: 下载 .exe 文件\n- **Mac M芯片**: 下载 aarch64.dmg 文件\n- **Mac Intel芯片**: 下载 x64.dmg 文件",
-            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)",
+            "version": "VERSION_PLACEHOLDER",
+            "notes": "请下载对应平台的安装包",
+            "pub_date": "DATE_PLACEHOLDER",
             "platforms": {
-          EOF
+          HEADER
 
-          FIRST=true
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/" latest.json
+          sed -i "s/DATE_PLACEHOLDER/$(date -u +%Y-%m-%dT%H:%M:%S.000Z)/" latest.json
 
-          # Add Windows platform
-          if [ -n "$WINDOWS_SIG" ] && [ -n "$WINDOWS_EXE" ]; then
-            echo "    \"windows-x86_64\": {" >> latest.json
-            echo "      \"signature\": \"$(cat artifacts/windows-x64/nsis/*.exe.sig)\"," >> latest.json
-            echo "      \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${WINDOWS_EXE}\"" >> latest.json
-            echo -n "    }" >> latest.json
-            FIRST=false
+          PLATFORMS=""
+
+          # Windows
+          WINDOWS_SIG_FILE=$(find artifacts -name "*.exe.sig" -type f 2>/dev/null | head -1)
+          WINDOWS_EXE_FILE=$(find artifacts -name "*.exe" -type f ! -name "*.sig" 2>/dev/null | head -1)
+
+          if [ -n "$WINDOWS_SIG_FILE" ] && [ -n "$WINDOWS_EXE_FILE" ]; then
+            WINDOWS_SIG=$(cat "$WINDOWS_SIG_FILE")
+            WINDOWS_EXE=$(basename "$WINDOWS_EXE_FILE")
+            echo "Found Windows: $WINDOWS_EXE"
+            PLATFORMS="${PLATFORMS}    \"windows-x86_64\": {
+                \"signature\": \"${WINDOWS_SIG}\",
+                \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${WINDOWS_EXE}\"
+              }"
           fi
 
-          # Add macOS aarch64 platform
-          if [ -n "$MACOS_AARCH64_SIG" ] && [ -n "$MACOS_AARCH64_TAR" ]; then
-            if [ "$FIRST" = false ]; then echo "," >> latest.json; fi
-            echo "    \"darwin-aarch64\": {" >> latest.json
-            echo "      \"signature\": \"$(cat artifacts/macos-aarch64/macos/*.app.tar.gz.sig)\"," >> latest.json
-            echo "      \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${MACOS_AARCH64_TAR}\"" >> latest.json
-            echo -n "    }" >> latest.json
-            FIRST=false
+          # macOS aarch64
+          MACOS_ARM_SIG_FILE=$(find artifacts/macos-aarch64 -name "*.app.tar.gz.sig" -type f 2>/dev/null | head -1)
+          MACOS_ARM_TAR_FILE=$(find artifacts/macos-aarch64 -name "*.app.tar.gz" -type f ! -name "*.sig" 2>/dev/null | head -1)
+
+          if [ -n "$MACOS_ARM_SIG_FILE" ] && [ -n "$MACOS_ARM_TAR_FILE" ]; then
+            MACOS_ARM_SIG=$(cat "$MACOS_ARM_SIG_FILE")
+            MACOS_ARM_TAR=$(basename "$MACOS_ARM_TAR_FILE")
+            echo "Found macOS ARM: $MACOS_ARM_TAR"
+            if [ -n "$PLATFORMS" ]; then PLATFORMS="${PLATFORMS},
+          "; fi
+            PLATFORMS="${PLATFORMS}    \"darwin-aarch64\": {
+                \"signature\": \"${MACOS_ARM_SIG}\",
+                \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${MACOS_ARM_TAR}\"
+              }"
           fi
 
-          # Add macOS x64 platform
-          if [ -n "$MACOS_X64_SIG" ] && [ -n "$MACOS_X64_TAR" ]; then
-            if [ "$FIRST" = false ]; then echo "," >> latest.json; fi
-            echo "    \"darwin-x86_64\": {" >> latest.json
-            echo "      \"signature\": \"$(cat artifacts/macos-x64/macos/*.app.tar.gz.sig)\"," >> latest.json
-            echo "      \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${MACOS_X64_TAR}\"" >> latest.json
-            echo -n "    }" >> latest.json
+          # macOS x64
+          MACOS_X64_SIG_FILE=$(find artifacts/macos-x64 -name "*.app.tar.gz.sig" -type f 2>/dev/null | head -1)
+          MACOS_X64_TAR_FILE=$(find artifacts/macos-x64 -name "*.app.tar.gz" -type f ! -name "*.sig" 2>/dev/null | head -1)
+
+          if [ -n "$MACOS_X64_SIG_FILE" ] && [ -n "$MACOS_X64_TAR_FILE" ]; then
+            MACOS_X64_SIG=$(cat "$MACOS_X64_SIG_FILE")
+            MACOS_X64_TAR=$(basename "$MACOS_X64_TAR_FILE")
+            echo "Found macOS x64: $MACOS_X64_TAR"
+            if [ -n "$PLATFORMS" ]; then PLATFORMS="${PLATFORMS},
+          "; fi
+            PLATFORMS="${PLATFORMS}    \"darwin-x86_64\": {
+                \"signature\": \"${MACOS_X64_SIG}\",
+                \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${MACOS_X64_TAR}\"
+              }"
           fi
 
-          echo "" >> latest.json
+          # Add platforms to JSON
+          echo "$PLATFORMS" >> latest.json
           echo "  }" >> latest.json
           echo "}" >> latest.json
 
@@ -183,7 +204,7 @@ jobs:
         run: |
           mkdir -p release-files
 
-          # Copy all artifacts to release-files
+          # Copy all release artifacts
           find artifacts -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.exe.sig" -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" \) -exec cp {} release-files/ \;
 
           # Copy latest.json
