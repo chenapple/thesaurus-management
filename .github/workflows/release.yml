@@ -150,6 +150,11 @@ jobs:
 
           PLATFORMS=""
 
+          # URL encode function (encode spaces as %20)
+          urlencode() {
+            echo "$1" | sed 's/ /%20/g'
+          }
+
           # Windows
           WINDOWS_SIG_FILE=$(find artifacts -name "*.exe.sig" -type f 2>/dev/null | head -1)
           WINDOWS_EXE_FILE=$(find artifacts -name "*.exe" -type f ! -name "*.sig" 2>/dev/null | head -1)
@@ -157,10 +162,11 @@ jobs:
           if [ -n "$WINDOWS_SIG_FILE" ] && [ -n "$WINDOWS_EXE_FILE" ]; then
             WINDOWS_SIG=$(cat "$WINDOWS_SIG_FILE")
             WINDOWS_EXE=$(basename "$WINDOWS_EXE_FILE")
-            echo "Found Windows: $WINDOWS_EXE"
+            WINDOWS_EXE_URL=$(urlencode "$WINDOWS_EXE")
+            echo "Found Windows: $WINDOWS_EXE -> $WINDOWS_EXE_URL"
             PLATFORMS="${PLATFORMS}    \"windows-x86_64\": {
                 \"signature\": \"${WINDOWS_SIG}\",
-                \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${WINDOWS_EXE}\"
+                \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${WINDOWS_EXE_URL}\"
               }"
           fi
 
@@ -171,12 +177,13 @@ jobs:
           if [ -n "$MACOS_ARM_SIG_FILE" ] && [ -n "$MACOS_ARM_TAR_FILE" ]; then
             MACOS_ARM_SIG=$(cat "$MACOS_ARM_SIG_FILE")
             MACOS_ARM_TAR=$(basename "$MACOS_ARM_TAR_FILE")
-            echo "Found macOS ARM: $MACOS_ARM_TAR"
+            MACOS_ARM_TAR_URL=$(urlencode "$MACOS_ARM_TAR")
+            echo "Found macOS ARM: $MACOS_ARM_TAR -> $MACOS_ARM_TAR_URL"
             if [ -n "$PLATFORMS" ]; then PLATFORMS="${PLATFORMS},
           "; fi
             PLATFORMS="${PLATFORMS}    \"darwin-aarch64\": {
                 \"signature\": \"${MACOS_ARM_SIG}\",
-                \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${MACOS_ARM_TAR}\"
+                \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${MACOS_ARM_TAR_URL}\"
               }"
           fi
 
@@ -187,12 +194,13 @@ jobs:
           if [ -n "$MACOS_X64_SIG_FILE" ] && [ -n "$MACOS_X64_TAR_FILE" ]; then
             MACOS_X64_SIG=$(cat "$MACOS_X64_SIG_FILE")
             MACOS_X64_TAR=$(basename "$MACOS_X64_TAR_FILE")
-            echo "Found macOS x64: $MACOS_X64_TAR"
+            MACOS_X64_TAR_URL=$(urlencode "$MACOS_X64_TAR")
+            echo "Found macOS x64: $MACOS_X64_TAR -> $MACOS_X64_TAR_URL"
             if [ -n "$PLATFORMS" ]; then PLATFORMS="${PLATFORMS},
           "; fi
             PLATFORMS="${PLATFORMS}    \"darwin-x86_64\": {
                 \"signature\": \"${MACOS_X64_SIG}\",
-                \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${MACOS_X64_TAR}\"
+                \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${MACOS_X64_TAR_URL}\"
               }"
           fi
 
