@@ -44,12 +44,24 @@ jobs:
         with:
           args: --target ${{ matrix.target }}
 
-      - name: List build output
+      - name: Rename artifacts with arch suffix
         run: |
-          echo "=== All bundle files ==="
-          find src-tauri/target -type f \( -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.sig" \) 2>/dev/null || true
-          echo "=== Artifact paths from action ==="
-          echo "${{ steps.build.outputs.artifactPaths }}"
+          cd src-tauri/target/${{ matrix.target }}/release/bundle/macos
+          for f in *.app.tar.gz; do
+            if [ -f "$f" ]; then
+              newname="${f%.app.tar.gz}_${{ matrix.arch }}.app.tar.gz"
+              mv "$f" "$newname"
+              echo "Renamed $f to $newname"
+            fi
+          done
+          for f in *.app.tar.gz.sig; do
+            if [ -f "$f" ]; then
+              newname="${f%.app.tar.gz.sig}_${{ matrix.arch }}.app.tar.gz.sig"
+              mv "$f" "$newname"
+              echo "Renamed $f to $newname"
+            fi
+          done
+          ls -la
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -84,14 +96,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-
-      - name: List build output
-        shell: bash
-        run: |
-          echo "=== All bundle files ==="
-          find src-tauri/target -type f \( -name "*.exe" -o -name "*.sig" \) 2>/dev/null || true
-          echo "=== Artifact paths from action ==="
-          echo "${{ steps.build.outputs.artifactPaths }}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -161,8 +165,8 @@ jobs:
           fi
 
           # macOS aarch64
-          MACOS_ARM_SIG_FILE=$(find artifacts/macos-aarch64 -name "*.app.tar.gz.sig" -type f 2>/dev/null | head -1)
-          MACOS_ARM_TAR_FILE=$(find artifacts/macos-aarch64 -name "*.app.tar.gz" -type f ! -name "*.sig" 2>/dev/null | head -1)
+          MACOS_ARM_SIG_FILE=$(find artifacts/macos-aarch64 -name "*_aarch64.app.tar.gz.sig" -type f 2>/dev/null | head -1)
+          MACOS_ARM_TAR_FILE=$(find artifacts/macos-aarch64 -name "*_aarch64.app.tar.gz" -type f ! -name "*.sig" 2>/dev/null | head -1)
 
           if [ -n "$MACOS_ARM_SIG_FILE" ] && [ -n "$MACOS_ARM_TAR_FILE" ]; then
             MACOS_ARM_SIG=$(cat "$MACOS_ARM_SIG_FILE")
@@ -177,8 +181,8 @@ jobs:
           fi
 
           # macOS x64
-          MACOS_X64_SIG_FILE=$(find artifacts/macos-x64 -name "*.app.tar.gz.sig" -type f 2>/dev/null | head -1)
-          MACOS_X64_TAR_FILE=$(find artifacts/macos-x64 -name "*.app.tar.gz" -type f ! -name "*.sig" 2>/dev/null | head -1)
+          MACOS_X64_SIG_FILE=$(find artifacts/macos-x64 -name "*_x64.app.tar.gz.sig" -type f 2>/dev/null | head -1)
+          MACOS_X64_TAR_FILE=$(find artifacts/macos-x64 -name "*_x64.app.tar.gz" -type f ! -name "*.sig" 2>/dev/null | head -1)
 
           if [ -n "$MACOS_X64_SIG_FILE" ] && [ -n "$MACOS_X64_TAR_FILE" ]; then
             MACOS_X64_SIG=$(cat "$MACOS_X64_SIG_FILE")
