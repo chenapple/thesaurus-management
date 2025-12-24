@@ -3,6 +3,12 @@ use std::process::Command;
 use std::time::Duration;
 use rand::Rng;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 // 排名检测结果
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RankingResult {
@@ -71,9 +77,13 @@ fn get_script_path() -> Result<std::path::PathBuf, String> {
 fn check_python() -> Result<String, String> {
     // 尝试不同的 Python 命令
     for python_cmd in &["python3", "python"] {
-        let result = Command::new(python_cmd)
-            .arg("--version")
-            .output();
+        let mut cmd = Command::new(python_cmd);
+        cmd.arg("--version");
+
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        let result = cmd.output();
 
         if let Ok(output) = result {
             if output.status.success() {
@@ -98,10 +108,13 @@ except ImportError as e:
     sys.exit(1)
 "#;
 
-    let output = Command::new(python_cmd)
-        .arg("-c")
-        .arg(check_script)
-        .output()
+    let mut cmd = Command::new(python_cmd);
+    cmd.arg("-c").arg(check_script);
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = cmd.output()
         .map_err(|e| format!("检查依赖失败: {}", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -133,13 +146,18 @@ fn call_python_crawler(
     let script_path = get_script_path()?;
 
     // 调用 Python 脚本
-    let output = Command::new(&python_cmd)
-        .arg(&script_path)
+    let mut cmd = Command::new(&python_cmd);
+    cmd.arg(&script_path)
         .arg(keyword)
         .arg(target_asin)
         .arg(country)
-        .arg(max_pages.to_string())
-        .output()
+        .arg(max_pages.to_string());
+
+    // Windows: 隐藏命令行窗口
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = cmd.output()
         .map_err(|e| format!("执行 Python 脚本失败: {}", e))?;
 
     if !output.status.success() {

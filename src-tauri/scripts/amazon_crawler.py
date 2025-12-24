@@ -286,10 +286,26 @@ def extract_product_info(item) -> dict:
     if title_elem:
         info['title'] = title_elem.get_text(strip=True)
 
-    # 价格
-    price_elem = item.find('span', class_='a-offscreen')
-    if price_elem:
-        info['price'] = price_elem.get_text(strip=True)
+    # 价格 - 使用更精确的选择器
+    price_container = item.find('span', class_='a-price')
+    if price_container:
+        # 优先从 a-price 容器内的 a-offscreen 获取完整价格
+        price_elem = price_container.find('span', class_='a-offscreen')
+        if price_elem:
+            info['price'] = price_elem.get_text(strip=True)
+        else:
+            # 备选：从 a-price-whole 和 a-price-fraction 组合
+            whole = price_container.find('span', class_='a-price-whole')
+            fraction = price_container.find('span', class_='a-price-fraction')
+            symbol = price_container.find('span', class_='a-price-symbol')
+            if whole:
+                price_text = whole.get_text(strip=True).rstrip(',').rstrip('.')
+                if fraction:
+                    price_text += ',' + fraction.get_text(strip=True)
+                if symbol:
+                    info['price'] = symbol.get_text(strip=True) + price_text
+                else:
+                    info['price'] = price_text
 
     # 评分
     rating_elem = item.find('span', class_='a-icon-alt')
