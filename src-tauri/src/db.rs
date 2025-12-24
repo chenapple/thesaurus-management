@@ -354,6 +354,9 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
     // 初始化分类数据
     init_categories(&conn)?;
 
+    // 初始化关键词监控表
+    init_monitoring_tables(&conn)?;
+
     DB.set(Mutex::new(conn))
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
@@ -1981,4 +1984,691 @@ pub fn delete_setting(key: &str) -> Result<()> {
     let conn = get_db().lock();
     conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
     Ok(())
+}
+
+// ==================== 关键词排名监控 ====================
+
+// 关键词监控结构体
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KeywordMonitoring {
+    pub id: i64,
+    pub product_id: i64,
+    pub keyword: String,
+    pub asin: String,
+    pub country: String,           // US/UK/DE/FR/IT/ES
+    pub priority: String,          // high/medium/low
+    pub is_active: bool,
+
+    // 最新排名
+    pub latest_organic_rank: Option<i64>,
+    pub latest_organic_page: Option<i64>,
+    pub latest_sponsored_rank: Option<i64>,
+    pub latest_sponsored_page: Option<i64>,
+
+    // 产品信息
+    pub image_url: Option<String>,
+    pub price: Option<String>,
+    pub reviews_count: Option<i64>,
+    pub rating: Option<f64>,
+
+    pub last_checked: Option<String>,
+    pub created_at: String,
+}
+
+// 排名历史结构体
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RankingHistory {
+    pub id: i64,
+    pub monitoring_id: i64,
+    pub check_date: String,
+
+    pub organic_rank: Option<i64>,
+    pub organic_page: Option<i64>,
+    pub sponsored_rank: Option<i64>,
+    pub sponsored_page: Option<i64>,
+
+    pub checked_at: String,
+}
+
+// 监控项的迷你图数据
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MonitoringSparkline {
+    pub monitoring_id: i64,
+    pub organic_ranks: Vec<Option<i64>>,
+    pub sponsored_ranks: Vec<Option<i64>>,
+}
+
+// 竞品快照结构体
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RankingSnapshot {
+    pub id: i64,
+    pub keyword: String,
+    pub country: String,
+    pub snapshot_date: String,
+
+    pub organic_top_50: Option<String>,    // JSON: ["ASIN1", "ASIN2", ...]
+    pub sponsored_top_20: Option<String>,  // JSON
+
+    pub created_at: String,
+}
+
+// 监控统计结构体
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MonitoringStats {
+    pub total: i64,
+    pub active: i64,
+    pub top10_organic: i64,
+    pub top30_organic: i64,
+    pub with_sponsored: i64,
+}
+
+// 初始化关键词监控相关表
+pub fn init_monitoring_tables(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        -- 关键词监控表
+        CREATE TABLE IF NOT EXISTS keyword_monitoring (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER NOT NULL,
+            keyword TEXT NOT NULL,
+            asin TEXT NOT NULL,
+            country TEXT NOT NULL DEFAULT 'US',
+            priority TEXT DEFAULT 'medium',
+            is_active INTEGER DEFAULT 1,
+
+            -- 最新排名
+            latest_organic_rank INTEGER,
+            latest_organic_page INTEGER,
+            latest_sponsored_rank INTEGER,
+            latest_sponsored_page INTEGER,
+
+            -- 产品信息
+            image_url TEXT,
+            price TEXT,
+            reviews_count INTEGER,
+            rating REAL,
+
+            last_checked TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(keyword, asin, country, product_id),
+            FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+        );
+
+        -- 排名历史表
+        CREATE TABLE IF NOT EXISTS keyword_ranking_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            monitoring_id INTEGER NOT NULL,
+            check_date DATE NOT NULL,
+
+            organic_rank INTEGER,
+            organic_page INTEGER,
+            sponsored_rank INTEGER,
+            sponsored_page INTEGER,
+
+            checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (monitoring_id) REFERENCES keyword_monitoring(id) ON DELETE CASCADE
+        );
+
+        -- 竞品快照表
+        CREATE TABLE IF NOT EXISTS ranking_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            keyword TEXT NOT NULL,
+            country TEXT NOT NULL,
+            snapshot_date DATE NOT NULL,
+
+            organic_top_50 TEXT,
+            sponsored_top_20 TEXT,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(keyword, country, snapshot_date)
+        );
+
+        -- 索引
+        CREATE INDEX IF NOT EXISTS idx_keyword_monitoring_product ON keyword_monitoring(product_id);
+        CREATE INDEX IF NOT EXISTS idx_keyword_monitoring_active ON keyword_monitoring(is_active);
+        CREATE INDEX IF NOT EXISTS idx_keyword_monitoring_country ON keyword_monitoring(country);
+        CREATE INDEX IF NOT EXISTS idx_ranking_history_monitoring ON keyword_ranking_history(monitoring_id);
+        CREATE INDEX IF NOT EXISTS idx_ranking_history_date ON keyword_ranking_history(check_date);
+        CREATE INDEX IF NOT EXISTS idx_ranking_snapshots_keyword ON ranking_snapshots(keyword, country);
+        "
+    )?;
+    Ok(())
+}
+
+// 添加关键词监控
+pub fn add_keyword_monitoring(
+    product_id: i64,
+    keyword: String,
+    asin: String,
+    country: String,
+    priority: Option<String>,
+) -> Result<i64> {
+    let conn = get_db().lock();
+    let priority = priority.unwrap_or_else(|| "medium".to_string());
+
+    conn.execute(
+        "INSERT OR IGNORE INTO keyword_monitoring (product_id, keyword, asin, country, priority)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![product_id, keyword, asin, country, priority],
+    )?;
+
+    // 获取插入或已存在的ID
+    let id: i64 = conn.query_row(
+        "SELECT id FROM keyword_monitoring WHERE keyword = ?1 AND asin = ?2 AND country = ?3 AND product_id = ?4",
+        rusqlite::params![keyword, asin, country, product_id],
+        |row| row.get(0),
+    )?;
+
+    Ok(id)
+}
+
+// 获取关键词监控列表
+pub fn get_keyword_monitoring_list(
+    product_id: i64,
+    country: Option<String>,
+    priority: Option<String>,
+    is_active: Option<bool>,
+    search: Option<String>,
+    sort_by: Option<String>,
+    sort_order: Option<String>,
+    page: i64,
+    page_size: i64,
+) -> Result<(Vec<KeywordMonitoring>, i64)> {
+    let conn = get_db().lock();
+
+    let mut sql = String::from(
+        "SELECT id, product_id, keyword, asin, country, priority, is_active,
+                latest_organic_rank, latest_organic_page, latest_sponsored_rank, latest_sponsored_page,
+                image_url, price, reviews_count, rating, last_checked, created_at
+         FROM keyword_monitoring WHERE product_id = ?1"
+    );
+
+    let mut count_sql = String::from("SELECT COUNT(*) FROM keyword_monitoring WHERE product_id = ?1");
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(product_id)];
+    let mut param_index = 2;
+
+    // 筛选条件
+    if let Some(ref c) = country {
+        let condition = format!(" AND country = ?{}", param_index);
+        sql.push_str(&condition);
+        count_sql.push_str(&condition);
+        params.push(Box::new(c.clone()));
+        param_index += 1;
+    }
+
+    if let Some(ref p) = priority {
+        let condition = format!(" AND priority = ?{}", param_index);
+        sql.push_str(&condition);
+        count_sql.push_str(&condition);
+        params.push(Box::new(p.clone()));
+        param_index += 1;
+    }
+
+    if let Some(active) = is_active {
+        let condition = format!(" AND is_active = ?{}", param_index);
+        sql.push_str(&condition);
+        count_sql.push_str(&condition);
+        params.push(Box::new(if active { 1i64 } else { 0i64 }));
+        param_index += 1;
+    }
+
+    if let Some(ref s) = search {
+        if !s.is_empty() {
+            let condition = format!(" AND (keyword LIKE ?{} OR asin LIKE ?{})", param_index, param_index);
+            sql.push_str(&condition);
+            count_sql.push_str(&condition);
+            params.push(Box::new(format!("%{}%", s)));
+            // param_index += 1;  // 同一个参数用两次
+        }
+    }
+
+    // 排序
+    let sort_column = match sort_by.as_deref() {
+        Some("keyword") => "keyword",
+        Some("latest_organic_rank") => "latest_organic_rank",
+        Some("latest_sponsored_rank") => "latest_sponsored_rank",
+        Some("last_checked") => "last_checked",
+        Some("priority") => "priority",
+        _ => "created_at",
+    };
+    let order = match sort_order.as_deref() {
+        Some("asc") => "ASC",
+        _ => "DESC",
+    };
+    sql.push_str(&format!(" ORDER BY {} {}", sort_column, order));
+
+    // 分页
+    sql.push_str(&format!(" LIMIT {} OFFSET {}", page_size, (page - 1) * page_size));
+
+    let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+    let mut stmt = conn.prepare(&sql)?;
+    let data = stmt
+        .query_map(params_refs.as_slice(), |row| {
+            Ok(KeywordMonitoring {
+                id: row.get(0)?,
+                product_id: row.get(1)?,
+                keyword: row.get(2)?,
+                asin: row.get(3)?,
+                country: row.get(4)?,
+                priority: row.get(5)?,
+                is_active: row.get::<_, i64>(6)? == 1,
+                latest_organic_rank: row.get(7)?,
+                latest_organic_page: row.get(8)?,
+                latest_sponsored_rank: row.get(9)?,
+                latest_sponsored_page: row.get(10)?,
+                image_url: row.get(11)?,
+                price: row.get(12)?,
+                reviews_count: row.get(13)?,
+                rating: row.get(14)?,
+                last_checked: row.get(15)?,
+                created_at: row.get(16)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
+
+    // 获取总数
+    let count_params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let total: i64 = conn.query_row(&count_sql, count_params_refs.as_slice(), |row| row.get(0))?;
+
+    Ok((data, total))
+}
+
+// 更新关键词监控
+pub fn update_keyword_monitoring(
+    id: i64,
+    priority: Option<String>,
+    is_active: Option<bool>,
+) -> Result<()> {
+    let conn = get_db().lock();
+
+    if let Some(p) = priority {
+        conn.execute(
+            "UPDATE keyword_monitoring SET priority = ?1 WHERE id = ?2",
+            rusqlite::params![p, id],
+        )?;
+    }
+
+    if let Some(active) = is_active {
+        conn.execute(
+            "UPDATE keyword_monitoring SET is_active = ?1 WHERE id = ?2",
+            rusqlite::params![if active { 1 } else { 0 }, id],
+        )?;
+    }
+
+    Ok(())
+}
+
+// 删除关键词监控
+pub fn delete_keyword_monitoring(id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("PRAGMA foreign_keys = OFF", [])?;
+    // 先删除历史记录
+    conn.execute("DELETE FROM keyword_ranking_history WHERE monitoring_id = ?1", [id])?;
+    // 再删除监控记录
+    conn.execute("DELETE FROM keyword_monitoring WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+// 批量删除关键词监控
+pub fn batch_delete_keyword_monitoring(ids: Vec<i64>) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("PRAGMA foreign_keys = OFF", [])?;
+    conn.execute("BEGIN TRANSACTION", [])?;
+
+    let result = (|| {
+        for id in ids {
+            conn.execute("DELETE FROM keyword_ranking_history WHERE monitoring_id = ?1", [id])?;
+            conn.execute("DELETE FROM keyword_monitoring WHERE id = ?1", [id])?;
+        }
+        Ok::<(), rusqlite::Error>(())
+    })();
+
+    match result {
+        Ok(_) => {
+            conn.execute("COMMIT", [])?;
+            Ok(())
+        }
+        Err(e) => {
+            conn.execute("ROLLBACK", []).ok();
+            Err(e)
+        }
+    }
+}
+
+// 更新排名结果
+pub fn update_ranking_result(
+    monitoring_id: i64,
+    organic_rank: Option<i64>,
+    organic_page: Option<i64>,
+    sponsored_rank: Option<i64>,
+    sponsored_page: Option<i64>,
+    image_url: Option<String>,
+    price: Option<String>,
+    reviews_count: Option<i64>,
+    rating: Option<f64>,
+) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("BEGIN TRANSACTION", [])?;
+
+    let result = (|| {
+        // 更新最新排名
+        conn.execute(
+            "UPDATE keyword_monitoring SET
+                latest_organic_rank = ?1, latest_organic_page = ?2,
+                latest_sponsored_rank = ?3, latest_sponsored_page = ?4,
+                image_url = ?5, price = ?6, reviews_count = ?7, rating = ?8,
+                last_checked = datetime('now')
+             WHERE id = ?9",
+            rusqlite::params![
+                organic_rank, organic_page,
+                sponsored_rank, sponsored_page,
+                image_url, price, reviews_count, rating,
+                monitoring_id
+            ],
+        )?;
+
+        // 插入历史记录
+        conn.execute(
+            "INSERT INTO keyword_ranking_history
+                (monitoring_id, check_date, organic_rank, organic_page, sponsored_rank, sponsored_page)
+             VALUES (?1, date('now'), ?2, ?3, ?4, ?5)",
+            rusqlite::params![monitoring_id, organic_rank, organic_page, sponsored_rank, sponsored_page],
+        )?;
+
+        Ok::<(), rusqlite::Error>(())
+    })();
+
+    match result {
+        Ok(_) => {
+            conn.execute("COMMIT", [])?;
+            Ok(())
+        }
+        Err(e) => {
+            conn.execute("ROLLBACK", []).ok();
+            Err(e)
+        }
+    }
+}
+
+// 获取排名历史
+pub fn get_ranking_history(monitoring_id: i64, days: i64) -> Result<Vec<RankingHistory>> {
+    let conn = get_db().lock();
+
+    let mut stmt = conn.prepare(
+        "SELECT id, monitoring_id, check_date, organic_rank, organic_page,
+                sponsored_rank, sponsored_page, checked_at
+         FROM keyword_ranking_history
+         WHERE monitoring_id = ?1 AND check_date >= date('now', ?2)
+         ORDER BY check_date ASC"
+    )?;
+
+    let days_str = format!("-{} days", days);
+    let history = stmt
+        .query_map(rusqlite::params![monitoring_id, days_str], |row| {
+            Ok(RankingHistory {
+                id: row.get(0)?,
+                monitoring_id: row.get(1)?,
+                check_date: row.get(2)?,
+                organic_rank: row.get(3)?,
+                organic_page: row.get(4)?,
+                sponsored_rank: row.get(5)?,
+                sponsored_page: row.get(6)?,
+                checked_at: row.get(7)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(history)
+}
+
+// 获取上一次的自然排名（用于计算排名变化）
+pub fn get_previous_ranking(monitoring_id: i64) -> Result<Option<i64>> {
+    let conn = get_db().lock();
+
+    let result = conn.query_row(
+        "SELECT organic_rank FROM keyword_ranking_history
+         WHERE monitoring_id = ?1
+         ORDER BY checked_at DESC
+         LIMIT 1",
+        [monitoring_id],
+        |row| row.get(0),
+    );
+
+    match result {
+        Ok(rank) => Ok(rank),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+// 保存竞品快照
+pub fn save_ranking_snapshot(
+    keyword: &str,
+    country: &str,
+    organic_top_50: Option<String>,
+    sponsored_top_20: Option<String>,
+) -> Result<()> {
+    let conn = get_db().lock();
+
+    conn.execute(
+        "INSERT OR REPLACE INTO ranking_snapshots
+            (keyword, country, snapshot_date, organic_top_50, sponsored_top_20)
+         VALUES (?1, ?2, date('now'), ?3, ?4)",
+        rusqlite::params![keyword, country, organic_top_50, sponsored_top_20],
+    )?;
+
+    Ok(())
+}
+
+// 获取竞品快照
+pub fn get_ranking_snapshots(keyword: &str, country: &str, days: i64) -> Result<Vec<RankingSnapshot>> {
+    let conn = get_db().lock();
+
+    let mut stmt = conn.prepare(
+        "SELECT id, keyword, country, snapshot_date, organic_top_50, sponsored_top_20, created_at
+         FROM ranking_snapshots
+         WHERE keyword = ?1 AND country = ?2 AND snapshot_date >= date('now', ?3)
+         ORDER BY snapshot_date DESC"
+    )?;
+
+    let days_str = format!("-{} days", days);
+    let snapshots = stmt
+        .query_map(rusqlite::params![keyword, country, days_str], |row| {
+            Ok(RankingSnapshot {
+                id: row.get(0)?,
+                keyword: row.get(1)?,
+                country: row.get(2)?,
+                snapshot_date: row.get(3)?,
+                organic_top_50: row.get(4)?,
+                sponsored_top_20: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(snapshots)
+}
+
+// 获取监控统计
+pub fn get_monitoring_stats(product_id: i64) -> Result<MonitoringStats> {
+    let conn = get_db().lock();
+
+    let total: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM keyword_monitoring WHERE product_id = ?1",
+        [product_id],
+        |row| row.get(0),
+    )?;
+
+    let active: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM keyword_monitoring WHERE product_id = ?1 AND is_active = 1",
+        [product_id],
+        |row| row.get(0),
+    )?;
+
+    let top10_organic: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM keyword_monitoring
+         WHERE product_id = ?1 AND latest_organic_rank IS NOT NULL AND latest_organic_rank <= 10",
+        [product_id],
+        |row| row.get(0),
+    )?;
+
+    let top30_organic: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM keyword_monitoring
+         WHERE product_id = ?1 AND latest_organic_rank IS NOT NULL AND latest_organic_rank <= 30",
+        [product_id],
+        |row| row.get(0),
+    )?;
+
+    let with_sponsored: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM keyword_monitoring
+         WHERE product_id = ?1 AND latest_sponsored_rank IS NOT NULL",
+        [product_id],
+        |row| row.get(0),
+    )?;
+
+    Ok(MonitoringStats {
+        total,
+        active,
+        top10_organic,
+        top30_organic,
+        with_sponsored,
+    })
+}
+
+// 获取单个监控记录
+pub fn get_keyword_monitoring_by_id(id: i64) -> Result<Option<KeywordMonitoring>> {
+    let conn = get_db().lock();
+
+    let result = conn.query_row(
+        "SELECT id, product_id, keyword, asin, country, priority, is_active,
+                latest_organic_rank, latest_organic_page, latest_sponsored_rank, latest_sponsored_page,
+                image_url, price, reviews_count, rating, last_checked, created_at
+         FROM keyword_monitoring WHERE id = ?1",
+        [id],
+        |row| {
+            Ok(KeywordMonitoring {
+                id: row.get(0)?,
+                product_id: row.get(1)?,
+                keyword: row.get(2)?,
+                asin: row.get(3)?,
+                country: row.get(4)?,
+                priority: row.get(5)?,
+                is_active: row.get::<_, i64>(6)? == 1,
+                latest_organic_rank: row.get(7)?,
+                latest_organic_page: row.get(8)?,
+                latest_sponsored_rank: row.get(9)?,
+                latest_sponsored_page: row.get(10)?,
+                image_url: row.get(11)?,
+                price: row.get(12)?,
+                reviews_count: row.get(13)?,
+                rating: row.get(14)?,
+                last_checked: row.get(15)?,
+                created_at: row.get(16)?,
+            })
+        },
+    );
+
+    match result {
+        Ok(m) => Ok(Some(m)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+// 获取待检测的监控记录（活跃且未检测或超过指定时间未检测）
+pub fn get_pending_monitoring_checks(product_id: i64, hours_since_last_check: i64) -> Result<Vec<KeywordMonitoring>> {
+    let conn = get_db().lock();
+
+    let hours_str = format!("-{} hours", hours_since_last_check);
+    let mut stmt = conn.prepare(
+        "SELECT id, product_id, keyword, asin, country, priority, is_active,
+                latest_organic_rank, latest_organic_page, latest_sponsored_rank, latest_sponsored_page,
+                image_url, price, reviews_count, rating, last_checked, created_at
+         FROM keyword_monitoring
+         WHERE product_id = ?1 AND is_active = 1
+           AND (last_checked IS NULL OR last_checked < datetime('now', ?2))
+         ORDER BY
+           CASE priority
+             WHEN 'high' THEN 1
+             WHEN 'medium' THEN 2
+             ELSE 3
+           END,
+           last_checked ASC NULLS FIRST"
+    )?;
+
+    let data = stmt
+        .query_map(rusqlite::params![product_id, hours_str], |row| {
+            Ok(KeywordMonitoring {
+                id: row.get(0)?,
+                product_id: row.get(1)?,
+                keyword: row.get(2)?,
+                asin: row.get(3)?,
+                country: row.get(4)?,
+                priority: row.get(5)?,
+                is_active: row.get::<_, i64>(6)? == 1,
+                latest_organic_rank: row.get(7)?,
+                latest_organic_page: row.get(8)?,
+                latest_sponsored_rank: row.get(9)?,
+                latest_sponsored_page: row.get(10)?,
+                image_url: row.get(11)?,
+                price: row.get(12)?,
+                reviews_count: row.get(13)?,
+                rating: row.get(14)?,
+                last_checked: row.get(15)?,
+                created_at: row.get(16)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(data)
+}
+
+// 批量获取监控项的迷你图数据（最近N天的排名）
+pub fn get_monitoring_sparklines(product_id: i64, days: i64) -> Result<Vec<MonitoringSparkline>> {
+    let conn = get_db().lock();
+    let days_str = format!("-{} days", days);
+
+    // 获取该产品所有监控项在最近N天的排名历史（包含自然排名和广告排名）
+    let mut stmt = conn.prepare(
+        "SELECT h.monitoring_id, h.check_date, h.organic_rank, h.sponsored_rank
+         FROM keyword_ranking_history h
+         JOIN keyword_monitoring m ON h.monitoring_id = m.id
+         WHERE m.product_id = ?1 AND h.check_date >= date('now', ?2)
+         ORDER BY h.monitoring_id, h.check_date ASC"
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![product_id, days_str], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,         // monitoring_id
+            row.get::<_, String>(1)?,      // check_date
+            row.get::<_, Option<i64>>(2)?, // organic_rank
+            row.get::<_, Option<i64>>(3)?, // sponsored_rank
+        ))
+    })?;
+
+    // 按 monitoring_id 分组，同时存储 organic 和 sponsored
+    let mut sparklines_map: std::collections::HashMap<i64, (Vec<Option<i64>>, Vec<Option<i64>>)> =
+        std::collections::HashMap::new();
+
+    for row in rows {
+        let (monitoring_id, _check_date, organic_rank, sponsored_rank) = row?;
+        let entry = sparklines_map
+            .entry(monitoring_id)
+            .or_insert_with(|| (Vec::new(), Vec::new()));
+        entry.0.push(organic_rank);
+        entry.1.push(sponsored_rank);
+    }
+
+    // 转换为 Vec<MonitoringSparkline>
+    let sparklines: Vec<MonitoringSparkline> = sparklines_map
+        .into_iter()
+        .map(|(monitoring_id, (organic_ranks, sponsored_ranks))| MonitoringSparkline {
+            monitoring_id,
+            organic_ranks,
+            sponsored_ranks,
+        })
+        .collect();
+
+    Ok(sparklines)
 }

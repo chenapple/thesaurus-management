@@ -1,0 +1,318 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use chrono::{Utc, Timelike, FixedOffset};
+
+use crate::crawler;
+use crate::db;
+
+// 调度器状态
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SchedulerStatus {
+    pub is_running: bool,
+    pub last_check_time: Option<String>,
+    pub next_check_time: Option<String>,
+    pub current_task: Option<String>,
+}
+
+// 调度器设置
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SchedulerSettings {
+    pub enabled: bool,
+    pub morning_start: u32,     // 8
+    pub morning_end: u32,       // 10
+    pub evening_start: u32,     // 18
+    pub evening_end: u32,       // 21
+    pub rank_change_threshold: i64,  // 排名变化阈值，默认10
+    pub notify_on_enter_top10: bool,
+    pub notify_on_exit_top10: bool,
+    pub notify_on_new_rank: bool,
+    pub notify_on_lost_rank: bool,
+}
+
+impl Default for SchedulerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            morning_start: 8,
+            morning_end: 10,
+            evening_start: 18,
+            evening_end: 21,
+            rank_change_threshold: 10,
+            notify_on_enter_top10: true,
+            notify_on_exit_top10: true,
+            notify_on_new_rank: true,
+            notify_on_lost_rank: true,
+        }
+    }
+}
+
+// 站点时区偏移（小时）
+fn get_timezone_offset(country: &str) -> i32 {
+    match country {
+        "US" => -5,  // EST (可能需要考虑夏令时)
+        "UK" => 0,   // GMT/UTC
+        "DE" | "FR" | "IT" | "ES" => 1,  // CET
+        _ => 0,
+    }
+}
+
+// 检查当前时间是否在检测窗口内（按站点当地时间）
+pub fn is_in_check_window(country: &str, settings: &SchedulerSettings) -> bool {
+    let offset_hours = get_timezone_offset(country);
+    let offset = FixedOffset::east_opt(offset_hours * 3600).unwrap();
+    let local_time = Utc::now().with_timezone(&offset);
+    let hour = local_time.hour();
+
+    // 检查是否在早间窗口
+    if hour >= settings.morning_start && hour < settings.morning_end {
+        return true;
+    }
+
+    // 检查是否在晚间窗口
+    if hour >= settings.evening_start && hour < settings.evening_end {
+        return true;
+    }
+
+    false
+}
+
+// 排名变化结果
+#[derive(Debug, Clone)]
+pub struct RankChange {
+    pub keyword: String,
+    pub country: String,
+    pub old_rank: Option<i64>,
+    pub new_rank: Option<i64>,
+    pub change: i64,
+    pub change_type: RankChangeType,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RankChangeType {
+    Improved,      // 排名上升
+    Declined,      // 排名下降
+    EnteredTop10,  // 进入前10
+    ExitedTop10,   // 跌出前10
+    NewRank,       // 新上榜
+    LostRank,      // 跌出榜单
+}
+
+// 计算排名变化
+pub fn calculate_rank_change(
+    old_rank: Option<i64>,
+    new_rank: Option<i64>,
+) -> Option<(i64, RankChangeType)> {
+    match (old_rank, new_rank) {
+        (None, Some(new)) => {
+            // 新上榜
+            Some((new, RankChangeType::NewRank))
+        }
+        (Some(_old), None) => {
+            // 跌出榜单
+            Some((0, RankChangeType::LostRank))
+        }
+        (Some(old), Some(new)) => {
+            let change = old - new; // 正数表示排名上升
+
+            // 判断变化类型
+            let change_type = if old > 10 && new <= 10 {
+                RankChangeType::EnteredTop10
+            } else if old <= 10 && new > 10 {
+                RankChangeType::ExitedTop10
+            } else if change > 0 {
+                RankChangeType::Improved
+            } else {
+                RankChangeType::Declined
+            };
+
+            Some((change, change_type))
+        }
+        (None, None) => None,
+    }
+}
+
+// 检查是否需要发送通知
+pub fn should_notify(
+    change: i64,
+    change_type: &RankChangeType,
+    settings: &SchedulerSettings,
+) -> bool {
+    match change_type {
+        RankChangeType::EnteredTop10 => settings.notify_on_enter_top10,
+        RankChangeType::ExitedTop10 => settings.notify_on_exit_top10,
+        RankChangeType::NewRank => settings.notify_on_new_rank,
+        RankChangeType::LostRank => settings.notify_on_lost_rank,
+        RankChangeType::Improved | RankChangeType::Declined => {
+            change.abs() >= settings.rank_change_threshold
+        }
+    }
+}
+
+// 调度器
+pub struct Scheduler {
+    running: Arc<AtomicBool>,
+    settings: Arc<Mutex<SchedulerSettings>>,
+    last_check: Arc<Mutex<Option<chrono::DateTime<Utc>>>>,
+}
+
+impl Scheduler {
+    pub fn new() -> Self {
+        Self {
+            running: Arc::new(AtomicBool::new(false)),
+            settings: Arc::new(Mutex::new(SchedulerSettings::default())),
+            last_check: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub async fn update_settings(&self, settings: SchedulerSettings) {
+        let mut current = self.settings.lock().await;
+        *current = settings;
+    }
+
+    pub async fn get_settings(&self) -> SchedulerSettings {
+        self.settings.lock().await.clone()
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
+    pub async fn start(&self) {
+        if self.running.load(Ordering::SeqCst) {
+            return;
+        }
+
+        self.running.store(true, Ordering::SeqCst);
+
+        let running = self.running.clone();
+        let settings = self.settings.clone();
+        let last_check = self.last_check.clone();
+
+        tokio::spawn(async move {
+            while running.load(Ordering::SeqCst) {
+                let current_settings = settings.lock().await.clone();
+
+                if current_settings.enabled {
+                    // 检查是否需要执行检测（每小时最多一次）
+                    let should_check = {
+                        let last = last_check.lock().await;
+                        match *last {
+                            None => true,
+                            Some(last_time) => {
+                                let elapsed = Utc::now() - last_time;
+                                elapsed.num_hours() >= 1
+                            }
+                        }
+                    };
+
+                    if should_check {
+                        // 获取所有需要检测的产品
+                        if let Ok(products) = db::get_products() {
+                            for product in products {
+                                // 检查产品国家是否在检测时间窗口
+                                let country = product.country.as_deref().unwrap_or("US");
+                                if is_in_check_window(country, &current_settings) {
+                                    // 执行检测
+                                    let _ = run_product_check(product.id, &current_settings).await;
+                                }
+                            }
+                        }
+
+                        // 更新最后检测时间
+                        let mut last = last_check.lock().await;
+                        *last = Some(Utc::now());
+                    }
+                }
+
+                // 每分钟检查一次
+                tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+            }
+        });
+    }
+
+    pub fn stop(&self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
+
+    pub async fn get_status(&self) -> SchedulerStatus {
+        let settings = self.settings.lock().await;
+        let last = self.last_check.lock().await;
+
+        SchedulerStatus {
+            is_running: self.is_running() && settings.enabled,
+            last_check_time: last.map(|t| t.to_rfc3339()),
+            next_check_time: None, // TODO: 计算下次检测时间
+            current_task: None,
+        }
+    }
+}
+
+// 执行产品检测
+async fn run_product_check(product_id: i64, settings: &SchedulerSettings) -> Result<Vec<RankChange>, String> {
+    let mut changes = Vec::new();
+
+    // 获取待检测的监控记录
+    let pending = db::get_pending_monitoring_checks(product_id, 4) // 4小时内检测过的跳过
+        .map_err(|e| e.to_string())?;
+
+    if pending.is_empty() {
+        return Ok(changes);
+    }
+
+    for monitoring in pending {
+        // 获取上次排名
+        let old_rank = db::get_previous_ranking(monitoring.id)
+            .ok()
+            .flatten();
+
+        // 执行检测
+        let result = crawler::search_keyword(
+            monitoring.keyword.clone(),
+            monitoring.asin.clone(),
+            monitoring.country.clone(),
+            3,
+        )
+        .await;
+
+        if result.error.is_none() {
+            // 更新数据库
+            let product_info = result.product_info.as_ref();
+            db::update_ranking_result(
+                monitoring.id,
+                result.organic_rank,
+                result.organic_page,
+                result.sponsored_rank,
+                result.sponsored_page,
+                product_info.and_then(|p| p.image_url.clone()),
+                product_info.and_then(|p| p.price.clone()),
+                product_info.and_then(|p| p.reviews_count),
+                product_info.and_then(|p| p.rating),
+            )
+            .ok();
+
+            // 计算排名变化
+            if let Some((change, change_type)) = calculate_rank_change(old_rank, result.organic_rank) {
+                if should_notify(change, &change_type, settings) {
+                    changes.push(RankChange {
+                        keyword: monitoring.keyword.clone(),
+                        country: monitoring.country.clone(),
+                        old_rank,
+                        new_rank: result.organic_rank,
+                        change,
+                        change_type,
+                    });
+                }
+            }
+        }
+
+        // 关键词间延迟
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    }
+
+    Ok(changes)
+}
+
+// 全局调度器实例
+use once_cell::sync::Lazy;
+pub static SCHEDULER: Lazy<Scheduler> = Lazy::new(|| Scheduler::new());

@@ -24,6 +24,9 @@ const ColumnConfigDialog = defineAsyncComponent(() => import("./components/Colum
 const ProductDialog = defineAsyncComponent(() => import("./components/ProductDialog.vue"));
 const ShortcutsDialog = defineAsyncComponent(() => import("./components/ShortcutsDialog.vue"));
 const ApiKeyDialog = defineAsyncComponent(() => import("./components/ApiKeyDialog.vue"));
+const KeywordMonitoringTab = defineAsyncComponent(() => import("./components/KeywordMonitoringTab.vue"));
+const SettingsDialog = defineAsyncComponent(() => import("./components/SettingsDialog.vue"));
+const QuickAddMonitoringDialog = defineAsyncComponent(() => import("./components/QuickAddMonitoringDialog.vue"));
 
 // ==================== 产品相关状态 ====================
 const products = ref<Product[]>([]);
@@ -164,6 +167,9 @@ const showShortcutsDialog = ref(false);
 // API Key 设置弹窗
 const showApiKeyDialog = ref(false);
 
+// 自动检测设置弹窗
+const showSettingsDialog = ref(false);
+
 // 应用版本
 const appVersion = ref("");
 
@@ -174,8 +180,8 @@ const updateDownloading = ref(false);
 const updateProgress = ref(0);
 const updateTotal = ref(0);
 
-// 视图模式: 'keywords' | 'roots' | 'wordcloud'
-const viewMode = ref<'keywords' | 'roots' | 'wordcloud'>('keywords');
+// 视图模式: 'keywords' | 'roots' | 'wordcloud' | 'monitoring'
+const viewMode = ref<'keywords' | 'roots' | 'wordcloud' | 'monitoring'>('keywords');
 const wordCloudRef = ref<InstanceType<typeof WordCloud> | null>(null);
 const allRootsForCloud = ref<Root[]>([]);
 const loadingCloud = ref(false);
@@ -192,6 +198,10 @@ const keywordPageSize = ref(50);
 const keywordSearch = ref("");
 const keywordSortBy = ref("id");
 const keywordSortOrder = ref("asc");
+
+// 关键词多选
+const selectedKeywords = ref<KeywordData[]>([]);
+const keywordTableRef = ref<InstanceType<typeof import('element-plus')['ElTable']> | null>(null);
 
 // 关键词筛选
 const keywordFilters = ref({
@@ -233,6 +243,24 @@ const hasActiveFilters = computed(() => {
     keywordFilters.value.primaryCategory.length > 0 ||
     keywordFilters.value.orderliness.length > 0);
 });
+
+// 关键词多选处理
+function handleKeywordSelectionChange(rows: KeywordData[]) {
+  selectedKeywords.value = rows;
+}
+
+function clearKeywordSelection() {
+  selectedKeywords.value = [];
+  keywordTableRef.value?.clearSelection();
+}
+
+// 快速添加监控对话框
+const showQuickAddMonitoringDialog = ref(false);
+
+function handleQuickAddMonitoringSuccess() {
+  clearKeywordSelection();
+  ElMessage.success('添加成功，可在「排名监控」标签页查看');
+}
 
 // 列配置
 const showColumnConfig = ref(false);
@@ -502,7 +530,7 @@ async function loadAllRootsForCloud() {
 }
 
 // 切换视图模式
-function switchViewMode(mode: 'keywords' | 'roots' | 'wordcloud') {
+function switchViewMode(mode: 'keywords' | 'roots' | 'wordcloud' | 'monitoring') {
   viewMode.value = mode;
   if (mode === 'wordcloud' && allRootsForCloud.value.length === 0) {
     loadAllRootsForCloud();
@@ -511,6 +539,7 @@ function switchViewMode(mode: 'keywords' | 'roots' | 'wordcloud') {
   } else if (mode === 'roots' && roots.value.length === 0) {
     loadRoots();
   }
+  // monitoring 视图由组件自行加载数据
 }
 
 // 词云点击处理
@@ -2016,6 +2045,13 @@ onUnmounted(() => {
               <el-icon><PieChart /></el-icon>
               词云
             </el-button>
+            <el-button
+              :type="viewMode === 'monitoring' ? 'primary' : 'default'"
+              @click="switchViewMode('monitoring')"
+            >
+              <el-icon><TrendCharts /></el-icon>
+              排名监控
+            </el-button>
           </el-button-group>
 
           <el-divider direction="vertical" />
@@ -2100,6 +2136,9 @@ onUnmounted(() => {
                 </el-dropdown-item>
                 <el-dropdown-item @click="showApiKeyDialog = true">
                   <el-icon><Key /></el-icon> API Key 设置
+                </el-dropdown-item>
+                <el-dropdown-item @click="showSettingsDialog = true">
+                  <el-icon><Timer /></el-icon> 自动检测设置
                 </el-dropdown-item>
                 <el-dropdown-item divided @click="handleClearData">
                   <el-icon color="#f56c6c"><Delete /></el-icon>
@@ -2186,17 +2225,37 @@ onUnmounted(() => {
         <span v-if="hasActiveFilters" class="filter-result-count">
           共 {{ keywordTotal }} 条结果
         </span>
+
+        <!-- 批量操作区域 -->
+        <el-divider direction="vertical" v-if="selectedKeywords.length > 0" />
+        <el-button
+          v-if="selectedKeywords.length > 0"
+          type="success"
+          @click="showQuickAddMonitoringDialog = true"
+        >
+          <el-icon><Plus /></el-icon>
+          添加到监控 ({{ selectedKeywords.length }})
+        </el-button>
+        <el-button
+          v-if="selectedKeywords.length > 0"
+          text
+          @click="clearKeywordSelection"
+        >
+          取消选择
+        </el-button>
       </div>
 
       <!-- 关键词表格 -->
       <div class="keyword-table-container" v-if="selectedProduct && viewMode === 'keywords'">
         <el-table
+          ref="keywordTableRef"
           :data="keywordData"
           v-loading="keywordLoading"
           stripe
           style="width: 100%"
           height="100%"
           @sort-change="handleKeywordSortChange"
+          @selection-change="handleKeywordSelectionChange"
         >
           <template #empty>
             <div class="table-empty-state">
@@ -2215,6 +2274,7 @@ onUnmounted(() => {
               </el-button>
             </div>
           </template>
+          <el-table-column type="selection" width="40" fixed="left" />
           <el-table-column type="index" label="#" width="50" fixed="left" />
 
           <!-- 原始Excel列 -->
@@ -2389,6 +2449,12 @@ onUnmounted(() => {
           @wordClick="handleWordCloudClick"
         />
       </div>
+
+      <!-- 排名监控视图 -->
+      <KeywordMonitoringTab
+        v-if="selectedProduct && viewMode === 'monitoring'"
+        :product-id="selectedProduct.id"
+      />
 
       <!-- 词根表格 -->
       <div class="table-container" v-if="selectedProduct && viewMode === 'roots'">
@@ -2596,6 +2662,20 @@ onUnmounted(() => {
       v-model:visible="showApiKeyDialog"
     />
 
+    <!-- 自动检测设置弹窗 -->
+    <SettingsDialog
+      v-model="showSettingsDialog"
+    />
+
+    <!-- 快速批量添加监控弹窗 -->
+    <QuickAddMonitoringDialog
+      v-model="showQuickAddMonitoringDialog"
+      :product-id="selectedProduct?.id ?? 0"
+      :product-country="selectedProduct?.country ?? null"
+      :keywords="selectedKeywords"
+      @success="handleQuickAddMonitoringSuccess"
+    />
+
     <!-- 更新下载进度弹窗 -->
     <el-dialog
       v-model="showUpdateDialog"
@@ -2801,6 +2881,7 @@ body,
   flex-shrink: 0;
   min-width: 180px;
   max-width: 400px;
+  height: 100%;
 }
 
 /* 拖动调整手柄 */
@@ -2989,6 +3070,7 @@ body,
   display: flex;
   flex-direction: column;
   min-width: 0;
+  overflow: hidden;
 }
 
 .header {

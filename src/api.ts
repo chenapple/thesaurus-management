@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { BackupInfo, Category, KeywordData, Product, Root, TrafficLevelStats, WorkflowStatus } from "./types";
+import type { BackupInfo, Category, KeywordData, KeywordMonitoring, MonitoringSparkline, MonitoringStats, Product, RankingHistory, RankingResult, RankingSnapshot, Root, TrafficLevelStats, WorkflowStatus } from "./types";
 
 // ==================== 产品管理 ====================
 
@@ -320,4 +320,202 @@ export async function deleteApiKey(keyName: string): Promise<void> {
  */
 export async function hasApiKey(keyName: string): Promise<boolean> {
   return await invoke("has_api_key", { keyName });
+}
+
+// ==================== 关键词排名监控 ====================
+
+/**
+ * 添加关键词监控
+ */
+export async function addKeywordMonitoring(
+  productId: number,
+  keyword: string,
+  asin: string,
+  country: string,
+  priority?: string
+): Promise<number> {
+  return await invoke("add_keyword_monitoring", {
+    productId,
+    keyword,
+    asin,
+    country,
+    priority: priority || null,
+  });
+}
+
+/**
+ * 批量添加关键词监控
+ */
+export async function batchAddKeywordMonitoring(
+  productId: number,
+  items: { keyword: string; asin: string; country: string; priority?: string }[]
+): Promise<number[]> {
+  const tuples = items.map(item => [
+    item.keyword,
+    item.asin,
+    item.country,
+    item.priority || null,
+  ] as [string, string, string, string | null]);
+  return await invoke("batch_add_keyword_monitoring", { productId, items: tuples });
+}
+
+/**
+ * 获取关键词监控列表
+ */
+export async function getKeywordMonitoringList(params: {
+  productId: number;
+  country?: string;
+  priority?: string;
+  isActive?: boolean;
+  search?: string;
+  sortBy?: string;
+  sortOrder?: string;
+  page: number;
+  pageSize: number;
+}): Promise<[KeywordMonitoring[], number]> {
+  return await invoke("get_keyword_monitoring_list", {
+    productId: params.productId,
+    country: params.country || null,
+    priority: params.priority || null,
+    isActive: params.isActive ?? null,
+    search: params.search || null,
+    sortBy: params.sortBy || null,
+    sortOrder: params.sortOrder || null,
+    page: params.page,
+    pageSize: params.pageSize,
+  });
+}
+
+/**
+ * 更新关键词监控
+ */
+export async function updateKeywordMonitoring(
+  id: number,
+  priority?: string,
+  isActive?: boolean
+): Promise<void> {
+  return await invoke("update_keyword_monitoring", {
+    id,
+    priority: priority || null,
+    isActive: isActive ?? null,
+  });
+}
+
+/**
+ * 删除关键词监控
+ */
+export async function deleteKeywordMonitoring(id: number): Promise<void> {
+  return await invoke("delete_keyword_monitoring", { id });
+}
+
+/**
+ * 批量删除关键词监控
+ */
+export async function batchDeleteKeywordMonitoring(ids: number[]): Promise<void> {
+  return await invoke("batch_delete_keyword_monitoring", { ids });
+}
+
+/**
+ * 获取监控统计
+ */
+export async function getMonitoringStats(productId: number): Promise<MonitoringStats> {
+  return await invoke("get_monitoring_stats", { productId });
+}
+
+/**
+ * 获取排名历史
+ */
+export async function getRankingHistory(
+  monitoringId: number,
+  days: number = 30
+): Promise<RankingHistory[]> {
+  return await invoke("get_ranking_history", { monitoringId, days });
+}
+
+/**
+ * 获取竞品快照
+ */
+export async function getRankingSnapshots(
+  keyword: string,
+  country: string,
+  days: number = 30
+): Promise<RankingSnapshot[]> {
+  return await invoke("get_ranking_snapshots", { keyword, country, days });
+}
+
+/**
+ * 获取监控迷你图数据
+ */
+export async function getMonitoringSparklines(
+  productId: number,
+  days: number = 7
+): Promise<MonitoringSparkline[]> {
+  return await invoke("get_monitoring_sparklines", { productId, days });
+}
+
+/**
+ * 检测单个关键词排名
+ */
+export async function checkSingleRanking(
+  monitoringId: number,
+  maxPages?: number
+): Promise<RankingResult> {
+  return await invoke("check_single_ranking", {
+    monitoringId,
+    maxPages: maxPages || null,
+  });
+}
+
+/**
+ * 批量检测排名
+ */
+export async function checkAllRankings(
+  productId: number,
+  maxPages?: number,
+  hoursSinceLastCheck?: number
+): Promise<[number, RankingResult][]> {
+  return await invoke("check_all_rankings", {
+    productId,
+    maxPages: maxPages || null,
+    hoursSinceLastCheck: hoursSinceLastCheck || null,
+  });
+}
+
+// ==================== 调度器管理 ====================
+
+import type { SchedulerSettings, SchedulerStatus } from "./types";
+
+/**
+ * 获取调度器设置
+ */
+export async function getSchedulerSettings(): Promise<SchedulerSettings> {
+  return await invoke("get_scheduler_settings");
+}
+
+/**
+ * 更新调度器设置
+ */
+export async function updateSchedulerSettings(settings: SchedulerSettings): Promise<void> {
+  return await invoke("update_scheduler_settings", { settings });
+}
+
+/**
+ * 启动调度器
+ */
+export async function startScheduler(): Promise<void> {
+  return await invoke("start_scheduler");
+}
+
+/**
+ * 停止调度器
+ */
+export async function stopScheduler(): Promise<void> {
+  return await invoke("stop_scheduler");
+}
+
+/**
+ * 获取调度器状态
+ */
+export async function getSchedulerStatus(): Promise<SchedulerStatus> {
+  return await invoke("get_scheduler_status");
 }

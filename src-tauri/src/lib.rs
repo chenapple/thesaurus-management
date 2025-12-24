@@ -1,7 +1,14 @@
 mod db;
+mod crawler;
+mod scheduler;
+mod notification;
 
-use db::{BackupInfo, Category, KeywordData, Product, RootWithCategories, TrafficLevelStats, UncategorizedKeyword, WorkflowStatus};
+use db::{BackupInfo, Category, KeywordData, KeywordMonitoring, MonitoringSparkline, MonitoringStats, Product, RankingHistory, RankingSnapshot, RootWithCategories, TrafficLevelStats, UncategorizedKeyword, WorkflowStatus};
+use scheduler::{SchedulerSettings, SchedulerStatus, SCHEDULER};
 use tauri::Manager;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
+use tauri::Emitter;
 
 // ==================== 产品管理 ====================
 
@@ -249,6 +256,254 @@ fn has_api_key(key_name: String) -> Result<bool, String> {
     }
 }
 
+// ==================== 关键词排名监控 ====================
+
+#[tauri::command]
+fn add_keyword_monitoring(
+    product_id: i64,
+    keyword: String,
+    asin: String,
+    country: String,
+    priority: Option<String>,
+) -> Result<i64, String> {
+    db::add_keyword_monitoring(product_id, keyword, asin, country, priority)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_keyword_monitoring_list(
+    product_id: i64,
+    country: Option<String>,
+    priority: Option<String>,
+    is_active: Option<bool>,
+    search: Option<String>,
+    sort_by: Option<String>,
+    sort_order: Option<String>,
+    page: i64,
+    page_size: i64,
+) -> Result<(Vec<KeywordMonitoring>, i64), String> {
+    db::get_keyword_monitoring_list(product_id, country, priority, is_active, search, sort_by, sort_order, page, page_size)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_keyword_monitoring(
+    id: i64,
+    priority: Option<String>,
+    is_active: Option<bool>,
+) -> Result<(), String> {
+    db::update_keyword_monitoring(id, priority, is_active)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_keyword_monitoring(id: i64) -> Result<(), String> {
+    db::delete_keyword_monitoring(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn batch_delete_keyword_monitoring(ids: Vec<i64>) -> Result<(), String> {
+    db::batch_delete_keyword_monitoring(ids).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_monitoring_stats(product_id: i64) -> Result<MonitoringStats, String> {
+    db::get_monitoring_stats(product_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_ranking_history(monitoring_id: i64, days: i64) -> Result<Vec<RankingHistory>, String> {
+    db::get_ranking_history(monitoring_id, days).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_ranking_snapshots(keyword: String, country: String, days: i64) -> Result<Vec<RankingSnapshot>, String> {
+    db::get_ranking_snapshots(&keyword, &country, days).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_monitoring_sparklines(product_id: i64, days: i64) -> Result<Vec<MonitoringSparkline>, String> {
+    db::get_monitoring_sparklines(product_id, days).map_err(|e| e.to_string())
+}
+
+// 检测单个关键词排名
+#[tauri::command]
+async fn check_single_ranking(
+    monitoring_id: i64,
+    max_pages: Option<i64>,
+) -> Result<crawler::RankingResult, String> {
+    // 获取监控记录
+    let monitoring = db::get_keyword_monitoring_by_id(monitoring_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "监控记录不存在".to_string())?;
+
+    // 使用异步爬虫检测
+    let result = crawler::search_keyword(
+        monitoring.keyword.clone(),
+        monitoring.asin.clone(),
+        monitoring.country.clone(),
+        max_pages.unwrap_or(3),
+    )
+    .await;
+
+    // 更新数据库
+    if result.error.is_none() {
+        let product_info = result.product_info.as_ref();
+        db::update_ranking_result(
+            monitoring_id,
+            result.organic_rank,
+            result.organic_page,
+            result.sponsored_rank,
+            result.sponsored_page,
+            product_info.and_then(|p| p.image_url.clone()),
+            product_info.and_then(|p| p.price.clone()),
+            product_info.and_then(|p| p.reviews_count),
+            product_info.and_then(|p| p.rating),
+        )
+        .map_err(|e| e.to_string())?;
+
+        // 保存竞品快照
+        if !result.organic_top_50.is_empty() || !result.sponsored_top_20.is_empty() {
+            db::save_ranking_snapshot(
+                &monitoring.keyword,
+                &monitoring.country,
+                Some(serde_json::to_string(&result.organic_top_50).unwrap_or_default()),
+                Some(serde_json::to_string(&result.sponsored_top_20).unwrap_or_default()),
+            )
+            .ok();
+        }
+    }
+
+    Ok(result)
+}
+
+// 批量检测排名（带进度回调）
+#[tauri::command]
+async fn check_all_rankings(
+    product_id: i64,
+    max_pages: Option<i64>,
+    hours_since_last_check: Option<i64>,
+) -> Result<Vec<(i64, crawler::RankingResult)>, String> {
+    // 获取待检测的监控记录
+    let pending = db::get_pending_monitoring_checks(product_id, hours_since_last_check.unwrap_or(24))
+        .map_err(|e| e.to_string())?;
+
+    if pending.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // 准备检测数据
+    let keywords: Vec<(i64, String, String, String)> = pending
+        .into_iter()
+        .map(|m| (m.id, m.keyword, m.asin, m.country))
+        .collect();
+
+    // 执行批量检测
+    let results = crawler::check_rankings_batch(
+        keywords,
+        max_pages.unwrap_or(3),
+        |_current, _total, _message| {
+            // 进度回调（可以通过 Tauri event 发送到前端）
+        },
+    )
+    .await;
+
+    // 更新数据库
+    for (monitoring_id, ref result) in &results {
+        if result.error.is_none() {
+            let product_info = result.product_info.as_ref();
+            db::update_ranking_result(
+                *monitoring_id,
+                result.organic_rank,
+                result.organic_page,
+                result.sponsored_rank,
+                result.sponsored_page,
+                product_info.and_then(|p| p.image_url.clone()),
+                product_info.and_then(|p| p.price.clone()),
+                product_info.and_then(|p| p.reviews_count),
+                product_info.and_then(|p| p.rating),
+            )
+            .ok();
+
+            // 保存竞品快照
+            if !result.organic_top_50.is_empty() || !result.sponsored_top_20.is_empty() {
+                db::save_ranking_snapshot(
+                    &result.keyword,
+                    &result.country,
+                    Some(serde_json::to_string(&result.organic_top_50).unwrap_or_default()),
+                    Some(serde_json::to_string(&result.sponsored_top_20).unwrap_or_default()),
+                )
+                .ok();
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+// 批量添加关键词监控
+#[tauri::command]
+fn batch_add_keyword_monitoring(
+    product_id: i64,
+    items: Vec<(String, String, String, Option<String>)>, // (keyword, asin, country, priority)
+) -> Result<Vec<i64>, String> {
+    let mut ids = Vec::new();
+    for (keyword, asin, country, priority) in items {
+        let id = db::add_keyword_monitoring(product_id, keyword, asin, country, priority)
+            .map_err(|e| e.to_string())?;
+        ids.push(id);
+    }
+    Ok(ids)
+}
+
+// ==================== 调度器管理 ====================
+
+#[tauri::command]
+async fn get_scheduler_settings() -> Result<SchedulerSettings, String> {
+    // 从数据库加载设置
+    if let Ok(Some(json)) = db::get_setting("scheduler_settings") {
+        serde_json::from_str(&json).map_err(|e| e.to_string())
+    } else {
+        Ok(SchedulerSettings::default())
+    }
+}
+
+#[tauri::command]
+async fn update_scheduler_settings(settings: SchedulerSettings) -> Result<(), String> {
+    // 保存到数据库
+    let json = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
+    db::set_setting("scheduler_settings", &json).map_err(|e| e.to_string())?;
+
+    // 更新调度器
+    SCHEDULER.update_settings(settings).await;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn start_scheduler() -> Result<(), String> {
+    // 加载设置
+    if let Ok(Some(json)) = db::get_setting("scheduler_settings") {
+        if let Ok(settings) = serde_json::from_str::<SchedulerSettings>(&json) {
+            SCHEDULER.update_settings(settings).await;
+        }
+    }
+
+    SCHEDULER.start().await;
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_scheduler() -> Result<(), String> {
+    SCHEDULER.stop();
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_scheduler_status() -> Result<SchedulerStatus, String> {
+    Ok(SCHEDULER.get_status().await)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -259,9 +514,50 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_window_state::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
             db::init_db(app_data_dir).expect("Failed to initialize database");
+
+            // 设置系统托盘
+            let show_item = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
+            let check_item = MenuItem::with_id(app, "check", "立即检测", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+
+            let menu = Menu::with_items(app, &[&show_item, &check_item, &quit_item])?;
+
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| {
+                    match event.id.as_ref() {
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "check" => {
+                            app.emit("manual-check-requested", ()).ok();
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -316,6 +612,25 @@ pub fn run() {
             get_api_key,
             delete_api_key,
             has_api_key,
+            // 关键词排名监控
+            add_keyword_monitoring,
+            get_keyword_monitoring_list,
+            update_keyword_monitoring,
+            delete_keyword_monitoring,
+            batch_delete_keyword_monitoring,
+            get_monitoring_stats,
+            get_ranking_history,
+            get_ranking_snapshots,
+            get_monitoring_sparklines,
+            check_single_ranking,
+            check_all_rankings,
+            batch_add_keyword_monitoring,
+            // 调度器管理
+            get_scheduler_settings,
+            update_scheduler_settings,
+            start_scheduler,
+            stop_scheduler,
+            get_scheduler_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
