@@ -11,7 +11,7 @@ import random
 import time
 import re
 from urllib.parse import quote_plus
-from datetime import datetime
+from datetime import datetime, timezone
 
 try:
     import cloudscraper
@@ -92,7 +92,7 @@ def search_keyword(keyword: str, target_asin: str, country: str, max_pages: int 
         "product_info": None,
         "organic_top_50": [],
         "sponsored_top_20": [],
-        "checked_at": datetime.utcnow().isoformat() + "Z",
+        "checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "error": None
     }
 
@@ -455,7 +455,10 @@ def main():
     max_pages = int(sys.argv[4]) if len(sys.argv) > 4 else 3
 
     result = search_keyword(keyword, target_asin, country, max_pages)
-    print(json.dumps(result, ensure_ascii=False))
+    # Windows 默认使用 GBK 编码，强制使用 UTF-8
+    output = json.dumps(result, ensure_ascii=False)
+    sys.stdout.buffer.write(output.encode('utf-8'))
+    sys.stdout.buffer.write(b'\n')
 
 
 if __name__ == "__main__":
