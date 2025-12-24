@@ -103,7 +103,8 @@ jobs:
           name: windows-x64
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/nsis/*.exe.sig
+            src-tauri/target/release/bundle/nsis/*.nsis.zip
+            src-tauri/target/release/bundle/nsis/*.nsis.zip.sig
           if-no-files-found: warn
 
   publish:
@@ -155,18 +156,18 @@ jobs:
             echo "$1" | sed 's/ /%20/g'
           }
 
-          # Windows
-          WINDOWS_SIG_FILE=$(find artifacts -name "*.exe.sig" -type f 2>/dev/null | head -1)
-          WINDOWS_EXE_FILE=$(find artifacts -name "*.exe" -type f ! -name "*.sig" 2>/dev/null | head -1)
+          # Windows (use .nsis.zip for Tauri 2 updater)
+          WINDOWS_SIG_FILE=$(find artifacts -name "*.nsis.zip.sig" -type f 2>/dev/null | head -1)
+          WINDOWS_ZIP_FILE=$(find artifacts -name "*.nsis.zip" -type f ! -name "*.sig" 2>/dev/null | head -1)
 
-          if [ -n "$WINDOWS_SIG_FILE" ] && [ -n "$WINDOWS_EXE_FILE" ]; then
+          if [ -n "$WINDOWS_SIG_FILE" ] && [ -n "$WINDOWS_ZIP_FILE" ]; then
             WINDOWS_SIG=$(cat "$WINDOWS_SIG_FILE")
-            WINDOWS_EXE=$(basename "$WINDOWS_EXE_FILE")
-            WINDOWS_EXE_URL=$(urlencode "$WINDOWS_EXE")
-            echo "Found Windows: $WINDOWS_EXE -> $WINDOWS_EXE_URL"
+            WINDOWS_ZIP=$(basename "$WINDOWS_ZIP_FILE")
+            WINDOWS_ZIP_URL=$(urlencode "$WINDOWS_ZIP")
+            echo "Found Windows: $WINDOWS_ZIP -> $WINDOWS_ZIP_URL"
             PLATFORMS="${PLATFORMS}    \"windows-x86_64\": {
                 \"signature\": \"${WINDOWS_SIG}\",
-                \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${WINDOWS_EXE_URL}\"
+                \"url\": \"https://github.com/${REPO}/releases/download/v${VERSION}/${WINDOWS_ZIP_URL}\"
               }"
           fi
 
@@ -216,8 +217,8 @@ jobs:
         run: |
           mkdir -p release-files
 
-          # Copy all release artifacts
-          find artifacts -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.exe.sig" -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" \) -exec cp {} release-files/ \;
+          # Copy all release artifacts (including .nsis.zip for Windows updater)
+          find artifacts -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.exe.sig" -o -name "*.nsis.zip" -o -name "*.nsis.zip.sig" -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" \) -exec cp {} release-files/ \;
 
           # Copy latest.json
           cp latest.json release-files/
