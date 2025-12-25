@@ -2352,6 +2352,64 @@ pub fn update_ranking_result(
     conn.execute("BEGIN TRANSACTION", [])?;
 
     let result = (|| {
+        // 如果价格为空，尝试从同 ASIN+country 的其他记录中获取
+        let final_price = if price.is_none() {
+            // 先获取当前记录的 asin 和 country
+            let asin_country: Option<(String, String)> = conn.query_row(
+                "SELECT asin, country FROM keyword_monitoring WHERE id = ?1",
+                [monitoring_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            ).ok();
+
+            if let Some((asin, country)) = asin_country {
+                // 从同 asin+country 的其他记录中查找最近有价格的
+                conn.query_row(
+                    "SELECT price FROM keyword_monitoring
+                     WHERE asin = ?1 AND country = ?2 AND price IS NOT NULL AND price != ''
+                     ORDER BY last_checked DESC LIMIT 1",
+                    rusqlite::params![asin, country],
+                    |row| row.get(0),
+                ).ok()
+            } else {
+                None
+            }
+        } else {
+            price
+        };
+
+        // 同样处理 image_url, reviews_count, rating
+        let (final_image_url, final_reviews_count, final_rating) = if image_url.is_none() || reviews_count.is_none() || rating.is_none() {
+            let asin_country: Option<(String, String)> = conn.query_row(
+                "SELECT asin, country FROM keyword_monitoring WHERE id = ?1",
+                [monitoring_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            ).ok();
+
+            if let Some((asin, country)) = asin_country {
+                let fallback: Option<(Option<String>, Option<i64>, Option<f64>)> = conn.query_row(
+                    "SELECT image_url, reviews_count, rating FROM keyword_monitoring
+                     WHERE asin = ?1 AND country = ?2 AND (image_url IS NOT NULL OR reviews_count IS NOT NULL OR rating IS NOT NULL)
+                     ORDER BY last_checked DESC LIMIT 1",
+                    rusqlite::params![asin, country],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                ).ok();
+
+                if let Some((fb_img, fb_reviews, fb_rating)) = fallback {
+                    (
+                        image_url.or(fb_img),
+                        reviews_count.or(fb_reviews),
+                        rating.or(fb_rating),
+                    )
+                } else {
+                    (image_url, reviews_count, rating)
+                }
+            } else {
+                (image_url, reviews_count, rating)
+            }
+        } else {
+            (image_url, reviews_count, rating)
+        };
+
         // 更新最新排名
         conn.execute(
             "UPDATE keyword_monitoring SET
@@ -2363,7 +2421,7 @@ pub fn update_ranking_result(
             rusqlite::params![
                 organic_rank, organic_page,
                 sponsored_rank, sponsored_page,
-                image_url, price, reviews_count, rating,
+                final_image_url, final_price, final_reviews_count, final_rating,
                 monitoring_id
             ],
         )?;
