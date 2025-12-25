@@ -27,12 +27,8 @@ function formatBytes(bytes: number): string {
 async function checkForUpdates() {
   checking.value = true;
   try {
-    // 添加超时处理
-    const timeoutPromise = new Promise<null>((_, reject) => {
-      setTimeout(() => reject(new Error('请求超时')), 15000);
-    });
-
-    const update = await Promise.race([check(), timeoutPromise]);
+    // 直接调用 check()，不设置超时（让系统自己处理）
+    const update = await check();
     if (update) {
       const confirm = await ElMessageBox.confirm(
         `发现新版本 v${update.version}，是否立即更新？`,
@@ -68,10 +64,10 @@ async function checkForUpdates() {
   } catch (e) {
     downloading.value = false;
     const errorMsg = String(e);
-    if (errorMsg.includes('timeout') || errorMsg.includes('超时')) {
-      ElMessage.warning('检测更新超时，请检查网络连接后重试');
-    } else if (errorMsg.includes('error sending request') || errorMsg.includes('network')) {
+    if (errorMsg.includes('error sending request') || errorMsg.includes('network')) {
       ElMessage.warning('网络连接失败，请检查网络设置或防火墙');
+    } else if (errorMsg.includes('cancel')) {
+      // 用户取消，不显示错误
     } else {
       ElMessage.error(`检测更新失败: ${e}`);
     }
