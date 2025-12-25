@@ -948,7 +948,7 @@ async function handleCheckRankings() {
   checkingAll.value = true;
   try {
     console.log('Calling checkAllRankings...');
-    const results = await checkAllRankings(props.productId, 3, 99999);  // 大值 = 无时间限制
+    const results = await checkAllRankings(props.productId, 3, 0);  // 0 = 无时间限制
     console.log('checkAllRankings results:', results);
 
     if (results.length === 0) {

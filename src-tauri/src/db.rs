@@ -2635,28 +2635,48 @@ pub fn get_keyword_monitoring_by_id(id: i64) -> Result<Option<KeywordMonitoring>
 }
 
 // 获取待检测的监控记录（活跃且未检测或超过指定时间未检测）
+// hours_since_last_check = 0 表示无时间限制，返回所有活跃的监控项
 pub fn get_pending_monitoring_checks(product_id: i64, hours_since_last_check: i64) -> Result<Vec<KeywordMonitoring>> {
     let conn = get_db().lock();
 
-    let hours_str = format!("-{} hours", hours_since_last_check);
-    let mut stmt = conn.prepare(
+    // 如果 hours_since_last_check 为 0，则不限制时间，返回所有活跃监控项
+    let sql = if hours_since_last_check == 0 {
         "SELECT id, product_id, keyword, asin, country, priority, is_active,
                 latest_organic_rank, latest_organic_page, latest_sponsored_rank, latest_sponsored_page,
                 image_url, price, reviews_count, rating, last_checked, created_at
          FROM keyword_monitoring
          WHERE product_id = ?1 AND is_active = 1
-           AND (last_checked IS NULL OR last_checked < datetime('now', ?2))
          ORDER BY
            CASE priority
              WHEN 'high' THEN 1
              WHEN 'medium' THEN 2
              ELSE 3
            END,
-           last_checked ASC NULLS FIRST"
-    )?;
+           last_checked ASC NULLS FIRST".to_string()
+    } else {
+        let hours_str = format!("-{} hours", hours_since_last_check);
+        format!(
+            "SELECT id, product_id, keyword, asin, country, priority, is_active,
+                    latest_organic_rank, latest_organic_page, latest_sponsored_rank, latest_sponsored_page,
+                    image_url, price, reviews_count, rating, last_checked, created_at
+             FROM keyword_monitoring
+             WHERE product_id = ?1 AND is_active = 1
+               AND (last_checked IS NULL OR last_checked < datetime('now', '{}'))
+             ORDER BY
+               CASE priority
+                 WHEN 'high' THEN 1
+                 WHEN 'medium' THEN 2
+                 ELSE 3
+               END,
+               last_checked ASC NULLS FIRST",
+            hours_str
+        )
+    };
+
+    let mut stmt = conn.prepare(&sql)?;
 
     let data = stmt
-        .query_map(rusqlite::params![product_id, hours_str], |row| {
+        .query_map(rusqlite::params![product_id], |row| {
             Ok(KeywordMonitoring {
                 id: row.get(0)?,
                 product_id: row.get(1)?,

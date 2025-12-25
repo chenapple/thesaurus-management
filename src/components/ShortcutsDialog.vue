@@ -18,7 +18,12 @@ const checking = ref(false);
 async function checkForUpdates() {
   checking.value = true;
   try {
-    const update = await check();
+    // 添加超时处理
+    const timeoutPromise = new Promise<null>((_, reject) => {
+      setTimeout(() => reject(new Error('请求超时')), 15000);
+    });
+
+    const update = await Promise.race([check(), timeoutPromise]);
     if (update) {
       const confirm = await ElMessageBox.confirm(
         `发现新版本 v${update.version}，是否立即更新？`,
@@ -38,7 +43,14 @@ async function checkForUpdates() {
       ElMessage.success('当前已是最新版本');
     }
   } catch (e) {
-    ElMessage.error(`检测更新失败: ${e}`);
+    const errorMsg = String(e);
+    if (errorMsg.includes('timeout') || errorMsg.includes('超时')) {
+      ElMessage.warning('检测更新超时，请检查网络连接后重试');
+    } else if (errorMsg.includes('error sending request') || errorMsg.includes('network')) {
+      ElMessage.warning('网络连接失败，请检查网络设置或防火墙');
+    } else {
+      ElMessage.error(`检测更新失败: ${e}`);
+    }
   } finally {
     checking.value = false;
   }
@@ -107,7 +119,7 @@ async function checkForUpdates() {
           <span class="app-version">v{{ appVersion }}</span>
           <el-button
             size="small"
-            link
+            type="primary"
             :loading="checking"
             @click="checkForUpdates"
           >

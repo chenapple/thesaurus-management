@@ -385,6 +385,7 @@ async fn check_all_rankings(
     hours_since_last_check: Option<i64>,
 ) -> Result<Vec<(i64, crawler::RankingResult)>, String> {
     // 获取待检测的监控记录
+    // hours_since_last_check: None 默认24小时，Some(0) 表示无时间限制
     let pending = db::get_pending_monitoring_checks(product_id, hours_since_last_check.unwrap_or(24))
         .map_err(|e| e.to_string())?;
 

@@ -477,7 +477,8 @@ export async function checkAllRankings(
   return await invoke("check_all_rankings", {
     productId,
     maxPages: maxPages || null,
-    hoursSinceLastCheck: hoursSinceLastCheck || null,
+    // 用 undefined 判断而非 || null，因为 0 是有效值（表示无时间限制）
+    hoursSinceLastCheck: hoursSinceLastCheck === undefined ? null : hoursSinceLastCheck,
   });
 }
 
