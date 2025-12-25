@@ -519,6 +519,20 @@ pub fn run() {
             let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
             db::init_db(app_data_dir).expect("Failed to initialize database");
 
+            // 自动启动调度器（如果已启用）
+            tauri::async_runtime::spawn(async {
+                // 加载设置
+                if let Ok(Some(json)) = db::get_setting("scheduler_settings") {
+                    if let Ok(settings) = serde_json::from_str::<scheduler::SchedulerSettings>(&json) {
+                        if settings.enabled {
+                            SCHEDULER.update_settings(settings).await;
+                            SCHEDULER.start().await;
+                            println!("[Scheduler] Auto-started on app launch");
+                        }
+                    }
+                }
+            });
+
             // 设置系统托盘
             let show_item = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
             let check_item = MenuItem::with_id(app, "check", "立即检测", true, None::<&str>)?;
