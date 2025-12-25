@@ -1545,7 +1545,7 @@ onMounted(() => {
 
 /* 列宽度定义 - 按关键词视图（产品列表） */
 .child-col-img {
-  width: 60px;
+  width: 65px;
   justify-content: center;
 }
 

@@ -393,24 +393,37 @@ def fetch_product_detail(session, asin: str, config: dict, headers: dict) -> dic
         if title_elem:
             info['title'] = title_elem.get_text(strip=True)
 
-        # 价格 - 优先从 a-price 容器获取
-        price_container = soup.find('span', class_='a-price')
-        if price_container:
-            price_offscreen = price_container.find('span', class_='a-offscreen')
-            if price_offscreen:
-                info['price'] = price_offscreen.get_text(strip=True)
-            else:
-                whole = price_container.find('span', class_='a-price-whole')
-                fraction = price_container.find('span', class_='a-price-fraction')
-                symbol = price_container.find('span', class_='a-price-symbol')
-                if whole:
-                    price_text = whole.get_text(strip=True).rstrip(',').rstrip('.')
-                    if fraction:
-                        price_text += ',' + fraction.get_text(strip=True)
-                    if symbol:
-                        info['price'] = symbol.get_text(strip=True) + price_text
+        # 价格 - 从主价格区域获取，避免获取到运费等其他价格
+        # 优先级：corePrice_feature_div > corePriceDisplay > apex_desktop > 全局搜索
+        price_containers = [
+            soup.find('div', id='corePrice_feature_div'),
+            soup.find('div', id='corePriceDisplay_desktop_feature_div'),
+            soup.find('div', id='apex_desktop'),
+            soup.find('div', id='buybox'),
+        ]
+
+        for container in price_containers:
+            if container and not info['price']:
+                # 在容器内查找 a-price
+                price_elem = container.find('span', class_='a-price')
+                if price_elem:
+                    price_offscreen = price_elem.find('span', class_='a-offscreen')
+                    if price_offscreen:
+                        info['price'] = price_offscreen.get_text(strip=True)
+                        break
                     else:
-                        info['price'] = price_text
+                        whole = price_elem.find('span', class_='a-price-whole')
+                        fraction = price_elem.find('span', class_='a-price-fraction')
+                        symbol = price_elem.find('span', class_='a-price-symbol')
+                        if whole:
+                            price_text = whole.get_text(strip=True).rstrip(',').rstrip('.')
+                            if fraction:
+                                price_text += ',' + fraction.get_text(strip=True)
+                            if symbol:
+                                info['price'] = symbol.get_text(strip=True) + price_text
+                            else:
+                                info['price'] = price_text
+                            break
 
         # 备选：旧版价格选择器
         if not info['price']:
@@ -421,6 +434,28 @@ def fetch_product_detail(session, asin: str, config: dict, headers: dict) -> dic
                     if price_text and any(c.isdigit() for c in price_text):
                         info['price'] = price_text
                         break
+
+        # 最后备选：从页面全局找第一个看起来像主价格的 a-price
+        # 但要排除明显是小价格的（如运费通常较小）
+        if not info['price']:
+            all_prices = soup.find_all('span', class_='a-price')
+            for price_elem in all_prices:
+                # 跳过被划掉的价格（通常有 a-text-price 类）
+                if 'a-text-price' in price_elem.get('class', []):
+                    continue
+                price_offscreen = price_elem.find('span', class_='a-offscreen')
+                if price_offscreen:
+                    price_text = price_offscreen.get_text(strip=True)
+                    # 提取数字部分判断是否是合理的主价格（通常 > 5）
+                    nums = re.sub(r'[^\d,.]', '', price_text)
+                    nums = nums.replace(',', '.')
+                    try:
+                        price_val = float(nums)
+                        if price_val > 5:  # 主产品价格通常 > 5
+                            info['price'] = price_text
+                            break
+                    except:
+                        pass
 
         # 评分
         rating_elem = soup.find('span', class_='a-icon-alt')
