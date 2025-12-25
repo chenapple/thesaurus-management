@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import { ref } from 'vue';
+import { check } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { ElMessage, ElMessageBox } from 'element-plus';
+
 defineProps<{
   visible: boolean;
   appVersion: string;
@@ -7,6 +12,37 @@ defineProps<{
 defineEmits<{
   (e: 'update:visible', value: boolean): void;
 }>();
+
+const checking = ref(false);
+
+async function checkForUpdates() {
+  checking.value = true;
+  try {
+    const update = await check();
+    if (update) {
+      const confirm = await ElMessageBox.confirm(
+        `发现新版本 v${update.version}，是否立即更新？`,
+        '有新版本可用',
+        {
+          confirmButtonText: '立即更新',
+          cancelButtonText: '稍后再说',
+          type: 'info',
+        }
+      );
+      if (confirm) {
+        ElMessage.info('正在下载更新...');
+        await update.downloadAndInstall();
+        await relaunch();
+      }
+    } else {
+      ElMessage.success('当前已是最新版本');
+    }
+  } catch (e) {
+    ElMessage.error(`检测更新失败: ${e}`);
+  } finally {
+    checking.value = false;
+  }
+}
 </script>
 
 <template>
@@ -67,7 +103,17 @@ defineEmits<{
     <template #footer>
       <div class="shortcuts-footer">
         <span class="shortcuts-tip">Windows 用户请将 ⌘ 替换为 Ctrl</span>
-        <span class="app-version">版本号：v{{ appVersion }}</span>
+        <div class="version-area">
+          <span class="app-version">v{{ appVersion }}</span>
+          <el-button
+            size="small"
+            link
+            :loading="checking"
+            @click="checkForUpdates"
+          >
+            检测更新
+          </el-button>
+        </div>
       </div>
     </template>
   </el-dialog>
@@ -138,5 +184,11 @@ defineEmits<{
 .app-version {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.version-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

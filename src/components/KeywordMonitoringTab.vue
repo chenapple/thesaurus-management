@@ -948,7 +948,7 @@ async function handleCheckRankings() {
   checkingAll.value = true;
   try {
     console.log('Calling checkAllRankings...');
-    const results = await checkAllRankings(props.productId, 3, 0);  // 0 = 无时间限制
+    const results = await checkAllRankings(props.productId, 3, 99999);  // 大值 = 无时间限制
     console.log('checkAllRankings results:', results);
 
     if (results.length === 0) {
@@ -1534,7 +1534,7 @@ onMounted(() => {
 }
 
 .child-col-trend {
-  width: 80px;
+  width: 90px;
   justify-content: center;
 }
 
@@ -1545,7 +1545,7 @@ onMounted(() => {
 
 /* 列宽度定义 - 按关键词视图（产品列表） */
 .child-col-img {
-  width: 65px;
+  width: 70px;
   justify-content: center;
 }
 
