@@ -393,30 +393,34 @@ def fetch_product_detail(session, asin: str, config: dict, headers: dict) -> dic
         if title_elem:
             info['title'] = title_elem.get_text(strip=True)
 
-        # 价格 - 多种选择器
-        price_elem = None
-        price_selectors = [
-            ('span', {'class': 'a-price-whole'}),
-            ('span', {'id': 'priceblock_ourprice'}),
-            ('span', {'id': 'priceblock_dealprice'}),
-            ('span', {'class': 'a-offscreen'}),
-        ]
-        for tag, attrs in price_selectors:
-            price_elem = soup.find(tag, attrs)
-            if price_elem:
-                price_text = price_elem.get_text(strip=True)
-                if price_text and any(c.isdigit() for c in price_text):
-                    # 如果是 a-price-whole，需要加上小数部分
-                    if 'a-price-whole' in str(attrs):
-                        fraction = soup.find('span', class_='a-price-fraction')
-                        symbol = soup.find('span', class_='a-price-symbol')
-                        if symbol and fraction:
-                            info['price'] = f"{symbol.get_text(strip=True)}{price_text}{fraction.get_text(strip=True)}"
-                        else:
-                            info['price'] = price_text
+        # 价格 - 优先从 a-price 容器获取
+        price_container = soup.find('span', class_='a-price')
+        if price_container:
+            price_offscreen = price_container.find('span', class_='a-offscreen')
+            if price_offscreen:
+                info['price'] = price_offscreen.get_text(strip=True)
+            else:
+                whole = price_container.find('span', class_='a-price-whole')
+                fraction = price_container.find('span', class_='a-price-fraction')
+                symbol = price_container.find('span', class_='a-price-symbol')
+                if whole:
+                    price_text = whole.get_text(strip=True).rstrip(',').rstrip('.')
+                    if fraction:
+                        price_text += ',' + fraction.get_text(strip=True)
+                    if symbol:
+                        info['price'] = symbol.get_text(strip=True) + price_text
                     else:
                         info['price'] = price_text
-                    break
+
+        # 备选：旧版价格选择器
+        if not info['price']:
+            for selector_id in ['priceblock_ourprice', 'priceblock_dealprice', 'priceblock_saleprice']:
+                price_elem = soup.find('span', id=selector_id)
+                if price_elem:
+                    price_text = price_elem.get_text(strip=True)
+                    if price_text and any(c.isdigit() for c in price_text):
+                        info['price'] = price_text
+                        break
 
         # 评分
         rating_elem = soup.find('span', class_='a-icon-alt')
