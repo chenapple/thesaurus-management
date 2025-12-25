@@ -14,6 +14,15 @@ defineEmits<{
 }>();
 
 const checking = ref(false);
+const downloading = ref(false);
+const downloadProgress = ref(0);
+const downloadTotal = ref(0);
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+}
 
 async function checkForUpdates() {
   checking.value = true;
@@ -35,14 +44,29 @@ async function checkForUpdates() {
         }
       );
       if (confirm) {
-        ElMessage.info('正在下载更新...');
-        await update.downloadAndInstall();
+        downloading.value = true;
+        downloadProgress.value = 0;
+        downloadTotal.value = 0;
+
+        await update.downloadAndInstall((event) => {
+          if (event.event === 'Started' && event.data.contentLength) {
+            downloadTotal.value = event.data.contentLength;
+          } else if (event.event === 'Progress') {
+            downloadProgress.value += event.data.chunkLength;
+          } else if (event.event === 'Finished') {
+            downloadProgress.value = downloadTotal.value;
+          }
+        });
+
+        downloading.value = false;
+        ElMessage.success('更新下载完成，正在安装...');
         await relaunch();
       }
     } else {
       ElMessage.success('当前已是最新版本');
     }
   } catch (e) {
+    downloading.value = false;
     const errorMsg = String(e);
     if (errorMsg.includes('timeout') || errorMsg.includes('超时')) {
       ElMessage.warning('检测更新超时，请检查网络连接后重试');
@@ -116,15 +140,30 @@ async function checkForUpdates() {
       <div class="shortcuts-footer">
         <span class="shortcuts-tip">Windows 用户请将 ⌘ 替换为 Ctrl</span>
         <div class="version-area">
-          <span class="app-version">v{{ appVersion }}</span>
-          <el-button
-            size="small"
-            type="primary"
-            :loading="checking"
-            @click="checkForUpdates"
-          >
-            检测更新
-          </el-button>
+          <template v-if="downloading">
+            <div class="download-progress">
+              <el-progress
+                :percentage="downloadTotal > 0 ? Math.round(downloadProgress / downloadTotal * 100) : 0"
+                :stroke-width="8"
+                :show-text="false"
+                style="width: 120px"
+              />
+              <span class="download-text">
+                {{ formatBytes(downloadProgress) }} / {{ formatBytes(downloadTotal) }}
+              </span>
+            </div>
+          </template>
+          <template v-else>
+            <span class="app-version">v{{ appVersion }}</span>
+            <el-button
+              size="small"
+              type="primary"
+              :loading="checking"
+              @click="checkForUpdates"
+            >
+              检测更新
+            </el-button>
+          </template>
         </div>
       </div>
     </template>
@@ -202,5 +241,17 @@ async function checkForUpdates() {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.download-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.download-text {
+  font-size: 11px;
+  color: var(--text-muted);
 }
 </style>
