@@ -451,9 +451,11 @@ pub async fn install_chromium(app: tauri::AppHandle, python_path: &str) -> Resul
         }
     });
 
-    // 执行实际安装
+    // 执行实际安装 - 必须重定向输出，否则管道满了会阻塞
     let mut cmd = Command::new(python_path);
-    cmd.args(["-m", "playwright", "install", "chromium"]);
+    cmd.args(["-m", "playwright", "install", "chromium"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
 
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
