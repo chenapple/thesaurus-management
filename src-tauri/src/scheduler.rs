@@ -207,15 +207,74 @@ impl Scheduler {
                     };
 
                     if should_check {
-                        // 获取所有需要检测的产品
+                        // 收集所有需要检测的关键词
+                        let mut all_pending = Vec::new();
+
                         if let Ok(products) = db::get_products() {
                             for product in products {
-                                // 检查产品国家是否在检测时间窗口
                                 let country = product.country.as_deref().unwrap_or("US");
                                 if is_in_check_window(country, &current_settings) {
-                                    // 执行检测
-                                    let _ = run_product_check(product.id, &current_settings).await;
+                                    if let Ok(pending) = db::get_pending_monitoring_checks(product.id, 4) {
+                                        all_pending.extend(pending);
+                                    }
                                 }
+                            }
+                        }
+
+                        if !all_pending.is_empty() {
+                            let total = all_pending.len() as i64;
+
+                            // 创建任务记录
+                            let task_id = db::create_task_log("auto", total).ok();
+                            println!("[Scheduler] 开始定时检测，共 {} 个关键词，任务ID: {:?}", total, task_id);
+
+                            let mut success_count = 0i64;
+                            let mut failed_count = 0i64;
+
+                            for monitoring in all_pending {
+                                // 获取上次排名（暂未使用，后续可用于计算排名变化）
+                                let _old_rank = db::get_previous_ranking(monitoring.id).ok().flatten();
+
+                                // 执行检测
+                                let result = crawler::search_keyword(
+                                    monitoring.keyword.clone(),
+                                    monitoring.asin.clone(),
+                                    monitoring.country.clone(),
+                                    5,
+                                ).await;
+
+                                if result.error.is_none() {
+                                    // 更新数据库
+                                    let product_info = result.product_info.as_ref();
+                                    let _ = db::update_ranking_result(
+                                        monitoring.id,
+                                        result.organic_rank,
+                                        result.organic_page,
+                                        result.sponsored_rank,
+                                        result.sponsored_page,
+                                        product_info.and_then(|p| p.image_url.clone()),
+                                        product_info.and_then(|p| p.price.clone()),
+                                        product_info.and_then(|p| p.reviews_count),
+                                        product_info.and_then(|p| p.rating),
+                                    );
+                                    success_count += 1;
+                                } else {
+                                    failed_count += 1;
+                                }
+
+                                // 更新任务进度
+                                if let Some(tid) = task_id {
+                                    let _ = db::update_task_progress(tid, success_count, failed_count);
+                                }
+
+                                // 关键词间延迟
+                                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                            }
+
+                            // 完成任务记录
+                            if let Some(tid) = task_id {
+                                let _ = db::complete_task_log(tid, success_count, failed_count);
+                                println!("[Scheduler] 定时检测完成，成功: {}, 失败: {}", success_count, failed_count);
                             }
                         }
 
@@ -246,71 +305,6 @@ impl Scheduler {
             current_task: None,
         }
     }
-}
-
-// 执行产品检测
-async fn run_product_check(product_id: i64, settings: &SchedulerSettings) -> Result<Vec<RankChange>, String> {
-    let mut changes = Vec::new();
-
-    // 获取待检测的监控记录
-    let pending = db::get_pending_monitoring_checks(product_id, 4) // 4小时内检测过的跳过
-        .map_err(|e| e.to_string())?;
-
-    if pending.is_empty() {
-        return Ok(changes);
-    }
-
-    for monitoring in pending {
-        // 获取上次排名
-        let old_rank = db::get_previous_ranking(monitoring.id)
-            .ok()
-            .flatten();
-
-        // 执行检测
-        let result = crawler::search_keyword(
-            monitoring.keyword.clone(),
-            monitoring.asin.clone(),
-            monitoring.country.clone(),
-            3,
-        )
-        .await;
-
-        if result.error.is_none() {
-            // 更新数据库
-            let product_info = result.product_info.as_ref();
-            db::update_ranking_result(
-                monitoring.id,
-                result.organic_rank,
-                result.organic_page,
-                result.sponsored_rank,
-                result.sponsored_page,
-                product_info.and_then(|p| p.image_url.clone()),
-                product_info.and_then(|p| p.price.clone()),
-                product_info.and_then(|p| p.reviews_count),
-                product_info.and_then(|p| p.rating),
-            )
-            .ok();
-
-            // 计算排名变化
-            if let Some((change, change_type)) = calculate_rank_change(old_rank, result.organic_rank) {
-                if should_notify(change, &change_type, settings) {
-                    changes.push(RankChange {
-                        keyword: monitoring.keyword.clone(),
-                        country: monitoring.country.clone(),
-                        old_rank,
-                        new_rank: result.organic_rank,
-                        change,
-                        change_type,
-                    });
-                }
-            }
-        }
-
-        // 关键词间延迟
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-    }
-
-    Ok(changes)
 }
 
 // 全局调度器实例

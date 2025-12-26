@@ -342,7 +342,7 @@ async fn check_single_ranking(
         monitoring.keyword.clone(),
         monitoring.asin.clone(),
         monitoring.country.clone(),
-        max_pages.unwrap_or(3),
+        max_pages.unwrap_or(5),
     )
     .await;
 
@@ -380,6 +380,7 @@ async fn check_single_ranking(
 // 批量检测排名（带进度回调）
 #[tauri::command]
 async fn check_all_rankings(
+    app: tauri::AppHandle,
     product_id: i64,
     max_pages: Option<i64>,
     hours_since_last_check: Option<i64>,
@@ -393,6 +394,13 @@ async fn check_all_rankings(
         return Ok(Vec::new());
     }
 
+    let total = pending.len() as i64;
+
+    // 发送开始事件
+    app.emit("ranking-check-start", serde_json::json!({
+        "total": total
+    })).ok();
+
     // 准备检测数据
     let keywords: Vec<(i64, String, String, String)> = pending
         .into_iter()
@@ -400,11 +408,17 @@ async fn check_all_rankings(
         .collect();
 
     // 执行批量检测
+    let app_clone = app.clone();
     let results = crawler::check_rankings_batch(
         keywords,
-        max_pages.unwrap_or(3),
-        |_current, _total, _message| {
-            // 进度回调（可以通过 Tauri event 发送到前端）
+        max_pages.unwrap_or(5),
+        move |current, total, message| {
+            // 发送进度事件到前端
+            app_clone.emit("ranking-check-progress", serde_json::json!({
+                "current": current,
+                "total": total,
+                "message": message
+            })).ok();
         },
     )
     .await;
@@ -438,6 +452,13 @@ async fn check_all_rankings(
             }
         }
     }
+
+    // 发送完成事件
+    app.emit("ranking-check-complete", serde_json::json!({
+        "total": results.len(),
+        "success": results.iter().filter(|(_, r)| r.error.is_none()).count(),
+        "failed": results.iter().filter(|(_, r)| r.error.is_some()).count()
+    })).ok();
 
     Ok(results)
 }
@@ -503,6 +524,16 @@ fn stop_scheduler() -> Result<(), String> {
 #[tauri::command]
 async fn get_scheduler_status() -> Result<SchedulerStatus, String> {
     Ok(SCHEDULER.get_status().await)
+}
+
+#[tauri::command]
+fn get_task_logs(limit: Option<i64>) -> Result<Vec<db::SchedulerTaskLog>, String> {
+    db::get_task_logs(limit.unwrap_or(20)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_running_task() -> Result<Option<db::SchedulerTaskLog>, String> {
+    db::get_running_task().map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -646,6 +677,8 @@ pub fn run() {
             start_scheduler,
             stop_scheduler,
             get_scheduler_status,
+            get_task_logs,
+            get_running_task,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

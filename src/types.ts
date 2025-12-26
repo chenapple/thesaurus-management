@@ -175,6 +175,7 @@ export interface RankingResult {
     rating: number | null;
     reviews_count: number | null;
     image_url: string | null;
+    availability: string | null;  // 商品可用性信息
   } | null;
 
   organic_top_50: string[];
@@ -182,6 +183,7 @@ export interface RankingResult {
 
   checked_at: string;
   error: string | null;
+  warning: string | null;  // 警告信息（如地理限制）
 }
 
 // 国家选项（使用SVG国旗）
@@ -235,6 +237,19 @@ export interface SchedulerStatus {
   last_check_time: string | null;
   next_check_time: string | null;
   current_task: string | null;
+}
+
+// 任务记录
+export interface TaskLog {
+  id: number;
+  started_at: string;
+  ended_at: string | null;
+  status: 'running' | 'completed' | 'failed';
+  total_keywords: number;
+  success_count: number;
+  failed_count: number;
+  trigger_type: 'auto' | 'manual';
+  error_message: string | null;
 }
 
 // 默认调度器设置

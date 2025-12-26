@@ -117,6 +117,52 @@
       <el-form-item v-if="status.last_check_time" label="上次检测">
         {{ formatDateTime(status.last_check_time) }}
       </el-form-item>
+
+      <!-- 任务记录 -->
+      <el-divider content-position="left">
+        任务记录
+        <el-button link type="primary" size="small" @click="loadTaskLogs" style="margin-left: 8px;">
+          刷新
+        </el-button>
+      </el-divider>
+
+      <div class="task-logs" v-loading="loadingLogs">
+        <el-empty v-if="taskLogs.length === 0" description="暂无任务记录" :image-size="60" />
+        <el-table v-else :data="taskLogs" size="small" max-height="200">
+          <el-table-column label="时间" width="140">
+            <template #default="{ row }">
+              {{ formatDateTime(row.started_at) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="80">
+            <template #default="{ row }">
+              <el-tag
+                :type="row.status === 'completed' ? 'success' : row.status === 'running' ? 'warning' : 'danger'"
+                size="small"
+              >
+                {{ row.status === 'completed' ? '完成' : row.status === 'running' ? '进行中' : '失败' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="关键词" width="80">
+            <template #default="{ row }">
+              {{ row.total_keywords }}
+            </template>
+          </el-table-column>
+          <el-table-column label="成功/失败" width="90">
+            <template #default="{ row }">
+              <span class="success-count">{{ row.success_count }}</span>
+              /
+              <span class="failed-count">{{ row.failed_count }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="耗时">
+            <template #default="{ row }">
+              {{ row.ended_at ? formatDuration(row.started_at, row.ended_at) : '-' }}
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
     </el-form>
 
     <template #footer>
@@ -137,8 +183,9 @@ import {
   getSchedulerStatus,
   startScheduler,
   stopScheduler,
+  getTaskLogs,
 } from '../api';
-import type { SchedulerSettings, SchedulerStatus } from '../types';
+import type { SchedulerSettings, SchedulerStatus, TaskLog } from '../types';
 import { DEFAULT_SCHEDULER_SETTINGS } from '../types';
 
 const props = defineProps<{
@@ -161,6 +208,21 @@ const status = reactive<SchedulerStatus>({
   current_task: null,
 });
 
+const loadingLogs = ref(false);
+const taskLogs = ref<TaskLog[]>([]);
+
+// 加载任务记录
+async function loadTaskLogs() {
+  loadingLogs.value = true;
+  try {
+    taskLogs.value = await getTaskLogs(10);
+  } catch (e) {
+    console.error('加载任务记录失败:', e);
+  } finally {
+    loadingLogs.value = false;
+  }
+}
+
 // 加载设置
 async function loadSettings() {
   loading.value = true;
@@ -172,6 +234,9 @@ async function loadSettings() {
 
     Object.assign(settings, savedSettings);
     Object.assign(status, savedStatus);
+
+    // 同时加载任务记录
+    loadTaskLogs();
   } catch (e) {
     console.error('加载设置失败:', e);
   } finally {
@@ -219,6 +284,26 @@ function formatDateTime(dateStr: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+// 格式化耗时
+function formatDuration(startStr: string, endStr: string): string {
+  const start = new Date(startStr);
+  const end = new Date(endStr);
+  const diffMs = end.getTime() - start.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+
+  if (diffSec < 60) {
+    return `${diffSec}秒`;
+  } else if (diffSec < 3600) {
+    const min = Math.floor(diffSec / 60);
+    const sec = diffSec % 60;
+    return `${min}分${sec}秒`;
+  } else {
+    const hour = Math.floor(diffSec / 3600);
+    const min = Math.floor((diffSec % 3600) / 60);
+    return `${hour}小时${min}分`;
+  }
 }
 
 // 监听对话框打开
@@ -270,5 +355,18 @@ watch(() => props.modelValue, (val) => {
 .el-divider :deep(.el-divider__text) {
   font-size: 13px;
   color: var(--el-text-color-secondary);
+}
+
+.task-logs {
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
+.success-count {
+  color: var(--el-color-success);
+}
+
+.failed-count {
+  color: var(--el-color-danger);
 }
 </style>

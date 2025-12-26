@@ -80,6 +80,20 @@
       </div>
     </div>
 
+    <!-- 检测进度条 -->
+    <div v-if="checkingAll && checkProgress.total > 0" class="progress-bar-container">
+      <div class="progress-info">
+        <span class="progress-text">检测中 ({{ checkProgress.current }}/{{ checkProgress.total }})</span>
+        <span class="progress-message">{{ checkProgress.message }}</span>
+      </div>
+      <el-progress
+        :percentage="Math.round((checkProgress.current / checkProgress.total) * 100)"
+        :stroke-width="8"
+        :show-text="true"
+        status="success"
+      />
+    </div>
+
     <!-- 筛选栏 -->
     <div class="filter-bar">
       <el-select
@@ -152,7 +166,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="图片" width="60">
+        <el-table-column label="图片" width="70" align="center">
           <template #default="{ row }">
             <el-image
               v-if="row.image_url"
@@ -174,7 +188,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="站点" width="70" align="center">
+        <el-table-column label="站点" width="85" align="center">
           <template #default="{ row }">
             <span class="country-tag">
               <span class="country-flag-tiny" v-html="getCountryFlag(row.country)"></span>
@@ -185,7 +199,7 @@
 
         <el-table-column label="ASIN" prop="asin" width="120" />
 
-        <el-table-column label="价格" prop="price" width="80" align="right">
+        <el-table-column label="价格" prop="price" width="80" align="center">
           <template #default="{ row }">
             <span>{{ row.price ?? '-' }}</span>
           </template>
@@ -223,10 +237,10 @@
           </template>
         </el-table-column>
 
-        <el-table-column width="120" align="center">
+        <el-table-column width="130" align="center">
           <template #header>
             <el-tooltip content="最近7天自然排名趋势" placement="top">
-              <span class="header-with-tip">趋势</span>
+              <span class="header-with-tip">自然位趋势</span>
             </el-tooltip>
           </template>
           <template #default="{ row }">
@@ -257,10 +271,10 @@
           </template>
         </el-table-column>
 
-        <el-table-column width="120" align="center">
+        <el-table-column width="130" align="center">
           <template #header>
             <el-tooltip content="最近7天广告排名趋势" placement="top">
-              <span class="header-with-tip">趋势</span>
+              <span class="header-with-tip">广告位趋势</span>
             </el-tooltip>
           </template>
           <template #default="{ row }">
@@ -573,9 +587,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch } from 'vue';
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Refresh, Delete, Search, ArrowDown } from '@element-plus/icons-vue';
+import { listen } from '@tauri-apps/api/event';
+import type { UnlistenFn } from '@tauri-apps/api/event';
 import {
   getKeywordMonitoringList,
   updateKeywordMonitoring,
@@ -613,6 +629,17 @@ const selectedIds = ref<number[]>([]);
 const searchText = ref('');
 const organicSparklines = ref<Record<number, (number | null)[]>>({});
 const sponsoredSparklines = ref<Record<number, (number | null)[]>>({});
+
+// 进度条状态
+const checkProgress = reactive({
+  current: 0,
+  total: 0,
+  message: '',
+});
+
+// 事件监听器
+let unlistenProgress: UnlistenFn | null = null;
+let unlistenComplete: UnlistenFn | null = null;
 
 const stats = reactive<MonitoringStats>({
   total: 0,
@@ -923,6 +950,12 @@ async function handleCheckSingle(row: KeywordMonitoring) {
     const result = await checkSingleRanking(row.id, 3);
     if (result.error) {
       ElMessage.warning(`检测完成，但有错误: ${result.error}`);
+    } else if (result.warning) {
+      // 有警告信息（如地理限制）
+      ElMessage.warning({
+        message: `自然排名 ${result.organic_rank ?? '-'}, 广告排名 ${result.sponsored_rank ?? '-'}。${result.warning}`,
+        duration: 5000,
+      });
     } else {
       ElMessage.success(`检测完成: 自然排名 ${result.organic_rank ?? '-'}, 广告排名 ${result.sponsored_rank ?? '-'}`);
     }
@@ -1072,9 +1105,44 @@ watch(() => props.productId, () => {
   loadStats();
 });
 
+// 设置事件监听器
+async function setupEventListeners() {
+  // 监听进度事件
+  unlistenProgress = await listen<{ current: number; total: number; message: string }>(
+    'ranking-check-progress',
+    (event) => {
+      checkProgress.current = event.payload.current;
+      checkProgress.total = event.payload.total;
+      checkProgress.message = event.payload.message;
+    }
+  );
+
+  // 监听完成事件
+  unlistenComplete = await listen<{ total: number; success: number; failed: number }>(
+    'ranking-check-complete',
+    () => {
+      // 完成后重置进度
+      checkProgress.current = 0;
+      checkProgress.total = 0;
+      checkProgress.message = '';
+    }
+  );
+}
+
 onMounted(() => {
   loadData();
   loadStats();
+  setupEventListeners();
+});
+
+onUnmounted(() => {
+  // 清理事件监听器
+  if (unlistenProgress) {
+    unlistenProgress();
+  }
+  if (unlistenComplete) {
+    unlistenComplete();
+  }
 });
 </script>
 
@@ -1129,6 +1197,36 @@ onMounted(() => {
 .toolbar-left {
   display: flex;
   gap: 8px;
+}
+
+/* 进度条样式 */
+.progress-bar-container {
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.progress-text {
+  font-weight: 600;
+  color: var(--el-color-success);
+}
+
+.progress-message {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .filter-bar {

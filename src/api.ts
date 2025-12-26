@@ -484,7 +484,7 @@ export async function checkAllRankings(
 
 // ==================== 调度器管理 ====================
 
-import type { SchedulerSettings, SchedulerStatus } from "./types";
+import type { SchedulerSettings, SchedulerStatus, TaskLog } from "./types";
 
 /**
  * 获取调度器设置
@@ -519,4 +519,18 @@ export async function stopScheduler(): Promise<void> {
  */
 export async function getSchedulerStatus(): Promise<SchedulerStatus> {
   return await invoke("get_scheduler_status");
+}
+
+/**
+ * 获取任务记录列表
+ */
+export async function getTaskLogs(limit?: number): Promise<TaskLog[]> {
+  return await invoke("get_task_logs", { limit });
+}
+
+/**
+ * 获取正在运行的任务
+ */
+export async function getRunningTask(): Promise<TaskLog | null> {
+  return await invoke("get_running_task");
 }

@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::process::Command;
-use std::time::Duration;
-use rand::Rng;
+use std::process::{Command, Stdio};
+use std::io::{BufRead, BufReader, Write};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -28,6 +27,7 @@ pub struct RankingResult {
 
     pub checked_at: String,
     pub error: Option<String>,
+    pub warning: Option<String>,  // 警告信息（如地理限制）
 }
 
 // 产品详细信息
@@ -39,29 +39,30 @@ pub struct ProductInfo {
     pub rating: Option<f64>,
     pub reviews_count: Option<i64>,
     pub image_url: Option<String>,
+    pub availability: Option<String>,  // 商品可用性信息
 }
 
-// 获取 Python 脚本路径
+// 获取 Python 脚本路径 (Playwright 版本)
 fn get_script_path() -> Result<std::path::PathBuf, String> {
     // 尝试多个可能的路径
     let possible_paths = vec![
         // 开发环境
         std::env::current_dir()
-            .map(|p| p.join("scripts").join("amazon_crawler.py"))
+            .map(|p| p.join("scripts").join("amazon_crawler_playwright.py"))
             .ok(),
         // Tauri 资源目录
         std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-            .map(|p| p.join("scripts").join("amazon_crawler.py")),
+            .map(|p| p.join("scripts").join("amazon_crawler_playwright.py")),
         // macOS .app 包内
         std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|p| p.to_path_buf()))
             .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-            .map(|p| p.join("Resources").join("scripts").join("amazon_crawler.py")),
+            .map(|p| p.join("Resources").join("scripts").join("amazon_crawler_playwright.py")),
         // 直接在 src-tauri 目录
-        Some(std::path::PathBuf::from("src-tauri/scripts/amazon_crawler.py")),
+        Some(std::path::PathBuf::from("src-tauri/scripts/amazon_crawler_playwright.py")),
     ];
 
     for path in possible_paths.into_iter().flatten() {
@@ -70,7 +71,7 @@ fn get_script_path() -> Result<std::path::PathBuf, String> {
         }
     }
 
-    Err("找不到 Python 爬虫脚本 amazon_crawler.py".to_string())
+    Err("找不到 Python 爬虫脚本 amazon_crawler_playwright.py".to_string())
 }
 
 // 检查 Python 是否可用
@@ -95,13 +96,12 @@ fn check_python() -> Result<String, String> {
     Err("未找到 Python。请确保已安装 Python 3 并添加到 PATH".to_string())
 }
 
-// 检查依赖是否安装
+// 检查依赖是否安装 (Playwright 版本)
 fn check_dependencies(python_cmd: &str) -> Result<(), String> {
     let check_script = r#"
 import sys
 try:
-    import cloudscraper
-    import bs4
+    from playwright.async_api import async_playwright
     print("ok")
 except ImportError as e:
     print(f"missing:{e}")
@@ -123,7 +123,7 @@ except ImportError as e:
         Ok(())
     } else {
         Err(format!(
-            "缺少 Python 依赖。请运行: {} -m pip install cloudscraper beautifulsoup4",
+            "缺少 Playwright 依赖。请运行: {} -m pip install playwright && playwright install chromium",
             python_cmd
         ))
     }
@@ -151,7 +151,9 @@ fn call_python_crawler(
         .arg(keyword)
         .arg(target_asin)
         .arg(country)
-        .arg(max_pages.to_string());
+        .arg(max_pages.to_string())
+        .arg("none")   // proxy
+        .arg("false"); // headless=false，有头模式（窗口隐藏到屏幕外）
 
     // Windows: 隐藏命令行窗口
     #[cfg(windows)]
@@ -200,6 +202,7 @@ pub async fn search_keyword(
                 sponsored_top_20: Vec::new(),
                 checked_at: chrono::Utc::now().to_rfc3339(),
                 error: Some(e),
+                warning: None,
             },
         }
     })
@@ -217,36 +220,158 @@ pub async fn search_keyword(
         sponsored_top_20: Vec::new(),
         checked_at: chrono::Utc::now().to_rfc3339(),
         error: Some(format!("任务执行失败: {}", e)),
+        warning: None,
     })
 }
 
-// 批量检测接口
+// 批量进度消息
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+enum BatchMessage {
+    #[serde(rename = "progress")]
+    Progress {
+        monitoring_id: i64,
+        result: RankingResult,
+    },
+    #[serde(rename = "complete")]
+    Complete {
+        total: i64,
+    },
+}
+
+// 批量检测接口 - 优化版本，复用浏览器实例
 pub async fn check_rankings_batch(
     keywords: Vec<(i64, String, String, String)>, // (monitoring_id, keyword, asin, country)
     max_pages: i64,
-    progress_callback: impl Fn(i64, i64, String),
+    progress_callback: impl Fn(i64, i64, String) + Send + 'static,
 ) -> Vec<(i64, RankingResult)> {
     let total = keywords.len() as i64;
-    let mut results = Vec::new();
 
-    for (index, (monitoring_id, keyword, asin, country)) in keywords.into_iter().enumerate() {
-        let current = (index + 1) as i64;
-        progress_callback(current, total, format!("正在检测: {}", keyword));
-
-        let result = search_keyword(keyword, asin, country, max_pages).await;
-        results.push((monitoring_id, result));
-
-        // 关键词间延迟
-        if current < total {
-            let delay_ms = {
-                let mut rng = rand::thread_rng();
-                rng.gen_range(5000..10000)
-            };
-            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-        }
+    if total == 0 {
+        return Vec::new();
     }
 
-    results
+    // 尝试使用批量模式
+    match call_python_crawler_batch(keywords.clone(), max_pages, total, progress_callback).await {
+        Ok(results) => results,
+        Err(e) => {
+            // 批量模式失败，返回错误结果
+            eprintln!("[Batch] 批量检测失败: {}", e);
+            keywords.into_iter().map(|(id, keyword, asin, country)| {
+                (id, RankingResult {
+                    keyword,
+                    target_asin: asin,
+                    country,
+                    organic_rank: None,
+                    organic_page: None,
+                    sponsored_rank: None,
+                    sponsored_page: None,
+                    product_info: None,
+                    organic_top_50: Vec::new(),
+                    sponsored_top_20: Vec::new(),
+                    checked_at: chrono::Utc::now().to_rfc3339(),
+                    error: Some(e.clone()),
+                    warning: None,
+                })
+            }).collect()
+        }
+    }
+}
+
+// 调用 Python 脚本批量处理
+async fn call_python_crawler_batch(
+    keywords: Vec<(i64, String, String, String)>,
+    max_pages: i64,
+    total: i64,
+    progress_callback: impl Fn(i64, i64, String) + Send + 'static,
+) -> Result<Vec<(i64, RankingResult)>, String> {
+    // 检查 Python
+    let python_cmd = check_python()?;
+
+    // 检查依赖
+    check_dependencies(&python_cmd)?;
+
+    // 获取脚本路径
+    let script_path = get_script_path()?;
+
+    // 准备输入数据: [[id, keyword, asin, country], ...]
+    let input_data: Vec<(i64, &str, &str, &str)> = keywords.iter()
+        .map(|(id, kw, asin, country)| (*id, kw.as_str(), asin.as_str(), country.as_str()))
+        .collect();
+    let input_json = serde_json::to_string(&input_data)
+        .map_err(|e| format!("序列化输入数据失败: {}", e))?;
+
+    // 在阻塞任务中执行
+    tokio::task::spawn_blocking(move || {
+        // 调用 Python 脚本 --batch 模式
+        let mut cmd = Command::new(&python_cmd);
+        cmd.arg(&script_path)
+            .arg("--batch")
+            .arg("false")  // headless=false，有头模式（窗口隐藏到屏幕外）
+            .arg(max_pages.to_string())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Windows: 隐藏命令行窗口
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        let mut child = cmd.spawn()
+            .map_err(|e| format!("启动 Python 脚本失败: {}", e))?;
+
+        // 写入 stdin
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(input_json.as_bytes())
+                .map_err(|e| format!("写入 stdin 失败: {}", e))?;
+        }
+
+        // 读取 stdout
+        let stdout = child.stdout.take()
+            .ok_or_else(|| "无法获取 stdout".to_string())?;
+        let reader = BufReader::new(stdout);
+
+        let mut results: Vec<(i64, RankingResult)> = Vec::new();
+        let mut completed_count = 0i64;
+
+        for line in reader.lines() {
+            let line = line.map_err(|e| format!("读取输出失败: {}", e))?;
+            let line = line.trim();
+
+            if line.is_empty() {
+                continue;
+            }
+
+            // 尝试解析为 JSON
+            match serde_json::from_str::<BatchMessage>(line) {
+                Ok(BatchMessage::Progress { monitoring_id, result }) => {
+                    completed_count += 1;
+                    progress_callback(completed_count, total, format!("已完成: {}", result.keyword));
+                    results.push((monitoring_id, result));
+                }
+                Ok(BatchMessage::Complete { total: _ }) => {
+                    // 批量处理完成
+                    break;
+                }
+                Err(_) => {
+                    // 可能是调试输出，忽略
+                    eprintln!("[Batch] 忽略非 JSON 输出: {}", line);
+                }
+            }
+        }
+
+        // 等待进程结束
+        let status = child.wait()
+            .map_err(|e| format!("等待进程结束失败: {}", e))?;
+
+        if !status.success() {
+            eprintln!("[Batch] Python 脚本非正常退出: {:?}", status);
+        }
+
+        Ok(results)
+    })
+    .await
+    .map_err(|e| format!("任务执行失败: {}", e))?
 }
 
 #[cfg(test)]

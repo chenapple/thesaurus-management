@@ -2123,6 +2123,20 @@ pub fn init_monitoring_tables(conn: &Connection) -> Result<()> {
             UNIQUE(keyword, country, snapshot_date)
         );
 
+        -- 定时任务记录表
+        CREATE TABLE IF NOT EXISTS scheduler_task_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at TIMESTAMP NOT NULL,
+            ended_at TIMESTAMP,
+            status TEXT NOT NULL DEFAULT 'running',  -- running, completed, failed
+            total_keywords INTEGER DEFAULT 0,
+            success_count INTEGER DEFAULT 0,
+            failed_count INTEGER DEFAULT 0,
+            trigger_type TEXT DEFAULT 'auto',  -- auto(定时), manual(手动)
+            error_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
         -- 索引
         CREATE INDEX IF NOT EXISTS idx_keyword_monitoring_product ON keyword_monitoring(product_id);
         CREATE INDEX IF NOT EXISTS idx_keyword_monitoring_active ON keyword_monitoring(is_active);
@@ -2130,6 +2144,7 @@ pub fn init_monitoring_tables(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_ranking_history_monitoring ON keyword_ranking_history(monitoring_id);
         CREATE INDEX IF NOT EXISTS idx_ranking_history_date ON keyword_ranking_history(check_date);
         CREATE INDEX IF NOT EXISTS idx_ranking_snapshots_keyword ON ranking_snapshots(keyword, country);
+        CREATE INDEX IF NOT EXISTS idx_scheduler_task_logs_started ON scheduler_task_logs(started_at);
         "
     )?;
     Ok(())
@@ -2749,4 +2764,124 @@ pub fn get_monitoring_sparklines(product_id: i64, days: i64) -> Result<Vec<Monit
         .collect();
 
     Ok(sparklines)
+}
+
+// ============ 定时任务记录相关 ============
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerTaskLog {
+    pub id: i64,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub status: String,
+    pub total_keywords: i64,
+    pub success_count: i64,
+    pub failed_count: i64,
+    pub trigger_type: String,
+    pub error_message: Option<String>,
+}
+
+// 创建新的任务记录（开始任务时调用）
+pub fn create_task_log(trigger_type: &str, total_keywords: i64) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT INTO scheduler_task_logs (started_at, status, total_keywords, trigger_type)
+         VALUES (datetime('now'), 'running', ?1, ?2)",
+        rusqlite::params![total_keywords, trigger_type],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+// 更新任务进度
+pub fn update_task_progress(task_id: i64, success_count: i64, failed_count: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE scheduler_task_logs SET success_count = ?1, failed_count = ?2 WHERE id = ?3",
+        rusqlite::params![success_count, failed_count, task_id],
+    )?;
+    Ok(())
+}
+
+// 完成任务记录
+pub fn complete_task_log(task_id: i64, success_count: i64, failed_count: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE scheduler_task_logs
+         SET ended_at = datetime('now'), status = 'completed',
+             success_count = ?1, failed_count = ?2
+         WHERE id = ?3",
+        rusqlite::params![success_count, failed_count, task_id],
+    )?;
+    Ok(())
+}
+
+// 标记任务失败
+pub fn fail_task_log(task_id: i64, error_message: &str) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE scheduler_task_logs
+         SET ended_at = datetime('now'), status = 'failed', error_message = ?1
+         WHERE id = ?2",
+        rusqlite::params![error_message, task_id],
+    )?;
+    Ok(())
+}
+
+// 获取任务记录列表（最近N条）
+pub fn get_task_logs(limit: i64) -> Result<Vec<SchedulerTaskLog>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, started_at, ended_at, status, total_keywords,
+                success_count, failed_count, trigger_type, error_message
+         FROM scheduler_task_logs
+         ORDER BY started_at DESC
+         LIMIT ?1"
+    )?;
+
+    let logs = stmt.query_map([limit], |row| {
+        Ok(SchedulerTaskLog {
+            id: row.get(0)?,
+            started_at: row.get(1)?,
+            ended_at: row.get(2)?,
+            status: row.get(3)?,
+            total_keywords: row.get(4)?,
+            success_count: row.get(5)?,
+            failed_count: row.get(6)?,
+            trigger_type: row.get(7)?,
+            error_message: row.get(8)?,
+        })
+    })?
+    .collect::<Result<Vec<_>>>()?;
+
+    Ok(logs)
+}
+
+// 获取正在运行的任务
+pub fn get_running_task() -> Result<Option<SchedulerTaskLog>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, started_at, ended_at, status, total_keywords,
+                success_count, failed_count, trigger_type, error_message
+         FROM scheduler_task_logs
+         WHERE status = 'running'
+         ORDER BY started_at DESC
+         LIMIT 1"
+    )?;
+
+    let mut rows = stmt.query([])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(SchedulerTaskLog {
+            id: row.get(0)?,
+            started_at: row.get(1)?,
+            ended_at: row.get(2)?,
+            status: row.get(3)?,
+            total_keywords: row.get(4)?,
+            success_count: row.get(5)?,
+            failed_count: row.get(6)?,
+            trigger_type: row.get(7)?,
+            error_message: row.get(8)?,
+        }))
+    } else {
+        Ok(None)
+    }
 }
