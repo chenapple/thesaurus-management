@@ -954,10 +954,26 @@ async function handleToggleActive(id: number, active: boolean) {
 
 // 检测单个
 async function handleCheckSingle(row: KeywordMonitoring) {
+  // 先检查依赖
+  try {
+    const deps = await checkDependencies();
+    if (!deps.python_installed || !deps.playwright_installed || !deps.chromium_installed) {
+      showInstallDialog.value = true;
+      return;
+    }
+  } catch (e) {
+    console.warn('依赖检查失败，继续尝试检测:', e);
+  }
+
   checkingId.value = row.id;
   try {
-    const result = await checkSingleRanking(row.id, 3);
+    const result = await checkSingleRanking(row.id, 5);
     if (result.error) {
+      // 检查是否为依赖错误
+      if (result.error.includes('Playwright') || result.error.includes('Python') || result.error.includes('缺少')) {
+        showInstallDialog.value = true;
+        return;
+      }
       ElMessage.warning(`检测完成，但有错误: ${result.error}`);
     } else if (result.warning) {
       // 有警告信息（如地理限制）
@@ -971,7 +987,12 @@ async function handleCheckSingle(row: KeywordMonitoring) {
     loadData();
     loadStats();
   } catch (e) {
-    ElMessage.error(`检测失败: ${e}`);
+    const errorStr = String(e);
+    if (errorStr.includes('Playwright') || errorStr.includes('Python') || errorStr.includes('缺少')) {
+      showInstallDialog.value = true;
+    } else {
+      ElMessage.error(`检测失败: ${e}`);
+    }
   } finally {
     checkingId.value = null;
   }
