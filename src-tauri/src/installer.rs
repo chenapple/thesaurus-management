@@ -439,34 +439,34 @@ pub async fn install_chromium(app: tauri::AppHandle, python_path: &str) -> Resul
     std::thread::spawn(move || {
         let mut progress: f32 = 0.0;
         while !done_clone.load(Ordering::Relaxed) && progress < 95.0 {
-            progress += 0.5;  // 每次增加 0.5%，约 60 秒到达 95%
+            progress += 0.3;  // 每次增加 0.3%，约 100 秒到达 95%（Chromium 较大）
             let _ = app_clone.emit("install-progress", InstallProgress {
                 step: "chromium".to_string(),
                 step_name: "安装 Chromium 浏览器".to_string(),
                 progress,
-                message: format!("正在下载 Chromium 浏览器... {:.0}%", progress),
+                message: format!("正在下载 Chromium 浏览器 (约150MB)... {:.0}%", progress),
                 is_error: false,
             });
             std::thread::sleep(std::time::Duration::from_millis(300));
         }
     });
 
-    // 执行实际安装 - 必须重定向输出，否则管道满了会阻塞
+    // 执行实际安装 - 捕获 stderr 以获取错误信息
     let mut cmd = Command::new(python_path);
     cmd.args(["-m", "playwright", "install", "chromium"])
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
 
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
-    let status = cmd.status().map_err(|e| format!("启动 playwright install 失败: {}", e))?;
+    let output = cmd.output().map_err(|e| format!("启动 playwright install 失败: {}", e))?;
 
     // 标记完成，停止进度线程
     done.store(true, Ordering::Relaxed);
     std::thread::sleep(std::time::Duration::from_millis(100)); // 等待线程结束
 
-    if status.success() {
+    if output.status.success() {
         let _ = app.emit("install-progress", InstallProgress {
             step: "chromium".to_string(),
             step_name: "安装 Chromium 浏览器".to_string(),
@@ -476,14 +476,21 @@ pub async fn install_chromium(app: tauri::AppHandle, python_path: &str) -> Resul
         });
         Ok(())
     } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let error_msg = if stderr.is_empty() {
+            "Chromium 安装失败，请检查网络连接".to_string()
+        } else {
+            format!("Chromium 安装失败: {}", stderr.chars().take(200).collect::<String>())
+        };
+
         let _ = app.emit("install-progress", InstallProgress {
             step: "chromium".to_string(),
             step_name: "安装 Chromium 浏览器".to_string(),
             progress: 0.0,
-            message: "Chromium 安装失败".to_string(),
+            message: error_msg.clone(),
             is_error: true,
         });
-        Err("Chromium 安装失败".to_string())
+        Err(error_msg)
     }
 }
 
