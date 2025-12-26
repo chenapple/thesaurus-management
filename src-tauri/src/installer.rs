@@ -428,108 +428,44 @@ pub async fn install_playwright(app: tauri::AppHandle, python_path: &str) -> Res
 /// 安装 Chromium
 pub async fn install_chromium(app: tauri::AppHandle, python_path: &str) -> Result<(), String> {
     use tauri::Emitter;
-    use std::io::Read;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
+    let done = Arc::new(AtomicBool::new(false));
+    let done_clone = done.clone();
     let app_clone = app.clone();
-    let emit_progress = move |progress: f32, message: &str, is_error: bool| {
-        let _ = app_clone.emit("install-progress", InstallProgress {
-            step: "chromium".to_string(),
-            step_name: "安装 Chromium 浏览器".to_string(),
-            progress,
-            message: message.to_string(),
-            is_error,
-        });
-    };
 
-    emit_progress(0.0, "正在下载 Chromium 浏览器 (约 150MB)...", false);
+    // 启动模拟进度线程 - Playwright 在非 TTY 模式下不输出实时进度
+    std::thread::spawn(move || {
+        let mut progress: f32 = 0.0;
+        while !done_clone.load(Ordering::Relaxed) && progress < 95.0 {
+            progress += 0.5;  // 每次增加 0.5%，约 60 秒到达 95%
+            let _ = app_clone.emit("install-progress", InstallProgress {
+                step: "chromium".to_string(),
+                step_name: "安装 Chromium 浏览器".to_string(),
+                progress,
+                message: format!("正在下载 Chromium 浏览器... {:.0}%", progress),
+                is_error: false,
+            });
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+    });
 
+    // 执行实际安装
     let mut cmd = Command::new(python_path);
-    cmd.args(["-m", "playwright", "install", "chromium"])
-        .env("PYTHONUNBUFFERED", "1")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.args(["-m", "playwright", "install", "chromium"]);
 
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
-    let mut child = cmd.spawn()
-        .map_err(|e| format!("启动 playwright install 失败: {}", e))?;
+    let status = cmd.status().map_err(|e| format!("启动 playwright install 失败: {}", e))?;
 
-    // 读取 stderr (Playwright 进度输出在 stderr)
-    // 注意：Playwright 使用 \r 来更新进度，所以要按字节读取
-    let stderr = child.stderr.take();
-    if let Some(mut stderr) = stderr {
-        let mut buffer = [0u8; 1024];
-        let mut line_buffer = String::new();
-        let mut last_progress: f32 = 0.0;
+    // 标记完成，停止进度线程
+    done.store(true, Ordering::Relaxed);
+    std::thread::sleep(std::time::Duration::from_millis(100)); // 等待线程结束
 
-        loop {
-            match stderr.read(&mut buffer) {
-                Ok(0) => break, // EOF
-                Ok(n) => {
-                    let chunk = String::from_utf8_lossy(&buffer[..n]);
-                    line_buffer.push_str(&chunk);
-
-                    // 按 \r 或 \n 分割处理
-                    while let Some(pos) = line_buffer.find(|c| c == '\r' || c == '\n') {
-                        let line: String = line_buffer.drain(..=pos).collect();
-                        let line = line.trim();
-
-                        if line.is_empty() {
-                            continue;
-                        }
-
-                        // 解析进度，例如 "Downloading Chromium 120.0.6099.28 - 45.2 MiB / 150 MiB"
-                        let progress = if line.contains("MiB") && line.contains('/') {
-                            // 解析类似 "45.2 MiB / 150 MiB" 的格式
-                            let parts: Vec<&str> = line.split('/').collect();
-                            if parts.len() >= 2 {
-                                // 从第一部分提取当前大小
-                                let current = parts[0].split_whitespace()
-                                    .filter_map(|s| s.parse::<f32>().ok())
-                                    .last()
-                                    .unwrap_or(0.0);
-                                // 从第二部分提取总大小
-                                let total = parts[1].split_whitespace()
-                                    .filter_map(|s| s.parse::<f32>().ok())
-                                    .next()
-                                    .unwrap_or(150.0);
-                                if total > 0.0 {
-                                    (current / total * 100.0).min(99.0)
-                                } else {
-                                    last_progress
-                                }
-                            } else {
-                                last_progress
-                            }
-                        } else if line.contains('%') {
-                            // 尝试提取百分比
-                            line.split_whitespace()
-                                .filter_map(|s| s.trim_end_matches('%').parse::<f32>().ok())
-                                .next()
-                                .unwrap_or(last_progress)
-                        } else if line.contains("Downloading") {
-                            5.0
-                        } else {
-                            last_progress
-                        };
-
-                        if progress > last_progress {
-                            last_progress = progress;
-                        }
-                        emit_progress(last_progress, line, false);
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    }
-
-    let status = child.wait().map_err(|e| format!("等待安装完成失败: {}", e))?;
-
-    let app_final = app.clone();
     if status.success() {
-        let _ = app_final.emit("install-progress", InstallProgress {
+        let _ = app.emit("install-progress", InstallProgress {
             step: "chromium".to_string(),
             step_name: "安装 Chromium 浏览器".to_string(),
             progress: 100.0,
@@ -538,7 +474,7 @@ pub async fn install_chromium(app: tauri::AppHandle, python_path: &str) -> Resul
         });
         Ok(())
     } else {
-        let _ = app_final.emit("install-progress", InstallProgress {
+        let _ = app.emit("install-progress", InstallProgress {
             step: "chromium".to_string(),
             step_name: "安装 Chromium 浏览器".to_string(),
             progress: 0.0,
