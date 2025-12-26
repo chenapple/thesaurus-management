@@ -428,11 +428,12 @@ pub async fn install_playwright(app: tauri::AppHandle, python_path: &str) -> Res
 /// 安装 Chromium
 pub async fn install_chromium(app: tauri::AppHandle, python_path: &str) -> Result<(), String> {
     use tauri::Emitter;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::Arc;
 
-    let emit_progress = |progress: f32, message: &str, is_error: bool| {
-        let _ = app.emit("install-progress", InstallProgress {
+    let app_clone = app.clone();
+    let emit_progress = move |progress: f32, message: &str, is_error: bool| {
+        let _ = app_clone.emit("install-progress", InstallProgress {
             step: "chromium".to_string(),
             step_name: "安装 Chromium 浏览器".to_string(),
             progress,
@@ -443,30 +444,63 @@ pub async fn install_chromium(app: tauri::AppHandle, python_path: &str) -> Resul
 
     emit_progress(0.0, "正在启动 Chromium 安装...", false);
 
-    // 在后台线程执行安装，避免阻塞
+    // 共享状态
     let python_path = python_path.to_string();
     let done = Arc::new(AtomicBool::new(false));
     let done_clone = done.clone();
+    let current_progress = Arc::new(AtomicU32::new(0));
+    let current_progress_clone = current_progress.clone();
     let result = Arc::new(std::sync::Mutex::new(None::<Result<(), String>>));
     let result_clone = result.clone();
+    let last_message = Arc::new(std::sync::Mutex::new(String::new()));
+    let last_message_clone = last_message.clone();
 
-    // 启动安装线程
+    // 启动安装线程，捕获输出以获取真实进度
     std::thread::spawn(move || {
         let mut cmd = Command::new(&python_path);
         cmd.args(["-m", "playwright", "install", "chromium"])
-            // 使用国内镜像加速下载（对没有 VPN 的用户有帮助）
-            .env("PLAYWRIGHT_DOWNLOAD_HOST", "https://npmmirror.com/mirrors/playwright/")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());  // 丢弃输出避免管道阻塞
+            .env("PYTHONUNBUFFERED", "1")  // 禁用 Python 缓冲
+            .env("FORCE_COLOR", "1")       // 强制输出进度（关键！）
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
-        let status = cmd.status();
+        let child = cmd.spawn();
 
-        let res = match status {
-            Ok(s) if s.success() => Ok(()),
-            Ok(_) => Err("Chromium 安装失败".to_string()),
+        let res = match child {
+            Ok(mut child) => {
+                // 读取 stdout（使用 FORCE_COLOR 后进度输出到 stdout）
+                if let Some(stdout) = child.stdout.take() {
+                    let reader = BufReader::new(stdout);
+                    for line in reader.lines().map_while(Result::ok) {
+                        // 解析进度百分比，格式如: "|████████████████████████████████| 100% of 129.7 MiB"
+                        if let Some(pct) = parse_download_progress(&line) {
+                            current_progress_clone.store(pct, Ordering::Relaxed);
+                        }
+                        // 保存最后一条消息（过滤掉 ANSI 转义码）
+                        let clean_line = strip_ansi_codes(&line);
+                        if !clean_line.trim().is_empty() {
+                            *last_message_clone.lock().unwrap() = clean_line;
+                        }
+                    }
+                }
+
+                // 等待进程完成
+                match child.wait() {
+                    Ok(status) if status.success() => Ok(()),
+                    Ok(_) => {
+                        let msg = last_message_clone.lock().unwrap().clone();
+                        if msg.is_empty() {
+                            Err("Chromium 安装失败".to_string())
+                        } else {
+                            Err(format!("安装失败: {}", msg))
+                        }
+                    }
+                    Err(e) => Err(format!("等待进程失败: {}", e)),
+                }
+            }
             Err(e) => Err(format!("启动安装失败: {}", e)),
         };
 
@@ -474,20 +508,42 @@ pub async fn install_chromium(app: tauri::AppHandle, python_path: &str) -> Resul
         done_clone.store(true, Ordering::Relaxed);
     });
 
-    // 等待安装完成，同时更新进度
-    let mut progress: f32 = 0.0;
+    // 等待安装完成，显示真实进度
     let mut elapsed_secs = 0;
-    let timeout_secs = 300; // 5 分钟超时
+    let timeout_secs = 600; // 10 分钟超时（大文件下载需要更长时间）
+    let mut last_progress_update = 0;
 
     while !done.load(Ordering::Relaxed) {
-        progress = (progress + 0.5).min(95.0);
-        emit_progress(progress, &format!("正在下载 Chromium (约150MB)... {:.0}%", progress), false);
+        let real_progress = current_progress.load(Ordering::Relaxed);
+        let progress = if real_progress > 0 {
+            real_progress as f32
+        } else {
+            // 还没有真实进度时显示准备中
+            (elapsed_secs as f32 * 0.5).min(10.0)
+        };
+
+        let msg = last_message.lock().unwrap().clone();
+        let display_msg = if !msg.is_empty() {
+            msg
+        } else if real_progress > 0 {
+            format!("正在下载 Chromium... {}%", real_progress)
+        } else {
+            "正在连接下载服务器...".to_string()
+        };
+
+        emit_progress(progress, &display_msg, false);
 
         std::thread::sleep(std::time::Duration::from_secs(1));
         elapsed_secs += 1;
 
+        // 如果有进度更新，重置超时计数
+        if real_progress > last_progress_update {
+            last_progress_update = real_progress;
+            elapsed_secs = 0; // 重置超时
+        }
+
         if elapsed_secs > timeout_secs {
-            emit_progress(0.0, "安装超时（5分钟），请检查网络", true);
+            emit_progress(0.0, "安装超时（10分钟无进度），请检查网络", true);
             return Err("Chromium 安装超时".to_string());
         }
     }
@@ -506,6 +562,59 @@ pub async fn install_chromium(app: tauri::AppHandle, python_path: &str) -> Resul
             Err(e)
         }
     }
+}
+
+/// 解析 Playwright 下载进度
+/// 格式: "|████████████████████████████████████████| 100% of 129.7 MiB"
+fn parse_download_progress(line: &str) -> Option<u32> {
+    // 先清理 ANSI 转义码
+    let clean = strip_ansi_codes(line);
+
+    // 查找百分比模式
+    if let Some(pct_idx) = clean.find('%') {
+        // 向前找数字
+        let before = &clean[..pct_idx];
+        let mut num_str = String::new();
+        for c in before.chars().rev() {
+            if c.is_ascii_digit() {
+                num_str.insert(0, c);
+            } else if !num_str.is_empty() {
+                break;
+            }
+        }
+        if !num_str.is_empty() {
+            if let Ok(pct) = num_str.parse::<u32>() {
+                return Some(pct.min(100));
+            }
+        }
+    }
+    None
+}
+
+/// 移除 ANSI 转义码
+fn strip_ansi_codes(s: &str) -> String {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // 跳过 ANSI 转义序列
+            if chars.peek() == Some(&'[') {
+                chars.next(); // 跳过 '['
+                // 跳过直到遇到字母
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
 }
 
 /// 安装所有依赖
