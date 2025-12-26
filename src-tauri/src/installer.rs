@@ -236,7 +236,7 @@ pub async fn install_python(app: tauri::AppHandle) -> Result<String, String> {
     let stdout = child.stdout.take();
     if let Some(stdout) = stdout {
         let reader = BufReader::new(stdout);
-        let mut progress = 10.0;
+        let mut progress: f32 = 10.0;
         for line in reader.lines().map_while(Result::ok) {
             progress = (progress + 5.0).min(90.0);
             emit_progress(progress, &line, false);
