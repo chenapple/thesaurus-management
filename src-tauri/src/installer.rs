@@ -431,66 +431,80 @@ pub async fn install_chromium(app: tauri::AppHandle, python_path: &str) -> Resul
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
+    let emit_progress = |progress: f32, message: &str, is_error: bool| {
+        let _ = app.emit("install-progress", InstallProgress {
+            step: "chromium".to_string(),
+            step_name: "安装 Chromium 浏览器".to_string(),
+            progress,
+            message: message.to_string(),
+            is_error,
+        });
+    };
+
+    emit_progress(0.0, "正在启动 Chromium 安装...", false);
+
+    // 在后台线程执行安装，避免阻塞
+    let python_path = python_path.to_string();
     let done = Arc::new(AtomicBool::new(false));
     let done_clone = done.clone();
-    let app_clone = app.clone();
+    let result = Arc::new(std::sync::Mutex::new(None::<Result<(), String>>));
+    let result_clone = result.clone();
 
-    // 启动模拟进度线程 - Playwright 在非 TTY 模式下不输出实时进度
+    // 启动安装线程
     std::thread::spawn(move || {
-        let mut progress: f32 = 0.0;
-        while !done_clone.load(Ordering::Relaxed) && progress < 95.0 {
-            progress += 0.3;  // 每次增加 0.3%，约 100 秒到达 95%（Chromium 较大）
-            let _ = app_clone.emit("install-progress", InstallProgress {
-                step: "chromium".to_string(),
-                step_name: "安装 Chromium 浏览器".to_string(),
-                progress,
-                message: format!("正在下载 Chromium 浏览器 (约150MB)... {:.0}%", progress),
-                is_error: false,
-            });
-            std::thread::sleep(std::time::Duration::from_millis(300));
-        }
-    });
+        let mut cmd = Command::new(&python_path);
+        cmd.args(["-m", "playwright", "install", "chromium"])
+            // 使用国内镜像加速下载（对没有 VPN 的用户有帮助）
+            .env("PLAYWRIGHT_DOWNLOAD_HOST", "https://npmmirror.com/mirrors/playwright/")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());  // 丢弃输出避免管道阻塞
 
-    // 执行实际安装 - 捕获 stderr 以获取错误信息
-    let mut cmd = Command::new(python_path);
-    cmd.args(["-m", "playwright", "install", "chromium"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
 
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+        let status = cmd.status();
 
-    let output = cmd.output().map_err(|e| format!("启动 playwright install 失败: {}", e))?;
-
-    // 标记完成，停止进度线程
-    done.store(true, Ordering::Relaxed);
-    std::thread::sleep(std::time::Duration::from_millis(100)); // 等待线程结束
-
-    if output.status.success() {
-        let _ = app.emit("install-progress", InstallProgress {
-            step: "chromium".to_string(),
-            step_name: "安装 Chromium 浏览器".to_string(),
-            progress: 100.0,
-            message: "Chromium 安装完成!".to_string(),
-            is_error: false,
-        });
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let error_msg = if stderr.is_empty() {
-            "Chromium 安装失败，请检查网络连接".to_string()
-        } else {
-            format!("Chromium 安装失败: {}", stderr.chars().take(200).collect::<String>())
+        let res = match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(_) => Err("Chromium 安装失败".to_string()),
+            Err(e) => Err(format!("启动安装失败: {}", e)),
         };
 
-        let _ = app.emit("install-progress", InstallProgress {
-            step: "chromium".to_string(),
-            step_name: "安装 Chromium 浏览器".to_string(),
-            progress: 0.0,
-            message: error_msg.clone(),
-            is_error: true,
-        });
-        Err(error_msg)
+        *result_clone.lock().unwrap() = Some(res);
+        done_clone.store(true, Ordering::Relaxed);
+    });
+
+    // 等待安装完成，同时更新进度
+    let mut progress: f32 = 0.0;
+    let mut elapsed_secs = 0;
+    let timeout_secs = 300; // 5 分钟超时
+
+    while !done.load(Ordering::Relaxed) {
+        progress = (progress + 0.5).min(95.0);
+        emit_progress(progress, &format!("正在下载 Chromium (约150MB)... {:.0}%", progress), false);
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        elapsed_secs += 1;
+
+        if elapsed_secs > timeout_secs {
+            emit_progress(0.0, "安装超时（5分钟），请检查网络", true);
+            return Err("Chromium 安装超时".to_string());
+        }
+    }
+
+    // 获取结果
+    let final_result = result.lock().unwrap().take()
+        .unwrap_or_else(|| Err("未知错误".to_string()));
+
+    match final_result {
+        Ok(()) => {
+            emit_progress(100.0, "Chromium 安装完成!", false);
+            Ok(())
+        }
+        Err(e) => {
+            emit_progress(0.0, &e, true);
+            Err(e)
+        }
     }
 }
 
