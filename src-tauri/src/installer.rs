@@ -385,6 +385,7 @@ pub async fn install_playwright(app: tauri::AppHandle, python_path: &str) -> Res
 
     let mut cmd = Command::new(python_path);
     cmd.args(["-m", "pip", "install", "--upgrade", "playwright"])
+        .env("PYTHONUNBUFFERED", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -444,6 +445,7 @@ pub async fn install_chromium(app: tauri::AppHandle, python_path: &str) -> Resul
 
     let mut cmd = Command::new(python_path);
     cmd.args(["-m", "playwright", "install", "chromium"])
+        .env("PYTHONUNBUFFERED", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
