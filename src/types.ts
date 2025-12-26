@@ -265,3 +265,31 @@ export const DEFAULT_SCHEDULER_SETTINGS: SchedulerSettings = {
   notify_on_new_rank: true,
   notify_on_lost_rank: true,
 };
+
+// ==================== 依赖安装 ====================
+
+// 依赖状态
+export interface DependencyStatus {
+  python_installed: boolean;
+  python_version: string | null;
+  python_path: string | null;
+  playwright_installed: boolean;
+  chromium_installed: boolean;
+  error_message: string | null;
+}
+
+// 安装进度
+export interface InstallProgress {
+  step: 'python' | 'playwright' | 'chromium';
+  step_name: string;
+  progress: number;
+  message: string;
+  is_error: boolean;
+}
+
+// 安装结果
+export interface InstallResult {
+  success: boolean;
+  message: string;
+  python_path: string | null;
+}

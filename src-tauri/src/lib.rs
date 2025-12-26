@@ -2,6 +2,7 @@ mod db;
 mod crawler;
 mod scheduler;
 mod notification;
+mod installer;
 
 use db::{BackupInfo, Category, KeywordData, KeywordMonitoring, MonitoringSparkline, MonitoringStats, Product, RankingHistory, RankingSnapshot, RootWithCategories, TrafficLevelStats, UncategorizedKeyword, WorkflowStatus};
 use scheduler::{SchedulerSettings, SchedulerStatus, SCHEDULER};
@@ -536,6 +537,23 @@ fn get_running_task() -> Result<Option<db::SchedulerTaskLog>, String> {
     db::get_running_task().map_err(|e| e.to_string())
 }
 
+// ==================== 依赖安装 ====================
+
+#[tauri::command]
+fn check_dependencies() -> Result<installer::DependencyStatus, String> {
+    Ok(installer::check_dependency_status())
+}
+
+#[tauri::command]
+async fn install_all_dependencies(app: tauri::AppHandle) -> Result<installer::InstallResult, String> {
+    Ok(installer::install_all_dependencies(app).await)
+}
+
+#[tauri::command]
+async fn install_playwright_only(app: tauri::AppHandle) -> Result<installer::InstallResult, String> {
+    Ok(installer::install_playwright_only(app).await)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -679,6 +697,10 @@ pub fn run() {
             get_scheduler_status,
             get_task_logs,
             get_running_task,
+            // 依赖安装
+            check_dependencies,
+            install_all_dependencies,
+            install_playwright_only,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

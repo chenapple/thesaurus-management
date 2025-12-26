@@ -583,6 +583,12 @@
       :monitoring="selectedMonitoring"
       :display-type="historyType"
     />
+
+    <!-- 依赖安装对话框 -->
+    <DependencyInstallDialog
+      v-model="showInstallDialog"
+      @installed="handleInstallComplete"
+    />
   </div>
 </template>
 
@@ -601,12 +607,14 @@ import {
   getMonitoringSparklines,
   checkSingleRanking,
   checkAllRankings,
+  checkDependencies,
 } from '../api';
 import type { KeywordMonitoring, MonitoringStats } from '../types';
 import { COUNTRY_OPTIONS, PRIORITY_OPTIONS, getCountryFlag } from '../types';
 import AddMonitoringDialog from './AddMonitoringDialog.vue';
 import RankingHistoryChart from './RankingHistoryChart.vue';
 import Sparkline from './Sparkline.vue';
+import DependencyInstallDialog from './DependencyInstallDialog.vue';
 
 const props = defineProps<{
   productId: number;
@@ -730,6 +738,7 @@ async function handleCheckGroup(group: GroupRow) {
 // 对话框
 const showAddDialog = ref(false);
 const showHistoryDialog = ref(false);
+const showInstallDialog = ref(false);
 const selectedMonitoring = ref<KeywordMonitoring | null>(null);
 const historyType = ref<'organic' | 'sponsored' | 'all'>('all');
 
@@ -978,10 +987,34 @@ async function handleCheckRankings() {
     return;
   }
 
+  // 先检查依赖
+  try {
+    const deps = await checkDependencies();
+    if (!deps.python_installed || !deps.playwright_installed || !deps.chromium_installed) {
+      showInstallDialog.value = true;
+      return;
+    }
+  } catch (e) {
+    console.warn('依赖检查失败，继续尝试检测:', e);
+  }
+
   checkingAll.value = true;
   try {
     console.log('Calling checkAllRankings...');
-    const results = await checkAllRankings(props.productId, 3, 0);  // 0 = 无时间限制
+    const results = await checkAllRankings(props.productId, 5, 0);  // 0 = 无时间限制
+
+    // 检查是否有依赖相关错误
+    const depError = results.find(([, r]) =>
+      r.error?.includes('Playwright') ||
+      r.error?.includes('Python') ||
+      r.error?.includes('缺少')
+    );
+    if (depError) {
+      showInstallDialog.value = true;
+      checkingAll.value = false;
+      return;
+    }
+
     console.log('checkAllRankings results:', results);
 
     if (results.length === 0) {
@@ -999,10 +1032,21 @@ async function handleCheckRankings() {
     loadData();
     loadStats();
   } catch (e) {
-    ElMessage.error(`批量检测失败: ${e}`);
+    const errorStr = String(e);
+    if (errorStr.includes('Playwright') || errorStr.includes('Python') || errorStr.includes('缺少')) {
+      showInstallDialog.value = true;
+    } else {
+      ElMessage.error(`批量检测失败: ${e}`);
+    }
   } finally {
     checkingAll.value = false;
   }
+}
+
+// 依赖安装完成后继续检测
+function handleInstallComplete() {
+  ElMessage.success('依赖安装完成，正在继续检测...');
+  handleCheckRankings();
 }
 
 // 显示历史

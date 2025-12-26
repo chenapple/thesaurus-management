@@ -534,3 +534,28 @@ export async function getTaskLogs(limit?: number): Promise<TaskLog[]> {
 export async function getRunningTask(): Promise<TaskLog | null> {
   return await invoke("get_running_task");
 }
+
+// ==================== 依赖安装 ====================
+
+import type { DependencyStatus, InstallResult } from "./types";
+
+/**
+ * 检查依赖状态
+ */
+export async function checkDependencies(): Promise<DependencyStatus> {
+  return await invoke("check_dependencies");
+}
+
+/**
+ * 安装所有依赖 (Python + Playwright + Chromium)
+ */
+export async function installAllDependencies(): Promise<InstallResult> {
+  return await invoke("install_all_dependencies");
+}
+
+/**
+ * 仅安装 Playwright 依赖 (需要 Python 已安装)
+ */
+export async function installPlaywrightOnly(): Promise<InstallResult> {
+  return await invoke("install_playwright_only");
+}
