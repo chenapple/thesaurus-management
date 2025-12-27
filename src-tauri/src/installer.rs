@@ -425,7 +425,7 @@ pub async fn install_playwright(app: tauri::AppHandle, python_path: &str) -> Res
     }
 }
 
-/// 安装 Chromium
+/// 安装 Chromium - 使用批处理脚本方式 (Windows) 或 shell 脚本 (macOS/Linux)
 pub async fn install_chromium(app: tauri::AppHandle, python_path: &str) -> Result<(), String> {
     use tauri::Emitter;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -437,35 +437,9 @@ pub async fn install_chromium(app: tauri::AppHandle, python_path: &str) -> Resul
     let result = Arc::new(std::sync::Mutex::new(None::<Result<(), String>>));
     let result_clone = result.clone();
 
-    // 后台线程执行安装 - 使用 output() 等待完成
+    // 后台线程执行安装
     std::thread::spawn(move || {
-        let mut cmd = Command::new(&python_path);
-        cmd.args(["-m", "playwright", "install", "chromium"]);
-
-        #[cfg(windows)]
-        cmd.creation_flags(CREATE_NO_WINDOW);
-
-        // 关键：使用 output() 等待进程完成并捕获所有输出
-        let res = match cmd.output() {
-            Ok(output) if output.status.success() => Ok(()),
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let msg = if !stderr.trim().is_empty() {
-                    // 只取最后几行，避免太长
-                    let lines: Vec<&str> = stderr.lines().collect();
-                    let last_lines: Vec<&str> = lines.iter().rev().take(5).copied().collect();
-                    last_lines.into_iter().rev().collect::<Vec<_>>().join("\n")
-                } else if !stdout.trim().is_empty() {
-                    stdout.chars().take(500).collect()
-                } else {
-                    "安装失败，无错误信息".to_string()
-                };
-                Err(msg)
-            }
-            Err(e) => Err(format!("启动失败: {}", e)),
-        };
-
+        let res = install_chromium_via_script(&python_path);
         *result_clone.lock().unwrap() = Some(res);
         done_clone.store(true, Ordering::Relaxed);
     });
@@ -524,6 +498,66 @@ pub async fn install_chromium(app: tauri::AppHandle, python_path: &str) -> Resul
                 is_error: true,
             });
             Err(e)
+        }
+    }
+}
+
+/// 通过脚本安装 Chromium（Windows 用 .bat，其他用 shell）
+fn install_chromium_via_script(python_path: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::fs;
+        use std::env;
+
+        // Windows: 创建 .bat 脚本
+        let temp_dir = env::temp_dir();
+        let bat_path = temp_dir.join("playwright_install_chromium.bat");
+        let script = format!(
+            "@echo off\r\n\"{python_path}\" -m playwright install chromium\r\nexit /b %errorlevel%\r\n",
+            python_path = python_path
+        );
+
+        fs::write(&bat_path, &script)
+            .map_err(|e| format!("创建脚本失败: {}", e))?;
+
+        // 通过 cmd.exe 执行 (不使用 CREATE_NO_WINDOW，让 cmd 自己处理)
+        let output = Command::new("cmd")
+            .args(["/c", bat_path.to_str().unwrap()])
+            .output()
+            .map_err(|e| format!("执行脚本失败: {}", e))?;
+
+        // 清理脚本文件
+        let _ = fs::remove_file(&bat_path);
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let msg = if !stderr.trim().is_empty() {
+                format!("安装失败: {}", stderr.chars().take(500).collect::<String>())
+            } else if !stdout.trim().is_empty() {
+                format!("安装失败: {}", stdout.chars().take(500).collect::<String>())
+            } else {
+                "安装失败，无详细信息".to_string()
+            };
+            Err(msg)
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        // macOS/Linux: 直接执行命令
+        let output = Command::new(python_path)
+            .args(["-m", "playwright", "install", "chromium"])
+            .output()
+            .map_err(|e| format!("执行失败: {}", e))?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("安装失败: {}", stderr.chars().take(500).collect::<String>()))
         }
     }
 }
