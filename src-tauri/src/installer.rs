@@ -126,22 +126,21 @@ except ImportError:
 
 /// 检查 Chromium 是否安装
 fn check_chromium_installed(python_path: &str) -> bool {
+    // 使用 Playwright 官方 API 检查 Chromium 路径
     let check_script = r#"
 import sys
 import os
 try:
-    from playwright._impl._driver import compute_driver_executable
-    from pathlib import Path
-    driver_path = compute_driver_executable()
-    browsers_path = Path(driver_path).parent / '.local-browsers'
-    if browsers_path.exists():
-        chromium_exists = any(p.name.startswith('chromium') for p in browsers_path.iterdir())
-        print("ok" if chromium_exists else "missing")
+    from playwright.sync_api import sync_playwright
+    p = sync_playwright().start()
+    path = p.chromium.executable_path
+    p.stop()
+    if path and os.path.exists(path):
+        print("ok")
     else:
         print("missing")
 except Exception as e:
-    print(f"error:{e}")
-    sys.exit(1)
+    print(f"missing:{e}")
 "#;
 
     let mut cmd = Command::new(python_path);
