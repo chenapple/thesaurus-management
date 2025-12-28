@@ -737,7 +737,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Refresh, Delete, Search, ArrowDown } from '@element-plus/icons-vue';
+import { Search, ArrowDown } from '@element-plus/icons-vue';
 import { listen } from '@tauri-apps/api/event';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import {
