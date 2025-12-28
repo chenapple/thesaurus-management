@@ -252,6 +252,61 @@ export interface TaskLog {
   error_message: string | null;
 }
 
+// ==================== 优化事件 ====================
+
+// 主类型
+export type EventMainType = 'listing' | 'ad';
+
+// 子类型
+export type ListingSubType = 'image' | 'price' | 'title' | 'bullets' | 'description' | 'aplus' | 'video' | 'brand_story' | 'brand_store';
+export type AdSubType = 'toggle' | 'strategy' | 'bid' | 'budget' | 'keywords';
+export type EventSubType = ListingSubType | AdSubType;
+
+// 主类型配置
+export const EVENT_MAIN_TYPES: Record<EventMainType, { label: string; color: string }> = {
+  listing: { label: '文案优化', color: '#67C23A' },
+  ad: { label: '广告优化', color: '#409EFF' },
+};
+
+// 子类型配置
+export const EVENT_SUB_TYPES: Record<EventMainType, Record<string, { label: string }>> = {
+  listing: {
+    image: { label: '图片' },
+    price: { label: '价格' },
+    title: { label: '标题' },
+    bullets: { label: '五点' },
+    description: { label: '描述' },
+    aplus: { label: 'A+页面' },
+    video: { label: '视频' },
+    brand_story: { label: '品牌故事' },
+    brand_store: { label: '品牌旗舰店' },
+  },
+  ad: {
+    toggle: { label: '启用/暂停广告' },
+    strategy: { label: '调整广告策略' },
+    bid: { label: '调整竞价' },
+    budget: { label: '调整预算' },
+    keywords: { label: '增词/否词' },
+  },
+};
+
+// 优化事件
+export interface OptimizationEvent {
+  id: number;
+  product_id: number;
+  event_date: string;
+  event_type: EventMainType;       // 主类型
+  event_sub_type: EventSubType;    // 子类型
+  title: string;
+  description?: string;
+  target_asin?: string;            // 目标 ASIN（可选）
+  affected_keywords?: string;      // JSON字符串，存储关键词数组（可选）
+  created_at: string;
+}
+
+// 兼容旧代码的 EVENT_TYPE_LABELS（基于主类型）
+export const EVENT_TYPE_LABELS = EVENT_MAIN_TYPES;
+
 // 默认调度器设置
 export const DEFAULT_SCHEDULER_SETTINGS: SchedulerSettings = {
   enabled: false,

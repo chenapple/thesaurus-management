@@ -43,7 +43,6 @@
           <el-radio-button value="keyword">按关键词</el-radio-button>
         </el-radio-group>
         <el-button type="primary" @click="showAddDialog = true">
-          <el-icon><Plus /></el-icon>
           添加监控
         </el-button>
         <el-button
@@ -52,15 +51,19 @@
           :disabled="!selectedIds.length && !stats.active"
           @click="handleCheckRankings"
         >
-          <el-icon><Refresh /></el-icon>
           {{ selectedIds.length ? `检测选中 (${selectedIds.length})` : '检测全部' }}
+        </el-button>
+        <el-button
+          type="warning"
+          @click="handleAddEvent"
+        >
+          记录事件
         </el-button>
         <el-button
           type="danger"
           :disabled="!selectedIds.length"
           @click="handleBatchDelete"
         >
-          <el-icon><Delete /></el-icon>
           删除选中
         </el-button>
       </div>
@@ -139,6 +142,134 @@
         <el-option label="暂停" :value="false" />
       </el-select>
     </div>
+
+    <!-- 优化事件时间线（可折叠） -->
+    <el-collapse v-if="optimizationEvents.length > 0" class="events-collapse">
+      <el-collapse-item>
+        <template #title>
+          <div class="events-header">
+            <span class="events-title">优化事件记录</span>
+            <el-tag size="small" type="info">{{ optimizationEvents.length }}</el-tag>
+            <div class="events-view-switch" @click.stop>
+              <el-radio-group v-model="eventsViewMode" size="small">
+                <el-radio-button value="list">列表</el-radio-button>
+                <el-radio-button value="calendar">日历</el-radio-button>
+              </el-radio-group>
+            </div>
+          </div>
+        </template>
+
+        <!-- 列表视图 -->
+        <div v-if="eventsViewMode === 'list'" class="events-timeline" v-loading="eventsLoading">
+          <div
+            v-for="event in optimizationEvents.slice(0, 10)"
+            :key="event.id"
+            class="event-item"
+          >
+            <div class="event-dot" :style="{ backgroundColor: getEventTypeInfo(event.event_type).color }"></div>
+            <div class="event-content">
+              <div class="event-header">
+                <el-tag
+                  size="small"
+                  :color="getEventTypeInfo(event.event_type).color"
+                  effect="dark"
+                >
+                  {{ getEventTypeInfo(event.event_type).label }}
+                </el-tag>
+                <el-tag
+                  v-if="event.event_sub_type"
+                  size="small"
+                  type="info"
+                >
+                  {{ getEventSubTypeLabel(event.event_type, event.event_sub_type) }}
+                </el-tag>
+                <el-tag v-if="!event.target_asin" size="small" type="success">全部</el-tag>
+                <el-tag v-else-if="!event.affected_keywords" size="small" type="warning">
+                  {{ event.target_asin }}
+                </el-tag>
+                <el-tag v-else size="small">
+                  {{ event.target_asin }} + {{ getKeywordCount(event) }}个关键词
+                </el-tag>
+                <span class="event-date">{{ event.event_date }}</span>
+              </div>
+              <div class="event-title">{{ event.title }}</div>
+              <div v-if="event.description" class="event-desc">{{ event.description }}</div>
+            </div>
+            <div class="event-actions">
+              <el-button link type="primary" size="small" @click="handleEditEvent(event)">编辑</el-button>
+              <el-button link type="danger" size="small" @click="handleDeleteEvent(event)">删除</el-button>
+            </div>
+          </div>
+          <div v-if="optimizationEvents.length > 10" class="events-more">
+            还有 {{ optimizationEvents.length - 10 }} 条事件...
+          </div>
+        </div>
+
+        <!-- 日历视图 -->
+        <div v-else class="events-calendar">
+          <el-calendar v-model="calendarDate">
+            <template #date-cell="{ data }">
+              <div class="calendar-cell" @click="handleCalendarDateClick(data.day)">
+                <span class="calendar-day">{{ data.day.split('-')[2] }}</span>
+                <div v-if="getEventsForDate(data.day).length" class="calendar-event-dots">
+                  <span
+                    v-for="event in getEventsForDate(data.day).slice(0, 3)"
+                    :key="event.id"
+                    class="calendar-event-dot"
+                    :style="{ backgroundColor: getEventTypeInfo(event.event_type).color }"
+                  />
+                  <span v-if="getEventsForDate(data.day).length > 3" class="calendar-event-more">
+                    +{{ getEventsForDate(data.day).length - 3 }}
+                  </span>
+                </div>
+              </div>
+            </template>
+          </el-calendar>
+
+          <!-- 选中日期的事件列表 -->
+          <div v-if="selectedDateEvents.length" class="selected-date-events">
+            <div class="selected-date-header">
+              <span>{{ formatCalendarDate(calendarDate) }} 的事件</span>
+              <el-tag size="small">{{ selectedDateEvents.length }}</el-tag>
+            </div>
+            <div
+              v-for="event in selectedDateEvents"
+              :key="event.id"
+              class="event-item"
+            >
+              <div class="event-dot" :style="{ backgroundColor: getEventTypeInfo(event.event_type).color }"></div>
+              <div class="event-content">
+                <div class="event-header">
+                  <el-tag
+                    size="small"
+                    :color="getEventTypeInfo(event.event_type).color"
+                    effect="dark"
+                  >
+                    {{ getEventTypeInfo(event.event_type).label }}
+                  </el-tag>
+                  <el-tag
+                    v-if="event.event_sub_type"
+                    size="small"
+                    type="info"
+                  >
+                    {{ getEventSubTypeLabel(event.event_type, event.event_sub_type) }}
+                  </el-tag>
+                </div>
+                <div class="event-title">{{ event.title }}</div>
+                <div v-if="event.description" class="event-desc">{{ event.description }}</div>
+              </div>
+              <div class="event-actions">
+                <el-button link type="primary" size="small" @click="handleEditEvent(event)">编辑</el-button>
+                <el-button link type="danger" size="small" @click="handleDeleteEvent(event)">删除</el-button>
+              </div>
+            </div>
+          </div>
+          <div v-else class="selected-date-empty">
+            <span>{{ formatCalendarDate(calendarDate) }} 暂无事件</span>
+          </div>
+        </div>
+      </el-collapse-item>
+    </el-collapse>
 
     <!-- 列表视图 - 表格 -->
     <div v-if="viewMode === 'flat'" class="table-container">
@@ -582,12 +713,23 @@
       v-model="showHistoryDialog"
       :monitoring="selectedMonitoring"
       :display-type="historyType"
+      :events="optimizationEvents"
     />
 
     <!-- 依赖安装对话框 -->
     <DependencyInstallDialog
       v-model="showInstallDialog"
       @installed="handleInstallComplete"
+    />
+
+    <!-- 添加/编辑优化事件对话框 -->
+    <AddEventDialog
+      v-model="showEventDialog"
+      :product-id="productId"
+      :editing-event="editingEvent"
+      :asins="uniqueAsins"
+      :keywords-by-asin="keywordsByAsin"
+      @success="handleEventSuccess"
     />
   </div>
 </template>
@@ -609,12 +751,14 @@ import {
   checkAllRankings,
   checkDependencies,
 } from '../api';
-import type { KeywordMonitoring, MonitoringStats } from '../types';
-import { COUNTRY_OPTIONS, PRIORITY_OPTIONS, getCountryFlag } from '../types';
+import type { KeywordMonitoring, MonitoringStats, OptimizationEvent } from '../types';
+import { COUNTRY_OPTIONS, PRIORITY_OPTIONS, getCountryFlag, EVENT_MAIN_TYPES, EVENT_SUB_TYPES, type EventMainType } from '../types';
 import AddMonitoringDialog from './AddMonitoringDialog.vue';
 import RankingHistoryChart from './RankingHistoryChart.vue';
 import Sparkline from './Sparkline.vue';
 import DependencyInstallDialog from './DependencyInstallDialog.vue';
+import AddEventDialog from './AddEventDialog.vue';
+import { getOptimizationEvents, deleteOptimizationEvent } from '../api';
 
 const props = defineProps<{
   productId: number;
@@ -742,6 +886,72 @@ const showInstallDialog = ref(false);
 const selectedMonitoring = ref<KeywordMonitoring | null>(null);
 const historyType = ref<'organic' | 'sponsored' | 'all'>('all');
 
+// 优化事件相关
+const showEventDialog = ref(false);
+const editingEvent = ref<OptimizationEvent | null>(null);
+const optimizationEvents = ref<OptimizationEvent[]>([]);
+const eventsLoading = ref(false);
+const eventsViewMode = ref<'list' | 'calendar'>('list');
+const calendarDate = ref(new Date());
+
+// 按日期分组事件
+const eventsByDate = computed(() => {
+  const map: Record<string, OptimizationEvent[]> = {};
+  for (const event of optimizationEvents.value) {
+    if (!map[event.event_date]) map[event.event_date] = [];
+    map[event.event_date].push(event);
+  }
+  return map;
+});
+
+// 获取指定日期的事件
+function getEventsForDate(dateStr: string): OptimizationEvent[] {
+  return eventsByDate.value[dateStr] || [];
+}
+
+// 选中日期的事件
+const selectedDateEvents = computed(() => {
+  const dateStr = formatDateToYYYYMMDD(calendarDate.value);
+  return getEventsForDate(dateStr);
+});
+
+// 日期格式化
+function formatDateToYYYYMMDD(date: Date): string {
+  const year = date.getFullYear();
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatCalendarDate(date: Date): string {
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  return `${month}月${day}日`;
+}
+
+// 日历日期点击
+function handleCalendarDateClick(dateStr: string) {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  calendarDate.value = new Date(year, month - 1, day);
+}
+
+// 从监控列表提取唯一 ASIN
+const uniqueAsins = computed(() =>
+  [...new Set(allMonitoringList.value.map(m => m.asin))]
+);
+
+// 按 ASIN 分组关键词
+const keywordsByAsin = computed(() => {
+  const result: Record<string, string[]> = {};
+  for (const m of allMonitoringList.value) {
+    if (!result[m.asin]) result[m.asin] = [];
+    if (!result[m.asin].includes(m.keyword)) {
+      result[m.asin].push(m.keyword);
+    }
+  }
+  return result;
+});
+
 // 分组数据接口
 interface GroupRow {
   id: string;  // 分组唯一标识
@@ -862,6 +1072,14 @@ function groupByKeyword(data: KeywordMonitoring[]): GroupRow[] {
 async function loadData() {
   loading.value = true;
   try {
+    // 始终加载全部数据用于事件对话框的 ASIN/关键词选择
+    const [allList] = await getKeywordMonitoringList({
+      productId: props.productId,
+      page: 1,
+      pageSize: 10000,
+    });
+    allMonitoringList.value = allList;
+
     if (viewMode.value === 'flat') {
       // 平铺模式：后端分页
       const [list, count] = await getKeywordMonitoringList({
@@ -878,19 +1096,7 @@ async function loadData() {
       monitoringList.value = list;
       total.value = count;
     } else {
-      // 分组模式：获取全部数据，前端分页
-      const [list] = await getKeywordMonitoringList({
-        productId: props.productId,
-        country: filters.country || undefined,
-        priority: filters.priority || undefined,
-        isActive: filters.isActive,
-        search: searchText.value || undefined,
-        sortBy: sortBy.value || undefined,
-        sortOrder: sortOrder.value || undefined,
-        page: 1,
-        pageSize: 10000,  // 获取全部数据
-      });
-      allMonitoringList.value = list;
+      // 分组模式：使用已加载的全部数据，应用过滤
       // total 为分组数量
       total.value = groupedData.value.length;
     }
@@ -1194,9 +1400,86 @@ async function setupEventListeners() {
   );
 }
 
+// ============ 优化事件管理 ============
+
+// 加载优化事件
+async function loadEvents() {
+  eventsLoading.value = true;
+  try {
+    optimizationEvents.value = await getOptimizationEvents(props.productId);
+  } catch (e) {
+    console.error('加载优化事件失败:', e);
+  } finally {
+    eventsLoading.value = false;
+  }
+}
+
+// 添加事件
+function handleAddEvent() {
+  editingEvent.value = null;
+  showEventDialog.value = true;
+}
+
+// 编辑事件
+function handleEditEvent(event: OptimizationEvent) {
+  editingEvent.value = event;
+  showEventDialog.value = true;
+}
+
+// 删除事件
+async function handleDeleteEvent(event: OptimizationEvent) {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除事件"${event.title}"吗？`,
+      '删除确认',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    );
+    await deleteOptimizationEvent(event.id);
+    ElMessage.success('删除成功');
+    loadEvents();
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error(`删除失败: ${e}`);
+    }
+  }
+}
+
+// 事件操作成功回调
+function handleEventSuccess() {
+  loadEvents();
+}
+
+// 获取事件主类型信息
+function getEventTypeInfo(type: string) {
+  return EVENT_MAIN_TYPES[type as EventMainType] || EVENT_MAIN_TYPES.listing;
+}
+
+// 获取事件子类型标签
+function getEventSubTypeLabel(mainType: string, subType: string | undefined): string {
+  if (!subType) return '';
+  const subTypes = EVENT_SUB_TYPES[mainType as EventMainType];
+  if (!subTypes) return subType;
+  return subTypes[subType]?.label || subType;
+}
+
+// 获取事件关联的关键词数量
+function getKeywordCount(event: OptimizationEvent): number {
+  if (!event.affected_keywords) return 0;
+  try {
+    return JSON.parse(event.affected_keywords).length;
+  } catch {
+    return 0;
+  }
+}
+
 onMounted(() => {
   loadData();
   loadStats();
+  loadEvents();
   setupEventListeners();
 });
 
@@ -1738,5 +2021,194 @@ onUnmounted(() => {
 
 .child-header:hover {
   background: var(--el-fill-color-lighter);
+}
+
+/* 优化事件时间线样式 */
+.events-collapse {
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+
+.events-collapse :deep(.el-collapse-item__header) {
+  background: var(--el-fill-color-light);
+  padding: 0 16px;
+  height: 40px;
+}
+
+.events-collapse :deep(.el-collapse-item__content) {
+  padding: 0;
+}
+
+.events-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.events-title {
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+}
+
+.events-timeline {
+  padding: 12px 16px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.event-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.event-item:last-child {
+  border-bottom: none;
+}
+
+.event-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+
+.event-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.event-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.event-date {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.event-title {
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+  margin-bottom: 2px;
+}
+
+.event-desc {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.event-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.events-more {
+  text-align: center;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  padding: 8px 0;
+}
+
+/* 事件视图切换 */
+.events-view-switch {
+  margin-left: auto;
+}
+
+/* 日历视图 */
+.events-calendar {
+  padding: 0 8px;
+}
+
+.events-calendar :deep(.el-calendar) {
+  --el-calendar-border: 1px solid var(--el-border-color-lighter);
+}
+
+.events-calendar :deep(.el-calendar__header) {
+  padding: 8px 12px;
+}
+
+.events-calendar :deep(.el-calendar-table td) {
+  border: none;
+}
+
+.events-calendar :deep(.el-calendar-day) {
+  height: auto;
+  min-height: 60px;
+  padding: 4px;
+}
+
+.calendar-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.calendar-cell:hover {
+  background-color: var(--el-fill-color-light);
+}
+
+.calendar-day {
+  font-size: 14px;
+}
+
+.calendar-event-dots {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.calendar-event-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.calendar-event-more {
+  font-size: 10px;
+  color: var(--el-text-color-secondary);
+}
+
+/* 选中日期的事件列表 */
+.selected-date-events {
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
+}
+
+.selected-date-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-weight: 500;
+}
+
+.selected-date-empty {
+  margin-top: 16px;
+  padding: 24px;
+  text-align: center;
+  color: var(--el-text-color-placeholder);
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
 }
 </style>

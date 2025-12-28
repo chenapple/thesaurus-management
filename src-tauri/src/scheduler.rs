@@ -228,26 +228,36 @@ impl Scheduler {
                             let task_id = db::create_task_log("auto", total).ok();
                             println!("[Scheduler] 开始定时检测，共 {} 个关键词，任务ID: {:?}", total, task_id);
 
+                            // 准备批量检测数据: (monitoring_id, keyword, asin, country)
+                            let keywords: Vec<(i64, String, String, String)> = all_pending
+                                .iter()
+                                .map(|m| (m.id, m.keyword.clone(), m.asin.clone(), m.country.clone()))
+                                .collect();
+
+                            // 使用批量模式检测（同一站点复用浏览器）
+                            let task_id_clone = task_id;
+                            let results = crawler::check_rankings_batch(
+                                keywords,
+                                5, // max_pages
+                                move |completed, _total, msg| {
+                                    println!("[Scheduler] {}", msg);
+                                    // 更新任务进度（这里无法准确统计成功/失败，在结果处理时再统计）
+                                    if let Some(tid) = task_id_clone {
+                                        let _ = db::update_task_progress(tid, completed, 0);
+                                    }
+                                },
+                            ).await;
+
+                            // 处理结果
                             let mut success_count = 0i64;
                             let mut failed_count = 0i64;
 
-                            for monitoring in all_pending {
-                                // 获取上次排名（暂未使用，后续可用于计算排名变化）
-                                let _old_rank = db::get_previous_ranking(monitoring.id).ok().flatten();
-
-                                // 执行检测
-                                let result = crawler::search_keyword(
-                                    monitoring.keyword.clone(),
-                                    monitoring.asin.clone(),
-                                    monitoring.country.clone(),
-                                    5,
-                                ).await;
-
+                            for (monitoring_id, result) in results {
                                 if result.error.is_none() {
                                     // 更新数据库
                                     let product_info = result.product_info.as_ref();
                                     let _ = db::update_ranking_result(
-                                        monitoring.id,
+                                        monitoring_id,
                                         result.organic_rank,
                                         result.organic_page,
                                         result.sponsored_rank,
@@ -259,16 +269,9 @@ impl Scheduler {
                                     );
                                     success_count += 1;
                                 } else {
+                                    println!("[Scheduler] 检测失败 (id={}): {:?}", monitoring_id, result.error);
                                     failed_count += 1;
                                 }
-
-                                // 更新任务进度
-                                if let Some(tid) = task_id {
-                                    let _ = db::update_task_progress(tid, success_count, failed_count);
-                                }
-
-                                // 关键词间延迟
-                                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                             }
 
                             // 完成任务记录

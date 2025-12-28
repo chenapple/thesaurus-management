@@ -13,6 +13,13 @@
           <el-radio-button :value="14">14天</el-radio-button>
           <el-radio-button :value="30">30天</el-radio-button>
         </el-radio-group>
+        <el-switch
+          v-if="props.events?.length"
+          v-model="showEventLines"
+          size="small"
+          active-text="显示事件"
+          style="margin-left: 16px;"
+        />
       </div>
 
       <!-- 图表 -->
@@ -74,8 +81,11 @@ import type {
   LegendComponentOption,
   GridComponentOption,
 } from 'echarts/components';
+import { MarkLineComponent } from 'echarts/components';
+import type { MarkLineComponentOption } from 'echarts/components';
 import { getRankingHistory } from '../api';
-import type { KeywordMonitoring, RankingHistory } from '../types';
+import type { KeywordMonitoring, RankingHistory, OptimizationEvent } from '../types';
+import { EVENT_MAIN_TYPES, EVENT_SUB_TYPES, type EventMainType } from '../types';
 
 // 注册 ECharts 组件
 use([
@@ -85,6 +95,7 @@ use([
   TooltipComponent,
   LegendComponent,
   GridComponent,
+  MarkLineComponent,
 ]);
 
 type EChartsOption = ComposeOption<
@@ -93,14 +104,17 @@ type EChartsOption = ComposeOption<
   | TooltipComponentOption
   | LegendComponentOption
   | GridComponentOption
+  | MarkLineComponentOption
 >;
 
 const props = withDefaults(defineProps<{
   modelValue: boolean;
   monitoring: KeywordMonitoring | null;
   displayType?: 'organic' | 'sponsored' | 'all';
+  events?: OptimizationEvent[];
 }>(), {
   displayType: 'all',
+  events: () => [],
 });
 
 defineEmits<{
@@ -110,6 +124,7 @@ defineEmits<{
 const loading = ref(false);
 const days = ref(7);
 const history = ref<RankingHistory[]>([]);
+const showEventLines = ref(true);
 
 // 动态标题
 const dialogTitle = computed(() => {
@@ -146,6 +161,85 @@ function formatDateShort(dateStr: string): string {
   return dateStr;
 }
 
+// 获取子类型标签
+function getSubTypeLabel(mainType: string, subType?: string): string {
+  if (!subType) return '';
+  const subTypes = EVENT_SUB_TYPES[mainType as EventMainType];
+  if (!subTypes) return '';
+  return subTypes[subType]?.label || '';
+}
+
+// 判断事件是否应该显示（基于三级范围匹配）
+function shouldShowEvent(event: OptimizationEvent, monitoring: KeywordMonitoring): boolean {
+  // 1. 产品级别：target_asin 为空 → 所有监控项都显示
+  if (!event.target_asin) return true;
+
+  // 2. ASIN 级别：target_asin 匹配，且无关联关键词 → 该 ASIN 下所有关键词都显示
+  if (event.target_asin === monitoring.asin && !event.affected_keywords) return true;
+
+  // 3. 关键词级别：target_asin 匹配 + 关键词匹配 → 只有该组合显示
+  if (event.target_asin === monitoring.asin && event.affected_keywords) {
+    try {
+      const keywords: string[] = JSON.parse(event.affected_keywords);
+      return keywords.includes(monitoring.keyword);
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+// 生成事件标记线数据
+function getEventMarkLines() {
+  if (!props.events?.length || !props.monitoring) return [];
+
+  const dates = history.value.map(h => h.check_date);
+
+  // 过滤出符合条件的事件
+  const filteredEvents = props.events.filter(event =>
+    dates.includes(event.event_date) &&
+    shouldShowEvent(event, props.monitoring!)
+  );
+
+  // 按日期分组，计算每个事件在当天的索引（用于垂直错开）
+  const dateIndexMap: Record<string, number> = {};
+
+  return filteredEvents.map(event => {
+    const dateKey = event.event_date;
+    const indexInDay = dateIndexMap[dateKey] || 0;
+    dateIndexMap[dateKey] = indexInDay + 1;
+
+    const typeInfo = EVENT_MAIN_TYPES[event.event_type as EventMainType] || EVENT_MAIN_TYPES.listing;
+    const subTypeLabel = getSubTypeLabel(event.event_type, event.event_sub_type);
+    const displayLabel = subTypeLabel ? `${typeInfo.label}-${subTypeLabel}` : typeInfo.label;
+
+    // 垂直偏移量：每个事件向下偏移 16px
+    const verticalOffset = indexInDay * 16;
+
+    return {
+      xAxis: formatDateShort(event.event_date),
+      label: {
+        show: true,
+        formatter: displayLabel,
+        position: 'insideStartTop' as const,
+        fontSize: 10,
+        color: typeInfo.color,
+        offset: [0, verticalOffset],  // 垂直错开
+      },
+      lineStyle: {
+        color: typeInfo.color,
+        type: 'dashed' as const,
+        width: 2,
+      },
+      // 用于 tooltip
+      name: event.title,
+      eventType: event.event_type,
+      eventSubType: event.event_sub_type,
+    };
+  });
+}
+
 // 图表配置
 const chartOption = computed<EChartsOption>(() => {
   const dates = history.value.map(h => formatDateShort(h.check_date));
@@ -156,12 +250,59 @@ const chartOption = computed<EChartsOption>(() => {
   const legendData: string[] = [];
   const series: LineSeriesOption[] = [];
 
+  // 获取事件标记线（仅当开关打开时）
+  const markLineData = showEventLines.value ? getEventMarkLines() : [];
+
+  // 获取有事件的日期集合（用于高亮数据点）
+  const eventDates = new Set(markLineData.map(m => m.xAxis as string));
+
+  // 生成带高亮的数据点
+  function createDataWithHighlight(ranks: (number | null)[], color: string) {
+    return ranks.map((rank, index) => {
+      const date = dates[index];
+      const hasEvent = eventDates.has(date);
+      if (rank === null) return null;
+      return {
+        value: rank,
+        symbolSize: hasEvent ? 10 : 6,
+        itemStyle: hasEvent ? {
+          color: color,
+          borderWidth: 3,
+          borderColor: '#ff9800',
+        } : { color },
+      };
+    });
+  }
+
+  // markLine 配置（带 tooltip）
+  const markLineConfig = markLineData.length > 0 ? {
+    silent: false,
+    symbol: ['none', 'none'],
+    data: markLineData,
+    tooltip: {
+      show: true,
+      formatter: (params: any) => {
+        const data = params.data;
+        const typeInfo = EVENT_MAIN_TYPES[data.eventType as EventMainType] || {};
+        const subTypeLabel = getSubTypeLabel(data.eventType, data.eventSubType);
+        const typeLabel = subTypeLabel ? `${typeInfo.label}-${subTypeLabel}` : typeInfo.label;
+        return `
+          <div style="padding: 8px;">
+            <div style="font-weight:bold; margin-bottom: 4px;">${data.name}</div>
+            <div style="color: ${typeInfo.color};">类型: ${typeLabel}</div>
+            <div>日期: ${data.xAxis}</div>
+          </div>
+        `;
+      },
+    },
+  } : undefined;
+
   if (props.displayType !== 'sponsored') {
     legendData.push('自然排名');
     series.push({
       name: '自然排名',
       type: 'line',
-      data: organicRanks,
+      data: createDataWithHighlight(organicRanks, '#67c23a'),
       smooth: true,
       symbol: 'circle',
       symbolSize: 6,
@@ -173,6 +314,7 @@ const chartOption = computed<EChartsOption>(() => {
         color: '#67c23a',
       },
       connectNulls: true,
+      markLine: markLineConfig,
     });
   }
 
@@ -181,7 +323,7 @@ const chartOption = computed<EChartsOption>(() => {
     series.push({
       name: '广告排名',
       type: 'line',
-      data: sponsoredRanks,
+      data: createDataWithHighlight(sponsoredRanks, '#409eff'),
       smooth: true,
       symbol: 'circle',
       symbolSize: 6,
@@ -193,6 +335,7 @@ const chartOption = computed<EChartsOption>(() => {
         color: '#409eff',
       },
       connectNulls: true,
+      markLine: (props.displayType === 'sponsored') ? markLineConfig : undefined,
     });
   }
 
@@ -280,6 +423,9 @@ watch(() => props.modelValue, (val) => {
 
 .toolbar {
   margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .chart-container {

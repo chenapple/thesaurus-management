@@ -554,6 +554,52 @@ async fn install_playwright_only(app: tauri::AppHandle) -> Result<installer::Ins
     Ok(installer::install_playwright_only(app).await)
 }
 
+// 优化事件管理
+#[tauri::command]
+fn add_optimization_event(
+    product_id: i64,
+    event_date: String,
+    event_type: String,
+    event_sub_type: String,
+    title: String,
+    description: Option<String>,
+    target_asin: Option<String>,
+    affected_keywords: Option<String>,
+) -> Result<i64, String> {
+    db::add_optimization_event(product_id, event_date, event_type, event_sub_type, title, description, target_asin, affected_keywords)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_optimization_events(
+    product_id: i64,
+    start_date: Option<String>,
+    end_date: Option<String>,
+) -> Result<Vec<db::OptimizationEvent>, String> {
+    db::get_optimization_events(product_id, start_date, end_date)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_optimization_event(
+    id: i64,
+    event_date: String,
+    event_type: String,
+    event_sub_type: String,
+    title: String,
+    description: Option<String>,
+    target_asin: Option<String>,
+    affected_keywords: Option<String>,
+) -> Result<(), String> {
+    db::update_optimization_event(id, event_date, event_type, event_sub_type, title, description, target_asin, affected_keywords)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_optimization_event(id: i64) -> Result<(), String> {
+    db::delete_optimization_event(id).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -701,6 +747,11 @@ pub fn run() {
             check_dependencies,
             install_all_dependencies,
             install_playwright_only,
+            // 优化事件管理
+            add_optimization_event,
+            get_optimization_events,
+            update_optimization_event,
+            delete_optimization_event,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

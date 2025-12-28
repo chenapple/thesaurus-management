@@ -559,3 +559,79 @@ export async function installAllDependencies(): Promise<InstallResult> {
 export async function installPlaywrightOnly(): Promise<InstallResult> {
   return await invoke("install_playwright_only");
 }
+
+// ==================== 优化事件管理 ====================
+
+import type { OptimizationEvent, EventMainType, EventSubType } from "./types";
+
+/**
+ * 添加优化事件
+ */
+export async function addOptimizationEvent(
+  productId: number,
+  eventDate: string,
+  eventType: EventMainType,
+  eventSubType: EventSubType,
+  title: string,
+  description?: string,
+  targetAsin?: string,
+  affectedKeywords?: string
+): Promise<number> {
+  return await invoke("add_optimization_event", {
+    productId,
+    eventDate,
+    eventType,
+    eventSubType,
+    title,
+    description,
+    targetAsin,
+    affectedKeywords,
+  });
+}
+
+/**
+ * 获取优化事件列表
+ */
+export async function getOptimizationEvents(
+  productId: number,
+  startDate?: string,
+  endDate?: string
+): Promise<OptimizationEvent[]> {
+  return await invoke("get_optimization_events", {
+    productId,
+    startDate,
+    endDate,
+  });
+}
+
+/**
+ * 更新优化事件
+ */
+export async function updateOptimizationEvent(
+  id: number,
+  eventDate: string,
+  eventType: EventMainType,
+  eventSubType: EventSubType,
+  title: string,
+  description?: string,
+  targetAsin?: string,
+  affectedKeywords?: string
+): Promise<void> {
+  return await invoke("update_optimization_event", {
+    id,
+    eventDate,
+    eventType,
+    eventSubType,
+    title,
+    description,
+    targetAsin,
+    affectedKeywords,
+  });
+}
+
+/**
+ * 删除优化事件
+ */
+export async function deleteOptimizationEvent(id: number): Promise<void> {
+  return await invoke("delete_optimization_event", { id });
+}

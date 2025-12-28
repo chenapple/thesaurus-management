@@ -357,6 +357,10 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
     // 初始化关键词监控表
     init_monitoring_tables(&conn)?;
 
+    // 迁移优化事件表：添加 event_sub_type 列
+    migrate_events_add_sub_type(&conn)?;
+    migrate_events_add_asin(&conn)?;
+
     DB.set(Mutex::new(conn))
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
@@ -405,6 +409,66 @@ fn migrate_product_country(conn: &Connection) -> Result<()> {
     if !has_country {
         // 添加国家列
         conn.execute("ALTER TABLE products ADD COLUMN country TEXT", [])?;
+    }
+
+    Ok(())
+}
+
+// 数据库迁移：为优化事件表添加 event_sub_type 列
+fn migrate_events_add_sub_type(conn: &Connection) -> Result<()> {
+    // 检查表是否存在
+    let table_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='optimization_events'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0) > 0;
+
+    if !table_exists {
+        return Ok(());
+    }
+
+    // 检查是否已有 event_sub_type 列
+    let has_sub_type: bool = conn
+        .prepare("SELECT event_sub_type FROM optimization_events LIMIT 1")
+        .is_ok();
+
+    if !has_sub_type {
+        // 添加 event_sub_type 列
+        conn.execute("ALTER TABLE optimization_events ADD COLUMN event_sub_type TEXT", [])?;
+        // 迁移旧数据：根据 event_type 设置默认 sub_type
+        conn.execute("UPDATE optimization_events SET event_sub_type = 'title' WHERE event_type = 'listing' OR event_type IS NULL", [])?;
+        conn.execute("UPDATE optimization_events SET event_sub_type = 'bid', event_type = 'ad' WHERE event_type IN ('ad_keyword', 'ad_bid', 'ad_budget')", [])?;
+        conn.execute("UPDATE optimization_events SET event_sub_type = 'title', event_type = 'listing' WHERE event_type = 'other'", [])?;
+    }
+
+    Ok(())
+}
+
+// 数据库迁移：为 optimization_events 表添加 target_asin 列
+fn migrate_events_add_asin(conn: &Connection) -> Result<()> {
+    // 检查表是否存在
+    let table_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='optimization_events'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0) > 0;
+
+    if !table_exists {
+        return Ok(());
+    }
+
+    // 检查是否已有 target_asin 列
+    let has_target_asin: bool = conn
+        .prepare("SELECT target_asin FROM optimization_events LIMIT 1")
+        .is_ok();
+
+    if !has_target_asin {
+        // 添加 target_asin 列
+        conn.execute("ALTER TABLE optimization_events ADD COLUMN target_asin TEXT", [])?;
     }
 
     Ok(())
@@ -2137,6 +2201,19 @@ pub fn init_monitoring_tables(conn: &Connection) -> Result<()> {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
+        -- 优化事件表
+        CREATE TABLE IF NOT EXISTS optimization_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER NOT NULL,
+            event_date TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            affected_keywords TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+        );
+
         -- 索引
         CREATE INDEX IF NOT EXISTS idx_keyword_monitoring_product ON keyword_monitoring(product_id);
         CREATE INDEX IF NOT EXISTS idx_keyword_monitoring_active ON keyword_monitoring(is_active);
@@ -2145,6 +2222,8 @@ pub fn init_monitoring_tables(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_ranking_history_date ON keyword_ranking_history(check_date);
         CREATE INDEX IF NOT EXISTS idx_ranking_snapshots_keyword ON ranking_snapshots(keyword, country);
         CREATE INDEX IF NOT EXISTS idx_scheduler_task_logs_started ON scheduler_task_logs(started_at);
+        CREATE INDEX IF NOT EXISTS idx_events_product ON optimization_events(product_id);
+        CREATE INDEX IF NOT EXISTS idx_events_date ON optimization_events(event_date);
         "
     )?;
     Ok(())
@@ -2884,4 +2963,118 @@ pub fn get_running_task() -> Result<Option<SchedulerTaskLog>> {
     } else {
         Ok(None)
     }
+}
+
+// ============ 优化事件相关 ============
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OptimizationEvent {
+    pub id: i64,
+    pub product_id: i64,
+    pub event_date: String,
+    pub event_type: String,          // 主类型: listing, ad
+    pub event_sub_type: String,      // 子类型
+    pub title: String,
+    pub description: Option<String>,
+    pub target_asin: Option<String>,         // 目标 ASIN（可选）
+    pub affected_keywords: Option<String>,   // 关联关键词 JSON 数组（可选）
+    pub created_at: String,
+}
+
+// 添加优化事件
+pub fn add_optimization_event(
+    product_id: i64,
+    event_date: String,
+    event_type: String,
+    event_sub_type: String,
+    title: String,
+    description: Option<String>,
+    target_asin: Option<String>,
+    affected_keywords: Option<String>,
+) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT INTO optimization_events (product_id, event_date, event_type, event_sub_type, title, description, target_asin, affected_keywords)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![product_id, event_date, event_type, event_sub_type, title, description, target_asin, affected_keywords],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+// 获取优化事件列表
+pub fn get_optimization_events(
+    product_id: i64,
+    start_date: Option<String>,
+    end_date: Option<String>,
+) -> Result<Vec<OptimizationEvent>> {
+    let conn = get_db().lock();
+
+    let mut sql = String::from(
+        "SELECT id, product_id, event_date, event_type, COALESCE(event_sub_type, 'title') as event_sub_type, title, description, target_asin, affected_keywords, created_at
+         FROM optimization_events WHERE product_id = ?1"
+    );
+
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(product_id)];
+    let mut param_index = 2;
+
+    if let Some(ref start) = start_date {
+        sql.push_str(&format!(" AND event_date >= ?{}", param_index));
+        params.push(Box::new(start.clone()));
+        param_index += 1;
+    }
+
+    if let Some(ref end) = end_date {
+        sql.push_str(&format!(" AND event_date <= ?{}", param_index));
+        params.push(Box::new(end.clone()));
+    }
+
+    sql.push_str(" ORDER BY event_date DESC, created_at DESC");
+
+    let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let mut stmt = conn.prepare(&sql)?;
+
+    let events = stmt.query_map(params_refs.as_slice(), |row| {
+        Ok(OptimizationEvent {
+            id: row.get(0)?,
+            product_id: row.get(1)?,
+            event_date: row.get(2)?,
+            event_type: row.get(3)?,
+            event_sub_type: row.get(4)?,
+            title: row.get(5)?,
+            description: row.get(6)?,
+            target_asin: row.get(7)?,
+            affected_keywords: row.get(8)?,
+            created_at: row.get(9)?,
+        })
+    })?
+    .collect::<Result<Vec<_>>>()?;
+
+    Ok(events)
+}
+
+// 更新优化事件
+pub fn update_optimization_event(
+    id: i64,
+    event_date: String,
+    event_type: String,
+    event_sub_type: String,
+    title: String,
+    description: Option<String>,
+    target_asin: Option<String>,
+    affected_keywords: Option<String>,
+) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE optimization_events SET event_date = ?1, event_type = ?2, event_sub_type = ?3, title = ?4,
+         description = ?5, target_asin = ?6, affected_keywords = ?7 WHERE id = ?8",
+        rusqlite::params![event_date, event_type, event_sub_type, title, description, target_asin, affected_keywords, id],
+    )?;
+    Ok(())
+}
+
+// 删除优化事件
+pub fn delete_optimization_event(id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("DELETE FROM optimization_events WHERE id = ?1", [id])?;
+    Ok(())
 }
