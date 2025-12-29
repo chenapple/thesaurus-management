@@ -739,10 +739,54 @@ async def search_keyword(keyword: str, target_asin: str, country: str, max_pages
                                         img_elem = item.locator('img.s-image')
                                         img_url = await img_elem.get_attribute('src') if await img_elem.count() > 0 else None
 
+                                        # 提取星级评分
+                                        rating = None
+                                        try:
+                                            rating_elem = item.locator('[class*="a-icon-star"], .a-icon-star-small')
+                                            if await rating_elem.count() > 0:
+                                                rating_class = await rating_elem.first.get_attribute('class') or ''
+                                                # 从类名中提取评分，如 "a-star-4-5" -> 4.5
+                                                rating_match = re.search(r'a-star-(\d)-(\d)', rating_class)
+                                                if rating_match:
+                                                    rating = float(f"{rating_match.group(1)}.{rating_match.group(2)}")
+                                                else:
+                                                    rating_match = re.search(r'a-star-(\d)', rating_class)
+                                                    if rating_match:
+                                                        rating = float(rating_match.group(1))
+                                        except:
+                                            pass
+
+                                        # 提取评论数
+                                        reviews_count = None
+                                        try:
+                                            # 评论数通常在星级附近的链接或span中
+                                            reviews_elem = item.locator('[aria-label*="stars"], [data-csa-c-slot-id*="review"]')
+                                            if await reviews_elem.count() > 0:
+                                                aria_label = await reviews_elem.first.get_attribute('aria-label') or ''
+                                                # 如 "4.5 out of 5 stars"
+                                                if not rating and aria_label:
+                                                    rating_match = re.search(r'([\d.]+)\s*(?:out of|von|sur|su|de)\s*5', aria_label)
+                                                    if rating_match:
+                                                        rating = float(rating_match.group(1))
+
+                                            # 评论数量链接
+                                            reviews_link = item.locator('a[href*="#customerReviews"], a[href*="customerReviews"], span.a-size-base.s-underline-text')
+                                            if await reviews_link.count() > 0:
+                                                reviews_text = await reviews_link.first.text_content() or ''
+                                                # 提取数字，如 "1,234" -> 1234
+                                                reviews_text = reviews_text.replace(',', '').replace('.', '').replace(' ', '')
+                                                reviews_match = re.search(r'(\d+)', reviews_text)
+                                                if reviews_match:
+                                                    reviews_count = int(reviews_match.group(1))
+                                        except:
+                                            pass
+
                                         result['product_info'] = {
                                             'asin': asin,
                                             'title': title.strip() if title else None,
                                             'price': price.strip() if price else None,
+                                            'rating': rating,
+                                            'reviews_count': reviews_count,
                                             'image_url': img_url
                                         }
                                     except:
@@ -778,6 +822,8 @@ async def search_keyword(keyword: str, target_asin: str, country: str, max_pages
                     title = None
                     price = None
                     img_url = None
+                    rating = None
+                    reviews_count = None
 
                     try:
                         title_elem = page.locator('#productTitle')
@@ -800,10 +846,38 @@ async def search_keyword(keyword: str, target_asin: str, country: str, max_pages
                     except:
                         pass
 
+                    # 详情页提取星级评分
+                    try:
+                        rating_elem = page.locator('#acrPopover, [data-action="acrStarsLink-click-metrics"]')
+                        if await rating_elem.count() > 0:
+                            rating_title = await rating_elem.first.get_attribute('title') or ''
+                            # 如 "4.5 out of 5 stars" 或 "4,5 von 5 Sternen"
+                            rating_match = re.search(r'([\d,\.]+)\s*(?:out of|von|sur|su|de)', rating_title)
+                            if rating_match:
+                                rating_str = rating_match.group(1).replace(',', '.')
+                                rating = float(rating_str)
+                    except:
+                        pass
+
+                    # 详情页提取评论数
+                    try:
+                        reviews_elem = page.locator('#acrCustomerReviewText')
+                        if await reviews_elem.count() > 0:
+                            reviews_text = await reviews_elem.first.text_content() or ''
+                            # 如 "1,234 ratings" 或 "1.234 Bewertungen"
+                            reviews_text = reviews_text.replace(',', '').replace('.', '').replace(' ', '')
+                            reviews_match = re.search(r'(\d+)', reviews_text)
+                            if reviews_match:
+                                reviews_count = int(reviews_match.group(1))
+                    except:
+                        pass
+
                     result['product_info'] = {
                         'asin': target_asin,
                         'title': title.strip() if title else None,
                         'price': price.strip() if price else None,
+                        'rating': rating,
+                        'reviews_count': reviews_count,
                         'image_url': img_url
                     }
                 except:
@@ -1174,10 +1248,49 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
                                                     img_elem = item.locator('img.s-image')
                                                     img_url = await img_elem.get_attribute('src') if await img_elem.count() > 0 else None
 
+                                                    # 提取星级评分
+                                                    rating = None
+                                                    try:
+                                                        rating_elem = item.locator('[class*="a-icon-star"], .a-icon-star-small')
+                                                        if await rating_elem.count() > 0:
+                                                            rating_class = await rating_elem.first.get_attribute('class') or ''
+                                                            rating_match = re.search(r'a-star-(\d)-(\d)', rating_class)
+                                                            if rating_match:
+                                                                rating = float(f"{rating_match.group(1)}.{rating_match.group(2)}")
+                                                            else:
+                                                                rating_match = re.search(r'a-star-(\d)', rating_class)
+                                                                if rating_match:
+                                                                    rating = float(rating_match.group(1))
+                                                    except:
+                                                        pass
+
+                                                    # 提取评论数
+                                                    reviews_count = None
+                                                    try:
+                                                        reviews_elem = item.locator('[aria-label*="stars"], [data-csa-c-slot-id*="review"]')
+                                                        if await reviews_elem.count() > 0:
+                                                            aria_label = await reviews_elem.first.get_attribute('aria-label') or ''
+                                                            if not rating and aria_label:
+                                                                rating_match = re.search(r'([\d.]+)\s*(?:out of|von|sur|su|de)\s*5', aria_label)
+                                                                if rating_match:
+                                                                    rating = float(rating_match.group(1))
+
+                                                        reviews_link = item.locator('a[href*="#customerReviews"], a[href*="customerReviews"], span.a-size-base.s-underline-text')
+                                                        if await reviews_link.count() > 0:
+                                                            reviews_text = await reviews_link.first.text_content() or ''
+                                                            reviews_text = reviews_text.replace(',', '').replace('.', '').replace(' ', '')
+                                                            reviews_match = re.search(r'(\d+)', reviews_text)
+                                                            if reviews_match:
+                                                                reviews_count = int(reviews_match.group(1))
+                                                    except:
+                                                        pass
+
                                                     result['product_info'] = {
                                                         'asin': asin,
                                                         'title': title.strip() if title else None,
                                                         'price': price.strip() if price else None,
+                                                        'rating': rating,
+                                                        'reviews_count': reviews_count,
                                                         'image_url': img_url
                                                     }
                                                 except:
@@ -1207,6 +1320,7 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
                                 await page.wait_for_timeout(2000)
 
                                 title = price = img_url = None
+                                rating = reviews_count = None
                                 try:
                                     title_elem = page.locator('#productTitle')
                                     if await title_elem.count() > 0:
@@ -1226,10 +1340,36 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
                                 except:
                                     pass
 
+                                # 详情页提取星级评分
+                                try:
+                                    rating_elem = page.locator('#acrPopover, [data-action="acrStarsLink-click-metrics"]')
+                                    if await rating_elem.count() > 0:
+                                        rating_title = await rating_elem.first.get_attribute('title') or ''
+                                        rating_match = re.search(r'([\d,\.]+)\s*(?:out of|von|sur|su|de)', rating_title)
+                                        if rating_match:
+                                            rating_str = rating_match.group(1).replace(',', '.')
+                                            rating = float(rating_str)
+                                except:
+                                    pass
+
+                                # 详情页提取评论数
+                                try:
+                                    reviews_elem = page.locator('#acrCustomerReviewText')
+                                    if await reviews_elem.count() > 0:
+                                        reviews_text = await reviews_elem.first.text_content() or ''
+                                        reviews_text = reviews_text.replace(',', '').replace('.', '').replace(' ', '')
+                                        reviews_match = re.search(r'(\d+)', reviews_text)
+                                        if reviews_match:
+                                            reviews_count = int(reviews_match.group(1))
+                                except:
+                                    pass
+
                                 result['product_info'] = {
                                     'asin': target_asin,
                                     'title': title.strip() if title else None,
                                     'price': price.strip() if price else None,
+                                    'rating': rating,
+                                    'reviews_count': reviews_count,
                                     'image_url': img_url
                                 }
                             except:
