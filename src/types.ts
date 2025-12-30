@@ -117,11 +117,11 @@ export interface KeywordMonitoring {
 
 // 关键词标签定义
 export const KEYWORD_TAGS = [
-  { key: 'high_traffic', label: '高流量', color: '#409eff' },
-  { key: 'high_click', label: '高点击', color: '#67c23a' },
-  { key: 'high_conversion', label: '高转化', color: '#e6a23c' },
-  { key: 'low_roi', label: '低投产', color: '#f56c6c' },
-  { key: 'high_return', label: '高回报', color: '#9b59b6' },
+  { key: 'high_traffic', label: '高流量', color: '#409eff', description: '搜索量大，曝光机会多的关键词' },
+  { key: 'high_click', label: '高点击', color: '#67c23a', description: '点击率高于平均水平的关键词' },
+  { key: 'high_conversion', label: '高转化', color: '#e6a23c', description: '转化率表现优秀的关键词' },
+  { key: 'low_roi', label: '低投产', color: '#f56c6c', description: 'ACOS低的优质关键词' },
+  { key: 'high_return', label: '高回报', color: '#9b59b6', description: 'ROAS高的优质关键词' },
 ] as const;
 
 export type KeywordTagKey = typeof KEYWORD_TAGS[number]['key'];

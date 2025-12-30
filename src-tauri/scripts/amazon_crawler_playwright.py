@@ -742,10 +742,10 @@ async def search_keyword(keyword: str, target_asin: str, country: str, max_pages
                                         # 提取星级评分
                                         rating = None
                                         try:
+                                            # 方法1: 从 class 名提取
                                             rating_elem = item.locator('[class*="a-icon-star"], .a-icon-star-small')
                                             if await rating_elem.count() > 0:
                                                 rating_class = await rating_elem.first.get_attribute('class') or ''
-                                                # 从类名中提取评分，如 "a-star-4-5" -> 4.5
                                                 rating_match = re.search(r'a-star-(\d)-(\d)', rating_class)
                                                 if rating_match:
                                                     rating = float(f"{rating_match.group(1)}.{rating_match.group(2)}")
@@ -753,31 +753,48 @@ async def search_keyword(keyword: str, target_asin: str, country: str, max_pages
                                                     rating_match = re.search(r'a-star-(\d)', rating_class)
                                                     if rating_match:
                                                         rating = float(rating_match.group(1))
+
+                                            # 方法2: 从 aria-label 提取 (备用)
+                                            if not rating:
+                                                rating_aria = item.locator('[aria-label*="stars"], [aria-label*="étoiles"], [aria-label*="Sternen"]')
+                                                if await rating_aria.count() > 0:
+                                                    aria_label = await rating_aria.first.get_attribute('aria-label') or ''
+                                                    rating_match = re.search(r'([\d,\.]+)\s*(?:out of|von|sur|su|de|étoiles|Sternen)', aria_label)
+                                                    if rating_match:
+                                                        rating = float(rating_match.group(1).replace(',', '.'))
                                         except:
                                             pass
 
                                         # 提取评论数
                                         reviews_count = None
                                         try:
-                                            # 评论数通常在星级附近的链接或span中
-                                            reviews_elem = item.locator('[aria-label*="stars"], [data-csa-c-slot-id*="review"]')
-                                            if await reviews_elem.count() > 0:
-                                                aria_label = await reviews_elem.first.get_attribute('aria-label') or ''
-                                                # 如 "4.5 out of 5 stars"
-                                                if not rating and aria_label:
-                                                    rating_match = re.search(r'([\d.]+)\s*(?:out of|von|sur|su|de)\s*5', aria_label)
-                                                    if rating_match:
-                                                        rating = float(rating_match.group(1))
-
-                                            # 评论数量链接
-                                            reviews_link = item.locator('a[href*="#customerReviews"], a[href*="customerReviews"], span.a-size-base.s-underline-text')
+                                            # 评论数量链接 - 更精确的选择器
+                                            reviews_link = item.locator('a[href*="#customerReviews"], a[href*="product-reviews"]')
                                             if await reviews_link.count() > 0:
                                                 reviews_text = await reviews_link.first.text_content() or ''
-                                                # 提取数字，如 "1,234" -> 1234
-                                                reviews_text = reviews_text.replace(',', '').replace('.', '').replace(' ', '')
-                                                reviews_match = re.search(r'(\d+)', reviews_text)
-                                                if reviews_match:
-                                                    reviews_count = int(reviews_match.group(1))
+                                                # 处理 K 后缀 (如 "3,6K" 或 "3.6K" 表示 3600)
+                                                k_match = re.search(r'([\d\s\.,\u00a0\u202f]+)\s*[Kk]', reviews_text)
+                                                if k_match:
+                                                    num_str = k_match.group(1)
+                                                    # 移除所有空格类字符
+                                                    num_str = re.sub(r'[\s\u00a0\u202f]', '', num_str)
+                                                    # 处理小数：3,6 或 3.6 -> 3.6
+                                                    num_str = num_str.replace(',', '.')
+                                                    try:
+                                                        reviews_count = int(float(num_str) * 1000)
+                                                    except:
+                                                        pass
+                                                else:
+                                                    # 移除所有空格类字符（包括 narrow no-break space \u202f）
+                                                    reviews_text_clean = re.sub(r'[\s\u00a0\u202f,.]', '', reviews_text)
+                                                    all_numbers = re.findall(r'\d+', reviews_text_clean)
+                                                    if all_numbers:
+                                                        # 过滤掉可能的星级数字(1-5)，取最大的数字作为评论数
+                                                        candidates = [int(n) for n in all_numbers if int(n) > 5]
+                                                        if candidates:
+                                                            reviews_count = max(candidates)
+                                                        elif all_numbers:
+                                                            reviews_count = int(all_numbers[-1])
                                         except:
                                             pass
 
@@ -851,8 +868,8 @@ async def search_keyword(keyword: str, target_asin: str, country: str, max_pages
                         rating_elem = page.locator('#acrPopover, [data-action="acrStarsLink-click-metrics"]')
                         if await rating_elem.count() > 0:
                             rating_title = await rating_elem.first.get_attribute('title') or ''
-                            # 如 "4.5 out of 5 stars" 或 "4,5 von 5 Sternen"
-                            rating_match = re.search(r'([\d,\.]+)\s*(?:out of|von|sur|su|de)', rating_title)
+                            # 如 "4.5 out of 5 stars" 或 "4,5 von 5 Sternen" 或 "4,5 sur 5 étoiles"
+                            rating_match = re.search(r'([\d,\.]+)\s*(?:out of|von|sur|su|de|étoiles|Sternen)', rating_title)
                             if rating_match:
                                 rating_str = rating_match.group(1).replace(',', '.')
                                 rating = float(rating_str)
@@ -864,11 +881,26 @@ async def search_keyword(keyword: str, target_asin: str, country: str, max_pages
                         reviews_elem = page.locator('#acrCustomerReviewText')
                         if await reviews_elem.count() > 0:
                             reviews_text = await reviews_elem.first.text_content() or ''
-                            # 如 "1,234 ratings" 或 "1.234 Bewertungen"
-                            reviews_text = reviews_text.replace(',', '').replace('.', '').replace(' ', '')
-                            reviews_match = re.search(r'(\d+)', reviews_text)
-                            if reviews_match:
-                                reviews_count = int(reviews_match.group(1))
+                            # 处理 K 后缀 (如 "3,6K" 或 "3.6K" 表示 3600)
+                            k_match = re.search(r'([\d\s\.,\u00a0\u202f]+)\s*[Kk]', reviews_text)
+                            if k_match:
+                                num_str = k_match.group(1)
+                                num_str = re.sub(r'[\s\u00a0\u202f]', '', num_str)
+                                num_str = num_str.replace(',', '.')
+                                try:
+                                    reviews_count = int(float(num_str) * 1000)
+                                except:
+                                    pass
+                            else:
+                                # 移除所有空格类字符（包括 narrow no-break space \u202f）
+                                reviews_text_clean = re.sub(r'[\s\u00a0\u202f,.]', '', reviews_text)
+                                all_numbers = re.findall(r'\d+', reviews_text_clean)
+                                if all_numbers:
+                                    candidates = [int(n) for n in all_numbers if int(n) > 5]
+                                    if candidates:
+                                        reviews_count = max(candidates)
+                                    elif all_numbers:
+                                        reviews_count = int(all_numbers[-1])
                     except:
                         pass
 
@@ -1251,6 +1283,7 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
                                                     # 提取星级评分
                                                     rating = None
                                                     try:
+                                                        # 方法1: 从 class 名提取
                                                         rating_elem = item.locator('[class*="a-icon-star"], .a-icon-star-small')
                                                         if await rating_elem.count() > 0:
                                                             rating_class = await rating_elem.first.get_attribute('class') or ''
@@ -1261,27 +1294,45 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
                                                                 rating_match = re.search(r'a-star-(\d)', rating_class)
                                                                 if rating_match:
                                                                     rating = float(rating_match.group(1))
+
+                                                        # 方法2: 从 aria-label 提取 (备用)
+                                                        if not rating:
+                                                            rating_aria = item.locator('[aria-label*="stars"], [aria-label*="étoiles"], [aria-label*="Sternen"]')
+                                                            if await rating_aria.count() > 0:
+                                                                aria_label = await rating_aria.first.get_attribute('aria-label') or ''
+                                                                rating_match = re.search(r'([\d,\.]+)\s*(?:out of|von|sur|su|de|étoiles|Sternen)', aria_label)
+                                                                if rating_match:
+                                                                    rating = float(rating_match.group(1).replace(',', '.'))
                                                     except:
                                                         pass
 
                                                     # 提取评论数
                                                     reviews_count = None
                                                     try:
-                                                        reviews_elem = item.locator('[aria-label*="stars"], [data-csa-c-slot-id*="review"]')
-                                                        if await reviews_elem.count() > 0:
-                                                            aria_label = await reviews_elem.first.get_attribute('aria-label') or ''
-                                                            if not rating and aria_label:
-                                                                rating_match = re.search(r'([\d.]+)\s*(?:out of|von|sur|su|de)\s*5', aria_label)
-                                                                if rating_match:
-                                                                    rating = float(rating_match.group(1))
-
-                                                        reviews_link = item.locator('a[href*="#customerReviews"], a[href*="customerReviews"], span.a-size-base.s-underline-text')
+                                                        # 评论数量链接 - 更精确的选择器
+                                                        reviews_link = item.locator('a[href*="#customerReviews"], a[href*="product-reviews"]')
                                                         if await reviews_link.count() > 0:
                                                             reviews_text = await reviews_link.first.text_content() or ''
-                                                            reviews_text = reviews_text.replace(',', '').replace('.', '').replace(' ', '')
-                                                            reviews_match = re.search(r'(\d+)', reviews_text)
-                                                            if reviews_match:
-                                                                reviews_count = int(reviews_match.group(1))
+                                                            # 处理 K 后缀 (如 "3,6K" 或 "3.6K" 表示 3600)
+                                                            k_match = re.search(r'([\d\s\.,\u00a0\u202f]+)\s*[Kk]', reviews_text)
+                                                            if k_match:
+                                                                num_str = k_match.group(1)
+                                                                num_str = re.sub(r'[\s\u00a0\u202f]', '', num_str)
+                                                                num_str = num_str.replace(',', '.')
+                                                                try:
+                                                                    reviews_count = int(float(num_str) * 1000)
+                                                                except:
+                                                                    pass
+                                                            else:
+                                                                # 移除所有空格类字符（包括 narrow no-break space \u202f）
+                                                                reviews_text_clean = re.sub(r'[\s\u00a0\u202f,.]', '', reviews_text)
+                                                                all_numbers = re.findall(r'\d+', reviews_text_clean)
+                                                                if all_numbers:
+                                                                    candidates = [int(n) for n in all_numbers if int(n) > 5]
+                                                                    if candidates:
+                                                                        reviews_count = max(candidates)
+                                                                    elif all_numbers:
+                                                                        reviews_count = int(all_numbers[-1])
                                                     except:
                                                         pass
 
@@ -1345,7 +1396,8 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
                                     rating_elem = page.locator('#acrPopover, [data-action="acrStarsLink-click-metrics"]')
                                     if await rating_elem.count() > 0:
                                         rating_title = await rating_elem.first.get_attribute('title') or ''
-                                        rating_match = re.search(r'([\d,\.]+)\s*(?:out of|von|sur|su|de)', rating_title)
+                                        # 如 "4.5 out of 5 stars" 或 "4,5 von 5 Sternen" 或 "4,5 sur 5 étoiles"
+                                        rating_match = re.search(r'([\d,\.]+)\s*(?:out of|von|sur|su|de|étoiles|Sternen)', rating_title)
                                         if rating_match:
                                             rating_str = rating_match.group(1).replace(',', '.')
                                             rating = float(rating_str)
@@ -1357,10 +1409,26 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
                                     reviews_elem = page.locator('#acrCustomerReviewText')
                                     if await reviews_elem.count() > 0:
                                         reviews_text = await reviews_elem.first.text_content() or ''
-                                        reviews_text = reviews_text.replace(',', '').replace('.', '').replace(' ', '')
-                                        reviews_match = re.search(r'(\d+)', reviews_text)
-                                        if reviews_match:
-                                            reviews_count = int(reviews_match.group(1))
+                                        # 处理 K 后缀 (如 "3,6K" 或 "3.6K" 表示 3600)
+                                        k_match = re.search(r'([\d\s\.,\u00a0\u202f]+)\s*[Kk]', reviews_text)
+                                        if k_match:
+                                            num_str = k_match.group(1)
+                                            num_str = re.sub(r'[\s\u00a0\u202f]', '', num_str)
+                                            num_str = num_str.replace(',', '.')
+                                            try:
+                                                reviews_count = int(float(num_str) * 1000)
+                                            except:
+                                                pass
+                                        else:
+                                            # 移除所有空格类字符（包括 narrow no-break space \u202f）
+                                            reviews_text_clean = re.sub(r'[\s\u00a0\u202f,.]', '', reviews_text)
+                                            all_numbers = re.findall(r'\d+', reviews_text_clean)
+                                            if all_numbers:
+                                                candidates = [int(n) for n in all_numbers if int(n) > 5]
+                                                if candidates:
+                                                    reviews_count = max(candidates)
+                                                elif all_numbers:
+                                                    reviews_count = int(all_numbers[-1])
                                 except:
                                     pass
 

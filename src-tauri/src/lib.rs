@@ -470,6 +470,90 @@ async fn check_all_rankings(
     Ok(results)
 }
 
+// 检测选中的关键词排名
+#[tauri::command]
+async fn check_selected_rankings(
+    app: tauri::AppHandle,
+    ids: Vec<i64>,
+    max_pages: Option<i64>,
+) -> Result<Vec<(i64, crawler::RankingResult)>, String> {
+    // 根据ID列表获取监控记录
+    let pending = db::get_monitoring_by_ids(&ids)
+        .map_err(|e| e.to_string())?;
+
+    if pending.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let total = pending.len() as i64;
+
+    // 发送开始事件
+    app.emit("ranking-check-start", serde_json::json!({
+        "total": total
+    })).ok();
+
+    // 准备检测数据
+    let keywords: Vec<(i64, String, String, String)> = pending
+        .into_iter()
+        .map(|m| (m.id, m.keyword, m.asin, m.country))
+        .collect();
+
+    // 执行批量检测
+    let app_clone = app.clone();
+    let results = crawler::check_rankings_batch(
+        keywords,
+        max_pages.unwrap_or(5),
+        move |current, total, message| {
+            // 发送进度事件到前端
+            app_clone.emit("ranking-check-progress", serde_json::json!({
+                "current": current,
+                "total": total,
+                "message": message
+            })).ok();
+        },
+    )
+    .await;
+
+    // 更新数据库
+    for (monitoring_id, ref result) in &results {
+        if result.error.is_none() {
+            let product_info = result.product_info.as_ref();
+            db::update_ranking_result(
+                *monitoring_id,
+                result.organic_rank,
+                result.organic_page,
+                result.sponsored_rank,
+                result.sponsored_page,
+                product_info.and_then(|p| p.image_url.clone()),
+                product_info.and_then(|p| p.price.clone()),
+                product_info.and_then(|p| p.reviews_count),
+                product_info.and_then(|p| p.rating),
+            )
+            .ok();
+
+            // 保存竞品快照
+            if !result.organic_top_50.is_empty() || !result.sponsored_top_20.is_empty() {
+                db::save_ranking_snapshot(
+                    &result.keyword,
+                    &result.country,
+                    Some(serde_json::to_string(&result.organic_top_50).unwrap_or_default()),
+                    Some(serde_json::to_string(&result.sponsored_top_20).unwrap_or_default()),
+                )
+                .ok();
+            }
+        }
+    }
+
+    // 发送完成事件
+    app.emit("ranking-check-complete", serde_json::json!({
+        "total": results.len(),
+        "success": results.iter().filter(|(_, r)| r.error.is_none()).count(),
+        "failed": results.iter().filter(|(_, r)| r.error.is_some()).count()
+    })).ok();
+
+    Ok(results)
+}
+
 // 批量添加关键词监控
 #[tauri::command]
 fn batch_add_keyword_monitoring(
@@ -741,6 +825,7 @@ pub fn run() {
             get_monitoring_sparklines,
             check_single_ranking,
             check_all_rankings,
+            check_selected_rankings,
             batch_add_keyword_monitoring,
             // 调度器管理
             get_scheduler_settings,

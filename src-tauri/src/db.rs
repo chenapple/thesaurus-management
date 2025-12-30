@@ -2818,6 +2818,60 @@ pub fn get_pending_monitoring_checks(product_id: i64, hours_since_last_check: i6
     Ok(data)
 }
 
+// 根据ID列表获取监控记录（用于选中检测）
+pub fn get_monitoring_by_ids(ids: &[i64]) -> Result<Vec<KeywordMonitoring>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let conn = get_db().lock();
+    let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
+    let sql = format!(
+        "SELECT id, product_id, keyword, asin, country, priority, is_active,
+                latest_organic_rank, latest_organic_page, latest_sponsored_rank, latest_sponsored_page,
+                image_url, price, reviews_count, rating, last_checked, created_at, tags
+         FROM keyword_monitoring
+         WHERE id IN ({})
+         ORDER BY
+           CASE priority
+             WHEN 'high' THEN 1
+             WHEN 'medium' THEN 2
+             ELSE 3
+           END",
+        placeholders.join(",")
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+
+    let data = stmt
+        .query_map(params.as_slice(), |row| {
+            Ok(KeywordMonitoring {
+                id: row.get(0)?,
+                product_id: row.get(1)?,
+                keyword: row.get(2)?,
+                asin: row.get(3)?,
+                country: row.get(4)?,
+                priority: row.get(5)?,
+                is_active: row.get::<_, i64>(6)? == 1,
+                latest_organic_rank: row.get(7)?,
+                latest_organic_page: row.get(8)?,
+                latest_sponsored_rank: row.get(9)?,
+                latest_sponsored_page: row.get(10)?,
+                image_url: row.get(11)?,
+                price: row.get(12)?,
+                reviews_count: row.get(13)?,
+                rating: row.get(14)?,
+                last_checked: row.get(15)?,
+                created_at: row.get(16)?,
+                tags: row.get(17)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(data)
+}
+
 // 更新关键词监控标签
 pub fn update_keyword_monitoring_tags(id: i64, tags: Option<String>) -> Result<()> {
     let conn = get_db().lock();

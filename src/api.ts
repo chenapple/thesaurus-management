@@ -495,6 +495,19 @@ export async function checkAllRankings(
   });
 }
 
+/**
+ * 检测选中的关键词排名
+ */
+export async function checkSelectedRankings(
+  ids: number[],
+  maxPages?: number
+): Promise<[number, RankingResult][]> {
+  return await invoke("check_selected_rankings", {
+    ids,
+    maxPages: maxPages || null,
+  });
+}
+
 // ==================== 调度器管理 ====================
 
 import type { SchedulerSettings, SchedulerStatus, TaskLog } from "./types";

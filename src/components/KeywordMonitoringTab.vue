@@ -567,7 +567,45 @@
             :key="child.id"
             class="child-row"
           >
-            <div class="child-cell child-keyword">{{ child.keyword }}</div>
+            <div class="child-cell child-keyword">
+              <el-tooltip
+                :disabled="!getRowTags(child).length"
+                placement="top"
+                :show-after="300"
+                popper-class="keyword-tag-tooltip"
+              >
+                <template #content>
+                  <div class="tag-tooltip-content">
+                    <div class="tag-tooltip-tags">
+                      <el-tag
+                        v-for="tag in getRowTags(child)"
+                        :key="tag"
+                        :color="getTagColor(tag)"
+                        size="small"
+                        effect="dark"
+                      >
+                        {{ getTagLabel(tag) }}
+                      </el-tag>
+                    </div>
+                    <el-button size="small" type="primary" link @click.stop="openTagEditor(child)">
+                      编辑标签
+                    </el-button>
+                  </div>
+                </template>
+                <span class="keyword-cell">
+                  <span class="keyword-text keyword-link" @click="openAmazonSearch(child.keyword, child.country)">{{ child.keyword }}</span>
+                  <span v-if="getRowTags(child).length" class="tag-dots">
+                    <span
+                      v-for="tag in getRowTags(child)"
+                      :key="tag"
+                      class="tag-dot"
+                      :style="{ backgroundColor: getTagColor(tag) }"
+                    ></span>
+                  </span>
+                  <span class="tag-add-btn" @click.stop="openTagEditor(child)" title="编辑标签">+</span>
+                </span>
+              </el-tooltip>
+            </div>
             <div class="child-cell child-col-rank">
               <span v-if="child.latest_organic_rank" :class="getRankClass(child.latest_organic_page, child.latest_organic_rank)" class="rank-display">
                 第{{ child.latest_organic_page || 1 }}页{{ child.latest_organic_rank }}名
@@ -784,9 +822,11 @@
             :value="tag.key"
             class="tag-checkbox"
           >
-            <el-tag :color="tag.color" size="small" effect="dark">
-              {{ tag.label }}
-            </el-tag>
+            <el-tooltip :content="tag.description" placement="right" :show-after="300">
+              <el-tag :color="tag.color" size="small" effect="dark">
+                {{ tag.label }}
+              </el-tag>
+            </el-tooltip>
           </el-checkbox>
         </el-checkbox-group>
       </div>
@@ -817,6 +857,7 @@ import {
   getMonitoringSparklines,
   checkSingleRanking,
   checkAllRankings,
+  checkSelectedRankings,
   checkDependencies,
 } from '../api';
 import type { KeywordMonitoring, MonitoringStats, OptimizationEvent } from '../types';
@@ -1283,11 +1324,7 @@ async function handleCheckSingle(row: KeywordMonitoring) {
 async function handleCheckRankings() {
   console.log('handleCheckRankings called, productId:', props.productId, 'stats:', stats);
 
-  if (selectedIds.value.length) {
-    // TODO: 实现选中检测
-    ElMessage.info('暂不支持选中检测，请使用检测全部');
-    return;
-  }
+  const isSelectedMode = selectedIds.value.length > 0;
 
   // 先检查依赖
   try {
@@ -1302,8 +1339,17 @@ async function handleCheckRankings() {
 
   checkingAll.value = true;
   try {
-    console.log('Calling checkAllRankings...');
-    const results = await checkAllRankings(props.productId, 5, 0);  // 0 = 无时间限制
+    let results: [number, { error?: string | null }][];
+
+    if (isSelectedMode) {
+      // 检测选中的关键词
+      console.log('Calling checkSelectedRankings with ids:', selectedIds.value);
+      results = await checkSelectedRankings(selectedIds.value, 5);
+    } else {
+      // 检测全部
+      console.log('Calling checkAllRankings...');
+      results = await checkAllRankings(props.productId, 5, 0);  // 0 = 无时间限制
+    }
 
     // 检查是否有依赖相关错误
     const depError = results.find(([, r]) =>
@@ -1317,10 +1363,10 @@ async function handleCheckRankings() {
       return;
     }
 
-    console.log('checkAllRankings results:', results);
+    console.log('checkRankings results:', results);
 
     if (results.length === 0) {
-      ElMessage.info('没有活跃的监控项');
+      ElMessage.info(isSelectedMode ? '选中的关键词无需检测' : '没有活跃的监控项');
     } else {
       const successCount = results.filter(([, r]) => !r.error).length;
       const errorCount = results.length - successCount;
@@ -1331,6 +1377,12 @@ async function handleCheckRankings() {
         ElMessage.success(`检测完成: 共 ${successCount} 个关键词`);
       }
     }
+
+    // 清除选中状态
+    if (isSelectedMode) {
+      selectedIds.value = [];
+    }
+
     loadData();
     loadStats();
   } catch (e) {
