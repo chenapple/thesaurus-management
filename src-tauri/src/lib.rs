@@ -298,6 +298,12 @@ fn update_keyword_monitoring(
 }
 
 #[tauri::command]
+fn update_keyword_monitoring_tags(id: i64, tags: Option<String>) -> Result<(), String> {
+    db::update_keyword_monitoring_tags(id, tags)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn delete_keyword_monitoring(id: i64) -> Result<(), String> {
     db::delete_keyword_monitoring(id).map_err(|e| e.to_string())
 }
@@ -726,6 +732,7 @@ pub fn run() {
             add_keyword_monitoring,
             get_keyword_monitoring_list,
             update_keyword_monitoring,
+            update_keyword_monitoring_tags,
             delete_keyword_monitoring,
             batch_delete_keyword_monitoring,
             get_monitoring_stats,

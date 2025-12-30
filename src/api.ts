@@ -402,6 +402,19 @@ export async function updateKeywordMonitoring(
 }
 
 /**
+ * 更新关键词监控标签
+ */
+export async function updateKeywordMonitoringTags(
+  id: number,
+  tags: string[] | null
+): Promise<void> {
+  return await invoke("update_keyword_monitoring_tags", {
+    id,
+    tags: tags ? JSON.stringify(tags) : null,
+  });
+}
+
+/**
  * 删除关键词监控
  */
 export async function deleteKeywordMonitoring(id: number): Promise<void> {

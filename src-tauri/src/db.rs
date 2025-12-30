@@ -361,6 +361,9 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
     migrate_events_add_sub_type(&conn)?;
     migrate_events_add_asin(&conn)?;
 
+    // 迁移关键词监控表：添加 tags 列
+    migrate_keyword_monitoring_tags(&conn)?;
+
     DB.set(Mutex::new(conn))
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
@@ -469,6 +472,21 @@ fn migrate_events_add_asin(conn: &Connection) -> Result<()> {
     if !has_target_asin {
         // 添加 target_asin 列
         conn.execute("ALTER TABLE optimization_events ADD COLUMN target_asin TEXT", [])?;
+    }
+
+    Ok(())
+}
+
+// 数据库迁移：为关键词监控表添加 tags 列
+fn migrate_keyword_monitoring_tags(conn: &Connection) -> Result<()> {
+    // 检查 keyword_monitoring 表是否存在 tags 列
+    let has_tags: bool = conn
+        .prepare("SELECT tags FROM keyword_monitoring LIMIT 1")
+        .is_ok();
+
+    if !has_tags {
+        // 添加 tags 列
+        conn.execute("ALTER TABLE keyword_monitoring ADD COLUMN tags TEXT", [])?;
     }
 
     Ok(())
@@ -2077,6 +2095,7 @@ pub struct KeywordMonitoring {
 
     pub last_checked: Option<String>,
     pub created_at: String,
+    pub tags: Option<String>,  // JSON array: ["high_traffic", "high_conversion"]
 }
 
 // 排名历史结构体
@@ -2273,7 +2292,7 @@ pub fn get_keyword_monitoring_list(
     let mut sql = String::from(
         "SELECT id, product_id, keyword, asin, country, priority, is_active,
                 latest_organic_rank, latest_organic_page, latest_sponsored_rank, latest_sponsored_page,
-                image_url, price, reviews_count, rating, last_checked, created_at
+                image_url, price, reviews_count, rating, last_checked, created_at, tags
          FROM keyword_monitoring WHERE product_id = ?1"
     );
 
@@ -2357,6 +2376,7 @@ pub fn get_keyword_monitoring_list(
                 rating: row.get(14)?,
                 last_checked: row.get(15)?,
                 created_at: row.get(16)?,
+                tags: row.get(17)?,
             })
         })?
         .collect::<Result<Vec<_>>>()?;
@@ -2695,7 +2715,7 @@ pub fn get_keyword_monitoring_by_id(id: i64) -> Result<Option<KeywordMonitoring>
     let result = conn.query_row(
         "SELECT id, product_id, keyword, asin, country, priority, is_active,
                 latest_organic_rank, latest_organic_page, latest_sponsored_rank, latest_sponsored_page,
-                image_url, price, reviews_count, rating, last_checked, created_at
+                image_url, price, reviews_count, rating, last_checked, created_at, tags
          FROM keyword_monitoring WHERE id = ?1",
         [id],
         |row| {
@@ -2717,6 +2737,7 @@ pub fn get_keyword_monitoring_by_id(id: i64) -> Result<Option<KeywordMonitoring>
                 rating: row.get(14)?,
                 last_checked: row.get(15)?,
                 created_at: row.get(16)?,
+                tags: row.get(17)?,
             })
         },
     );
@@ -2737,7 +2758,7 @@ pub fn get_pending_monitoring_checks(product_id: i64, hours_since_last_check: i6
     let sql = if hours_since_last_check == 0 {
         "SELECT id, product_id, keyword, asin, country, priority, is_active,
                 latest_organic_rank, latest_organic_page, latest_sponsored_rank, latest_sponsored_page,
-                image_url, price, reviews_count, rating, last_checked, created_at
+                image_url, price, reviews_count, rating, last_checked, created_at, tags
          FROM keyword_monitoring
          WHERE product_id = ?1 AND is_active = 1
          ORDER BY
@@ -2752,7 +2773,7 @@ pub fn get_pending_monitoring_checks(product_id: i64, hours_since_last_check: i6
         format!(
             "SELECT id, product_id, keyword, asin, country, priority, is_active,
                     latest_organic_rank, latest_organic_page, latest_sponsored_rank, latest_sponsored_page,
-                    image_url, price, reviews_count, rating, last_checked, created_at
+                    image_url, price, reviews_count, rating, last_checked, created_at, tags
              FROM keyword_monitoring
              WHERE product_id = ?1 AND is_active = 1
                AND (last_checked IS NULL OR last_checked < datetime('now', '{}'))
@@ -2789,11 +2810,22 @@ pub fn get_pending_monitoring_checks(product_id: i64, hours_since_last_check: i6
                 rating: row.get(14)?,
                 last_checked: row.get(15)?,
                 created_at: row.get(16)?,
+                tags: row.get(17)?,
             })
         })?
         .collect::<Result<Vec<_>>>()?;
 
     Ok(data)
+}
+
+// 更新关键词监控标签
+pub fn update_keyword_monitoring_tags(id: i64, tags: Option<String>) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE keyword_monitoring SET tags = ?1 WHERE id = ?2",
+        rusqlite::params![tags, id],
+    )?;
+    Ok(())
 }
 
 // 批量获取监控项的迷你图数据（最近N天的排名）

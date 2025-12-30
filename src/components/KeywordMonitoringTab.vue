@@ -315,7 +315,43 @@
 
         <el-table-column label="关键词" prop="keyword" min-width="220">
           <template #default="{ row }">
-            <span class="keyword-text">{{ row.keyword }}</span>
+            <el-tooltip
+              :disabled="!getRowTags(row).length"
+              placement="top"
+              :show-after="300"
+              popper-class="keyword-tag-tooltip"
+            >
+              <template #content>
+                <div class="tag-tooltip-content">
+                  <div class="tag-tooltip-tags">
+                    <el-tag
+                      v-for="tag in getRowTags(row)"
+                      :key="tag"
+                      :color="getTagColor(tag)"
+                      size="small"
+                      effect="dark"
+                    >
+                      {{ getTagLabel(tag) }}
+                    </el-tag>
+                  </div>
+                  <el-button size="small" type="primary" link @click.stop="openTagEditor(row)">
+                    编辑标签
+                  </el-button>
+                </div>
+              </template>
+              <span class="keyword-cell">
+                <span class="keyword-text keyword-link" @click="openAmazonSearch(row.keyword, row.country)">{{ row.keyword }}</span>
+                <span v-if="getRowTags(row).length" class="tag-dots">
+                  <span
+                    v-for="tag in getRowTags(row)"
+                    :key="tag"
+                    class="tag-dot"
+                    :style="{ backgroundColor: getTagColor(tag) }"
+                  ></span>
+                </span>
+                <span class="tag-add-btn" @click.stop="openTagEditor(row)" title="编辑标签">+</span>
+              </span>
+            </el-tooltip>
           </template>
         </el-table-column>
 
@@ -339,11 +375,11 @@
         <el-table-column label="评论/星级" width="130">
           <template #default="{ row }">
             <div v-if="row.rating || row.reviews_count" class="rating-cell">
-              <div class="star-line">
+              <div v-if="row.rating" class="star-line">
                 <span class="stars-container">
-                  <span class="star-filled">{{ '★'.repeat(Math.floor(row.rating || 0)) }}</span><span class="star-empty">{{ '★'.repeat(5 - Math.floor(row.rating || 0)) }}</span>
+                  <span class="star-filled">{{ '★'.repeat(Math.floor(row.rating)) }}</span><span class="star-empty">{{ '★'.repeat(5 - Math.floor(row.rating)) }}</span>
                 </span>
-                <span class="rating-num">{{ row.rating?.toFixed(1) }}</span>
+                <span class="rating-num">{{ row.rating.toFixed(1) }}</span>
               </div>
               <div v-if="row.reviews_count" class="reviews-line">
                 {{ formatReviewCount(row.reviews_count) }} 评论
@@ -731,6 +767,36 @@
       :keywords-by-asin="keywordsByAsin"
       @success="handleEventSuccess"
     />
+
+    <!-- 标签编辑对话框 -->
+    <el-dialog
+      v-model="showTagDialog"
+      title="编辑关键词标签"
+      width="360px"
+      :close-on-click-modal="false"
+    >
+      <div class="tag-editor">
+        <div class="tag-editor-keyword">{{ editingTagRow?.keyword }}</div>
+        <el-checkbox-group v-model="selectedTags" class="tag-checkbox-group">
+          <el-checkbox
+            v-for="tag in KEYWORD_TAGS"
+            :key="tag.key"
+            :value="tag.key"
+            class="tag-checkbox"
+          >
+            <el-tag :color="tag.color" size="small" effect="dark">
+              {{ tag.label }}
+            </el-tag>
+          </el-checkbox>
+        </el-checkbox-group>
+      </div>
+      <template #footer>
+        <el-button @click="showTagDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveKeywordTags" :loading="savingTags">
+          保存
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -739,10 +805,12 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, ArrowDown } from '@element-plus/icons-vue';
 import { listen } from '@tauri-apps/api/event';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import {
   getKeywordMonitoringList,
   updateKeywordMonitoring,
+  updateKeywordMonitoringTags,
   deleteKeywordMonitoring,
   batchDeleteKeywordMonitoring,
   getMonitoringStats,
@@ -752,7 +820,8 @@ import {
   checkDependencies,
 } from '../api';
 import type { KeywordMonitoring, MonitoringStats, OptimizationEvent } from '../types';
-import { COUNTRY_OPTIONS, PRIORITY_OPTIONS, getCountryFlag, EVENT_MAIN_TYPES, EVENT_SUB_TYPES, type EventMainType } from '../types';
+import { COUNTRY_OPTIONS, PRIORITY_OPTIONS, getCountryFlag, EVENT_MAIN_TYPES, EVENT_SUB_TYPES, type EventMainType, KEYWORD_TAGS } from '../types';
+import { amazonDomains } from '../stores/product';
 import AddMonitoringDialog from './AddMonitoringDialog.vue';
 import RankingHistoryChart from './RankingHistoryChart.vue';
 import Sparkline from './Sparkline.vue';
@@ -893,6 +962,12 @@ const optimizationEvents = ref<OptimizationEvent[]>([]);
 const eventsLoading = ref(false);
 const eventsViewMode = ref<'list' | 'calendar'>('list');
 const calendarDate = ref(new Date());
+
+// 标签编辑相关
+const showTagDialog = ref(false);
+const editingTagRow = ref<KeywordMonitoring | null>(null);
+const selectedTags = ref<string[]>([]);
+const savingTags = ref(false);
 
 // 按日期分组事件
 const eventsByDate = computed(() => {
@@ -1360,6 +1435,62 @@ function formatDateTime(dateStr: string): string {
 
 function formatReviewCount(count: number): string {
   return count.toLocaleString('fr-FR'); // 使用空格作为千位分隔符
+}
+
+// 打开亚马逊搜索
+async function openAmazonSearch(keyword: string, country: string) {
+  const domain = amazonDomains[country] || amazonDomains.US;
+  const url = `https://${domain}/s?k=${encodeURIComponent(keyword)}`;
+  await openUrl(url);
+}
+
+// 标签相关函数
+function getRowTags(row: KeywordMonitoring): string[] {
+  if (!row.tags) return [];
+  try {
+    return JSON.parse(row.tags);
+  } catch {
+    return [];
+  }
+}
+
+function getTagColor(tagKey: string): string {
+  const tag = KEYWORD_TAGS.find(t => t.key === tagKey);
+  return tag?.color || '#909399';
+}
+
+function getTagLabel(tagKey: string): string {
+  const tag = KEYWORD_TAGS.find(t => t.key === tagKey);
+  return tag?.label || tagKey;
+}
+
+function openTagEditor(row: KeywordMonitoring) {
+  editingTagRow.value = row;
+  selectedTags.value = getRowTags(row);
+  showTagDialog.value = true;
+}
+
+async function saveKeywordTags() {
+  if (!editingTagRow.value) return;
+
+  savingTags.value = true;
+  try {
+    const tags = selectedTags.value.length > 0 ? selectedTags.value : null;
+    await updateKeywordMonitoringTags(editingTagRow.value.id, tags);
+
+    // 更新本地数据
+    const item = monitoringList.value.find(m => m.id === editingTagRow.value!.id);
+    if (item) {
+      item.tags = tags ? JSON.stringify(tags) : null;
+    }
+
+    showTagDialog.value = false;
+    ElMessage.success('标签已更新');
+  } catch (error) {
+    ElMessage.error('更新标签失败: ' + (error as Error).message);
+  } finally {
+    savingTags.value = false;
+  }
 }
 
 // 监听视图模式变化
@@ -2210,5 +2341,100 @@ onUnmounted(() => {
   color: var(--el-text-color-placeholder);
   background: var(--el-fill-color-lighter);
   border-radius: 8px;
+}
+
+/* 关键词标签样式 */
+.keyword-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.keyword-link {
+  cursor: pointer;
+  color: var(--el-color-primary);
+}
+
+.keyword-link:hover {
+  text-decoration: underline;
+}
+
+.keyword-cell:hover .tag-add-btn {
+  opacity: 1;
+}
+
+.tag-add-btn {
+  font-size: 14px;
+  color: var(--el-color-primary);
+  opacity: 0;
+  transition: opacity 0.2s;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.tag-add-btn:hover {
+  background-color: var(--el-color-primary-light-9);
+  border-radius: 4px;
+}
+
+.tag-dots {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.tag-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.tag-tooltip-content {
+  text-align: center;
+}
+
+.tag-tooltip-title {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 8px;
+}
+
+.tag-tooltip-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.tag-tooltip-tags .tag-item {
+  border: none;
+}
+
+.tag-editor {
+  padding: 8px 0;
+}
+
+.tag-editor-keyword {
+  font-weight: 500;
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 4px;
+}
+
+.tag-checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tag-checkbox {
+  margin-right: 0 !important;
+}
+
+.tag-checkbox :deep(.el-checkbox__label) {
+  padding-left: 8px;
 }
 </style>

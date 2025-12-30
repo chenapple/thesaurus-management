@@ -112,7 +112,19 @@ export interface KeywordMonitoring {
 
   last_checked: string | null;
   created_at: string;
+  tags: string | null;  // JSON array: ["high_traffic", "high_conversion"]
 }
+
+// 关键词标签定义
+export const KEYWORD_TAGS = [
+  { key: 'high_traffic', label: '高流量', color: '#409eff' },
+  { key: 'high_click', label: '高点击', color: '#67c23a' },
+  { key: 'high_conversion', label: '高转化', color: '#e6a23c' },
+  { key: 'low_roi', label: '低投产', color: '#f56c6c' },
+  { key: 'high_return', label: '高回报', color: '#9b59b6' },
+] as const;
+
+export type KeywordTagKey = typeof KEYWORD_TAGS[number]['key'];
 
 // 排名历史
 export interface RankingHistory {
