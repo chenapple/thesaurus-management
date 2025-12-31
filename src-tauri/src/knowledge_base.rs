@@ -178,8 +178,6 @@ fn parse_excel(file_path: &str, title: &str) -> Result<ParsedDocument, String> {
 fn parse_pptx(file_path: &str, title: &str) -> Result<ParsedDocument, String> {
     use std::io::Read;
     use zip::ZipArchive;
-    use quick_xml::Reader;
-    use quick_xml::events::Event;
 
     let file = fs::File::open(file_path).map_err(|e| format!("打开文件失败: {}", e))?;
     let mut archive = ZipArchive::new(file).map_err(|e| format!("PPTX 解压失败: {}", e))?;
@@ -252,14 +250,14 @@ fn extract_text_from_pptx_xml(xml: &str) -> String {
     use quick_xml::events::Event;
 
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
 
     let mut texts: Vec<String> = Vec::new();
     let mut current_paragraph: Vec<String> = Vec::new();
     let mut in_text_element = false;
+    let mut buf = Vec::new();
 
     loop {
-        match reader.read_event() {
+        match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
                 // <a:t> 是文本元素
                 if e.name().as_ref() == b"a:t" {
@@ -292,6 +290,7 @@ fn extract_text_from_pptx_xml(xml: &str) -> String {
             Err(_) => break,
             _ => {}
         }
+        buf.clear();
     }
 
     // 处理剩余的段落
@@ -304,7 +303,7 @@ fn extract_text_from_pptx_xml(xml: &str) -> String {
 
 /// 解析 Markdown 文件
 fn parse_markdown(file_path: &str, title: &str) -> Result<ParsedDocument, String> {
-    use pulldown_cmark::{Parser, Event, Tag, TagEnd};
+    use pulldown_cmark::{Parser, Event, TagEnd};
 
     let markdown_content = fs::read_to_string(file_path).map_err(|e| format!("读取文件失败: {}", e))?;
 
