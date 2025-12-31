@@ -3051,6 +3051,13 @@ pub fn get_running_task() -> Result<Option<SchedulerTaskLog>> {
     }
 }
 
+// 清空任务记录
+pub fn clear_task_logs() -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("DELETE FROM scheduler_task_logs", [])?;
+    Ok(())
+}
+
 // ============ 优化事件相关 ============
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

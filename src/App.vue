@@ -167,7 +167,7 @@ const showShortcutsDialog = ref(false);
 // API Key 设置弹窗
 const showApiKeyDialog = ref(false);
 
-// 自动检测设置弹窗
+// 监控设置弹窗
 const showSettingsDialog = ref(false);
 
 // 应用版本
@@ -2138,7 +2138,7 @@ onUnmounted(() => {
                   <el-icon><Key /></el-icon> API Key 设置
                 </el-dropdown-item>
                 <el-dropdown-item @click="showSettingsDialog = true">
-                  <el-icon><Timer /></el-icon> 自动检测设置
+                  <el-icon><Timer /></el-icon> 监控设置
                 </el-dropdown-item>
                 <el-dropdown-item divided @click="handleClearData">
                   <el-icon color="#f56c6c"><Delete /></el-icon>
@@ -2662,7 +2662,7 @@ onUnmounted(() => {
       v-model:visible="showApiKeyDialog"
     />
 
-    <!-- 自动检测设置弹窗 -->
+    <!-- 监控设置弹窗 -->
     <SettingsDialog
       v-model="showSettingsDialog"
     />

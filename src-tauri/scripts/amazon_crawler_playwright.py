@@ -865,14 +865,38 @@ async def search_keyword(keyword: str, target_asin: str, country: str, max_pages
 
                     # 详情页提取星级评分
                     try:
+                        # 方法1: 从 #acrPopover 的 title 属性提取
                         rating_elem = page.locator('#acrPopover, [data-action="acrStarsLink-click-metrics"]')
                         if await rating_elem.count() > 0:
                             rating_title = await rating_elem.first.get_attribute('title') or ''
-                            # 如 "4.5 out of 5 stars" 或 "4,5 von 5 Sternen" 或 "4,5 sur 5 étoiles"
-                            rating_match = re.search(r'([\d,\.]+)\s*(?:out of|von|sur|su|de|étoiles|Sternen)', rating_title)
-                            if rating_match:
-                                rating_str = rating_match.group(1).replace(',', '.')
-                                rating = float(rating_str)
+                            if rating_title:
+                                rating_match = re.search(r'([\d,\.]+)\s*(?:out of|von|sur|su|de|étoiles|Sternen)', rating_title)
+                                if rating_match:
+                                    rating_str = rating_match.group(1).replace(',', '.')
+                                    rating = float(rating_str)
+
+                        # 方法2: 从星级图标的 class 提取 (如 a-star-4-5)
+                        if not rating:
+                            star_icon = page.locator('#acrPopover i[class*="a-star"], .a-icon-star')
+                            if await star_icon.count() > 0:
+                                star_class = await star_icon.first.get_attribute('class') or ''
+                                star_match = re.search(r'a-star-(\d)-(\d)', star_class)
+                                if star_match:
+                                    rating = float(f"{star_match.group(1)}.{star_match.group(2)}")
+                                else:
+                                    star_match = re.search(r'a-star-(\d)', star_class)
+                                    if star_match:
+                                        rating = float(star_match.group(1))
+
+                        # 方法3: 从 span.a-icon-alt 文本提取 (如 "4,5 sur 5 étoiles")
+                        if not rating:
+                            alt_text_elem = page.locator('#acrPopover .a-icon-alt, #averageCustomerReviews .a-icon-alt')
+                            if await alt_text_elem.count() > 0:
+                                alt_text = await alt_text_elem.first.text_content() or ''
+                                rating_match = re.search(r'([\d,\.]+)\s*(?:out of|von|sur|su|de|étoiles|Sternen|stars)', alt_text)
+                                if rating_match:
+                                    rating_str = rating_match.group(1).replace(',', '.')
+                                    rating = float(rating_str)
                     except:
                         pass
 
@@ -928,6 +952,7 @@ async def search_keyword(keyword: str, target_asin: str, country: str, max_pages
 async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headless = "new") -> list:
     """
     批量搜索关键词 - 按国家分组，复用浏览器实例
+    优化：同一关键词监控多个产品时，只搜索一次，同时记录所有产品的排名
 
     参数:
         keywords_list: [(id, keyword, asin, country), ...]
@@ -936,22 +961,37 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
 
     返回: [(id, result), ...]
     """
-    # 按国家分组
+    # 按国家分组，再按关键词分组
+    # 结构: {country: {keyword: [(monitoring_id, asin), ...]}}
     country_groups = {}
     for item in keywords_list:
         monitoring_id, keyword, asin, country = item
         country = country.upper()
-        if country not in country_groups:
-            country_groups[country] = []
-        country_groups[country].append((monitoring_id, keyword, asin))
+        keyword_lower = keyword.lower().strip()
 
-    print(f"[DEBUG] 共 {len(keywords_list)} 个关键词，分为 {len(country_groups)} 个国家组", file=sys.stderr)
+        if country not in country_groups:
+            country_groups[country] = {}
+        if keyword_lower not in country_groups[country]:
+            country_groups[country][keyword_lower] = {
+                'original_keyword': keyword,  # 保留原始大小写
+                'targets': []
+            }
+        country_groups[country][keyword_lower]['targets'].append((monitoring_id, asin))
+
+    # 统计优化效果
+    total_searches_before = len(keywords_list)
+    total_searches_after = sum(len(kw_dict) for kw_dict in country_groups.values())
+    print(f"[DEBUG] 共 {len(keywords_list)} 个监控项，{len(country_groups)} 个国家，{total_searches_after} 个唯一关键词", file=sys.stderr)
+    if total_searches_before > total_searches_after:
+        print(f"[DEBUG] 优化: 减少 {total_searches_before - total_searches_after} 次搜索 ({100 - total_searches_after * 100 // total_searches_before}% 节省)", file=sys.stderr)
 
     all_results = []
 
     async with async_playwright() as p:
-        for country, keywords in country_groups.items():
-            print(f"[DEBUG] 开始处理 {country} 站 ({len(keywords)} 个关键词)...", file=sys.stderr)
+        for country, keywords_dict in country_groups.items():
+            unique_keyword_count = len(keywords_dict)
+            total_targets = sum(len(kw_data['targets']) for kw_data in keywords_dict.values())
+            print(f"[DEBUG] 开始处理 {country} 站 ({unique_keyword_count} 个唯一关键词，{total_targets} 个目标产品)...", file=sys.stderr)
 
             config = COUNTRY_CONFIG.get(country, COUNTRY_CONFIG["US"])
 
@@ -1039,41 +1079,60 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
                 else:
                     print(f"[DEBUG] {country}: 邮编设置可能未成功: {address_text}", file=sys.stderr)
 
-                # 处理这个国家的所有关键词
-                for idx, (monitoring_id, keyword, target_asin) in enumerate(keywords, 1):
-                    print(f"[DEBUG] {country}: 检测 {idx}/{len(keywords)} - {keyword}", file=sys.stderr)
+                # 处理这个国家的所有唯一关键词
+                kw_idx = 0
+                for kw_lower, kw_data in keywords_dict.items():
+                    kw_idx += 1
+                    keyword = kw_data['original_keyword']
+                    targets = kw_data['targets']  # [(monitoring_id, asin), ...]
 
-                    result = {
-                        "keyword": keyword,
-                        "target_asin": target_asin,
-                        "country": country,
-                        "organic_rank": None,
-                        "organic_page": None,
-                        "sponsored_rank": None,
-                        "sponsored_page": None,
-                        "sponsored_type": None,
-                        "product_info": None,
-                        "organic_top_50": [],
-                        "sponsored_top_20": [],
-                        "checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                        "error": None,
-                        "warning": None,
-                        "delivery_address": address_text
-                    }
+                    # 构建目标ASIN映射: {asin_upper: monitoring_id}
+                    target_asins = {asin.upper(): mid for mid, asin in targets}
+                    target_asin_list = list(target_asins.keys())
+
+                    print(f"[DEBUG] {country}: 检测 {kw_idx}/{unique_keyword_count} - {keyword} (监控 {len(targets)} 个产品: {', '.join(target_asin_list[:3])}{'...' if len(target_asin_list) > 3 else ''})", file=sys.stderr)
+
+                    # 初始化每个目标的结果
+                    # {asin_upper: result_dict}
+                    results_by_asin = {}
+                    for monitoring_id, asin in targets:
+                        results_by_asin[asin.upper()] = {
+                            "keyword": keyword,
+                            "target_asin": asin,
+                            "country": country,
+                            "organic_rank": None,
+                            "organic_page": None,
+                            "sponsored_rank": None,
+                            "sponsored_page": None,
+                            "sponsored_type": None,
+                            "product_info": None,
+                            "organic_top_50": [],
+                            "sponsored_top_20": [],
+                            "checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "error": None,
+                            "warning": None,
+                            "delivery_address": address_text
+                        }
 
                     try:
-                        # 搜索关键词
+                        # 搜索关键词（只搜索一次）
                         encoded_keyword = quote_plus(keyword)
                         market_param = f"&{config['market_param']}" if config['market_param'] else ""
 
-                        found_organic = False
-                        found_sponsored = False
-                        organic_position = 0
-                        sponsored_position = 0
+                        # 跟踪每个目标ASIN是否找到
+                        found_organic = {asin: False for asin in target_asins.keys()}
+                        found_sponsored = {asin: False for asin in target_asins.keys()}
+
+                        # 共享的搜索结果记录（所有目标共享）
+                        shared_organic_top_50 = []
+                        shared_sponsored_top_20 = []
 
                         for page_num in range(1, max_pages + 1):
-                            # 自然排名和广告排名都找到了才停止搜索
-                            if found_organic and found_sponsored:
+                            # 检查是否所有目标ASIN的自然和广告排名都找到了
+                            all_organic_found = all(found_organic.values())
+                            all_sponsored_found = all(found_sponsored.values())
+                            if all_organic_found and all_sponsored_found:
+                                print(f"[DEBUG] 所有 {len(targets)} 个目标产品的排名都已找到，停止搜索", file=sys.stderr)
                                 break
 
                             search_url = f"{config['base_url']}/s?k={encoded_keyword}{market_param}"
@@ -1151,14 +1210,16 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
                                     banner_asins = list(dict.fromkeys(banner_asins))
                                     banner_product_count = len(banner_asins)
 
-                                    if banner_product_count > 0 and not found_sponsored:
+                                    # 检查所有目标ASIN是否在横幅中
+                                    if banner_product_count > 0:
                                         for idx, asin in enumerate(banner_asins, 1):
-                                            if asin.upper() == target_asin.upper():
-                                                result['sponsored_rank'] = idx
-                                                result['sponsored_page'] = page_num
-                                                result['sponsored_type'] = 'brand_banner'
-                                                found_sponsored = True
-                                                break
+                                            asin_upper = asin.upper()
+                                            if asin_upper in target_asins and not found_sponsored.get(asin_upper, True):
+                                                results_by_asin[asin_upper]['sponsored_rank'] = idx
+                                                results_by_asin[asin_upper]['sponsored_page'] = page_num
+                                                results_by_asin[asin_upper]['sponsored_type'] = 'brand_banner'
+                                                found_sponsored[asin_upper] = True
+                                                print(f"[DEBUG] 在横幅广告中找到 {asin_upper}: 广告第{idx}位", file=sys.stderr)
                             except:
                                 pass
 
@@ -1250,26 +1311,32 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
                                             if video_ad_dom_index is not None and current_idx <= video_ad_dom_index:
                                                 sponsored_before_video += 1
 
-                                            if len(result['sponsored_top_20']) < 20:
-                                                result['sponsored_top_20'].append(asin)
+                                            if len(shared_sponsored_top_20) < 20:
+                                                shared_sponsored_top_20.append(asin)
 
-                                            if asin.upper() == target_asin.upper() and not found_sponsored:
-                                                result['sponsored_rank'] = page_sponsored_position
-                                                result['sponsored_page'] = page_num
-                                                result['sponsored_type'] = 'product_ad'
-                                                found_sponsored = True
+                                            # 检查是否是目标ASIN之一
+                                            asin_upper = asin.upper()
+                                            if asin_upper in target_asins and not found_sponsored.get(asin_upper, True):
+                                                results_by_asin[asin_upper]['sponsored_rank'] = page_sponsored_position
+                                                results_by_asin[asin_upper]['sponsored_page'] = page_num
+                                                results_by_asin[asin_upper]['sponsored_type'] = 'product_ad'
+                                                found_sponsored[asin_upper] = True
+                                                print(f"[DEBUG] 在搜索结果广告中找到 {asin_upper}: 第{page_num}页广告第{page_sponsored_position}位", file=sys.stderr)
                                     else:
                                         if asin not in seen_organic_asins:
                                             seen_organic_asins.add(asin)
                                             page_organic_position += 1
 
-                                            if len(result['organic_top_50']) < 50:
-                                                result['organic_top_50'].append(asin)
+                                            if len(shared_organic_top_50) < 50:
+                                                shared_organic_top_50.append(asin)
 
-                                            if asin.upper() == target_asin.upper() and not found_organic:
-                                                result['organic_rank'] = page_organic_position
-                                                result['organic_page'] = page_num
-                                                found_organic = True
+                                            # 检查是否是目标ASIN之一
+                                            asin_upper = asin.upper()
+                                            if asin_upper in target_asins and not found_organic.get(asin_upper, True):
+                                                results_by_asin[asin_upper]['organic_rank'] = page_organic_position
+                                                results_by_asin[asin_upper]['organic_page'] = page_num
+                                                found_organic[asin_upper] = True
+                                                print(f"[DEBUG] 在搜索结果中找到 {asin_upper}: 第{page_num}页自然第{page_organic_position}位", file=sys.stderr)
 
                                                 # 提取产品信息
                                                 try:
@@ -1336,7 +1403,7 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
                                                     except:
                                                         pass
 
-                                                    result['product_info'] = {
+                                                    results_by_asin[asin_upper]['product_info'] = {
                                                         'asin': asin,
                                                         'title': title.strip() if title else None,
                                                         'price': price.strip() if price else None,
@@ -1349,118 +1416,160 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
                                 except:
                                     continue
 
-                            # 处理视频广告：如果目标ASIN在视频广告中且还没找到广告排名
-                            if has_video_ad and video_ad_asin and not found_sponsored:
-                                if video_ad_asin.upper() == target_asin.upper():
+                            # 处理视频广告：检查视频广告中的ASIN是否是目标之一
+                            if has_video_ad and video_ad_asin:
+                                video_asin_upper = video_ad_asin.upper()
+                                if video_asin_upper in target_asins and not found_sponsored.get(video_asin_upper, True):
                                     # 视频广告位置 = 横幅产品数 + 视频广告之前的普通广告数 + 1
                                     video_position = banner_product_count + sponsored_before_video + 1
 
-                                    result['sponsored_rank'] = video_position
-                                    result['sponsored_page'] = page_num
-                                    result['sponsored_type'] = 'video_ad'
-                                    found_sponsored = True
+                                    results_by_asin[video_asin_upper]['sponsored_rank'] = video_position
+                                    results_by_asin[video_asin_upper]['sponsored_page'] = page_num
+                                    results_by_asin[video_asin_upper]['sponsored_type'] = 'video_ad'
+                                    found_sponsored[video_asin_upper] = True
+                                    print(f"[DEBUG] 在视频广告中找到 {video_asin_upper}: 广告第{video_position}位", file=sys.stderr)
 
                             # 页面间延迟（未全部找到才继续）
-                            if page_num < max_pages and not (found_organic and found_sponsored):
+                            all_found = all(found_organic.values()) and all(found_sponsored.values())
+                            if page_num < max_pages and not all_found:
                                 await page.wait_for_timeout(1500)
 
-                        # 如果没找到产品信息，从详情页获取
-                        if result['product_info'] is None:
-                            try:
-                                await page.goto(f"{config['base_url']}/dp/{target_asin}", wait_until="domcontentloaded", timeout=30000)
-                                await page.wait_for_timeout(2000)
+                        # 搜索完成后，为所有结果填充共享的top列表
+                        for asin_upper in results_by_asin:
+                            results_by_asin[asin_upper]['organic_top_50'] = shared_organic_top_50.copy()
+                            results_by_asin[asin_upper]['sponsored_top_20'] = shared_sponsored_top_20.copy()
 
-                                title = price = img_url = None
-                                rating = reviews_count = None
+                        # 对于没有获取到产品信息的目标ASIN，从详情页获取
+                        for monitoring_id, asin in targets:
+                            asin_upper = asin.upper()
+                            if results_by_asin[asin_upper]['product_info'] is None:
                                 try:
-                                    title_elem = page.locator('#productTitle')
-                                    if await title_elem.count() > 0:
-                                        title = await title_elem.text_content()
-                                except:
-                                    pass
-                                try:
-                                    price_elem = page.locator('.a-price .a-offscreen').first
-                                    if await page.locator('.a-price .a-offscreen').count() > 0:
-                                        price = await price_elem.text_content()
-                                except:
-                                    pass
-                                try:
-                                    img_elem = page.locator('#landingImage')
-                                    if await img_elem.count() > 0:
-                                        img_url = await img_elem.get_attribute('src')
-                                except:
-                                    pass
+                                    print(f"[DEBUG] 从详情页获取 {asin_upper} 的产品信息...", file=sys.stderr)
+                                    await page.goto(f"{config['base_url']}/dp/{asin}", wait_until="domcontentloaded", timeout=30000)
+                                    await page.wait_for_timeout(2000)
 
-                                # 详情页提取星级评分
-                                try:
-                                    rating_elem = page.locator('#acrPopover, [data-action="acrStarsLink-click-metrics"]')
-                                    if await rating_elem.count() > 0:
-                                        rating_title = await rating_elem.first.get_attribute('title') or ''
-                                        # 如 "4.5 out of 5 stars" 或 "4,5 von 5 Sternen" 或 "4,5 sur 5 étoiles"
-                                        rating_match = re.search(r'([\d,\.]+)\s*(?:out of|von|sur|su|de|étoiles|Sternen)', rating_title)
-                                        if rating_match:
-                                            rating_str = rating_match.group(1).replace(',', '.')
-                                            rating = float(rating_str)
-                                except:
-                                    pass
+                                    title = price = img_url = None
+                                    rating = reviews_count = None
+                                    try:
+                                        title_elem = page.locator('#productTitle')
+                                        if await title_elem.count() > 0:
+                                            title = await title_elem.text_content()
+                                    except:
+                                        pass
+                                    try:
+                                        price_elem = page.locator('.a-price .a-offscreen').first
+                                        if await page.locator('.a-price .a-offscreen').count() > 0:
+                                            price = await price_elem.text_content()
+                                    except:
+                                        pass
+                                    try:
+                                        img_elem = page.locator('#landingImage')
+                                        if await img_elem.count() > 0:
+                                            img_url = await img_elem.get_attribute('src')
+                                    except:
+                                        pass
 
-                                # 详情页提取评论数
-                                try:
-                                    reviews_elem = page.locator('#acrCustomerReviewText')
-                                    if await reviews_elem.count() > 0:
-                                        reviews_text = await reviews_elem.first.text_content() or ''
-                                        # 处理 K 后缀 (如 "3,6K" 或 "3.6K" 表示 3600)
-                                        k_match = re.search(r'([\d\s\.,\u00a0\u202f]+)\s*[Kk]', reviews_text)
-                                        if k_match:
-                                            num_str = k_match.group(1)
-                                            num_str = re.sub(r'[\s\u00a0\u202f]', '', num_str)
-                                            num_str = num_str.replace(',', '.')
-                                            try:
-                                                reviews_count = int(float(num_str) * 1000)
-                                            except:
-                                                pass
-                                        else:
-                                            # 移除所有空格类字符（包括 narrow no-break space \u202f）
-                                            reviews_text_clean = re.sub(r'[\s\u00a0\u202f,.]', '', reviews_text)
-                                            all_numbers = re.findall(r'\d+', reviews_text_clean)
-                                            if all_numbers:
-                                                candidates = [int(n) for n in all_numbers if int(n) > 5]
-                                                if candidates:
-                                                    reviews_count = max(candidates)
-                                                elif all_numbers:
-                                                    reviews_count = int(all_numbers[-1])
-                                except:
-                                    pass
+                                    # 详情页提取星级评分
+                                    try:
+                                        # 方法1: 从 #acrPopover 的 title 属性提取
+                                        rating_elem = page.locator('#acrPopover, [data-action="acrStarsLink-click-metrics"]')
+                                        if await rating_elem.count() > 0:
+                                            rating_title = await rating_elem.first.get_attribute('title') or ''
+                                            if rating_title:
+                                                rating_match = re.search(r'([\d,\.]+)\s*(?:out of|von|sur|su|de|étoiles|Sternen)', rating_title)
+                                                if rating_match:
+                                                    rating_str = rating_match.group(1).replace(',', '.')
+                                                    rating = float(rating_str)
 
-                                result['product_info'] = {
-                                    'asin': target_asin,
-                                    'title': title.strip() if title else None,
-                                    'price': price.strip() if price else None,
-                                    'rating': rating,
-                                    'reviews_count': reviews_count,
-                                    'image_url': img_url
-                                }
-                            except:
-                                pass
+                                        # 方法2: 从星级图标的 class 提取 (如 a-star-4-5)
+                                        if not rating:
+                                            star_icon = page.locator('#acrPopover i[class*="a-star"], .a-icon-star')
+                                            if await star_icon.count() > 0:
+                                                star_class = await star_icon.first.get_attribute('class') or ''
+                                                star_match = re.search(r'a-star-(\d)-(\d)', star_class)
+                                                if star_match:
+                                                    rating = float(f"{star_match.group(1)}.{star_match.group(2)}")
+                                                else:
+                                                    star_match = re.search(r'a-star-(\d)', star_class)
+                                                    if star_match:
+                                                        rating = float(star_match.group(1))
+
+                                        # 方法3: 从 span.a-icon-alt 文本提取
+                                        if not rating:
+                                            alt_text_elem = page.locator('#acrPopover .a-icon-alt, #averageCustomerReviews .a-icon-alt')
+                                            if await alt_text_elem.count() > 0:
+                                                alt_text = await alt_text_elem.first.text_content() or ''
+                                                rating_match = re.search(r'([\d,\.]+)\s*(?:out of|von|sur|su|de|étoiles|Sternen|stars)', alt_text)
+                                                if rating_match:
+                                                    rating_str = rating_match.group(1).replace(',', '.')
+                                                    rating = float(rating_str)
+                                    except:
+                                        pass
+
+                                    # 详情页提取评论数
+                                    try:
+                                        reviews_elem = page.locator('#acrCustomerReviewText')
+                                        if await reviews_elem.count() > 0:
+                                            reviews_text = await reviews_elem.first.text_content() or ''
+                                            # 处理 K 后缀 (如 "3,6K" 或 "3.6K" 表示 3600)
+                                            k_match = re.search(r'([\d\s\.,\u00a0\u202f]+)\s*[Kk]', reviews_text)
+                                            if k_match:
+                                                num_str = k_match.group(1)
+                                                num_str = re.sub(r'[\s\u00a0\u202f]', '', num_str)
+                                                num_str = num_str.replace(',', '.')
+                                                try:
+                                                    reviews_count = int(float(num_str) * 1000)
+                                                except:
+                                                    pass
+                                            else:
+                                                # 移除所有空格类字符（包括 narrow no-break space \u202f）
+                                                reviews_text_clean = re.sub(r'[\s\u00a0\u202f,.]', '', reviews_text)
+                                                all_numbers = re.findall(r'\d+', reviews_text_clean)
+                                                if all_numbers:
+                                                    candidates = [int(n) for n in all_numbers if int(n) > 5]
+                                                    if candidates:
+                                                        reviews_count = max(candidates)
+                                                    elif all_numbers:
+                                                        reviews_count = int(all_numbers[-1])
+                                    except:
+                                        pass
+
+                                    results_by_asin[asin_upper]['product_info'] = {
+                                        'asin': asin,
+                                        'title': title.strip() if title else None,
+                                        'price': price.strip() if price else None,
+                                        'rating': rating,
+                                        'reviews_count': reviews_count,
+                                        'image_url': img_url
+                                    }
+                                except Exception as e:
+                                    print(f"[DEBUG] 获取 {asin_upper} 详情页失败: {e}", file=sys.stderr)
 
                     except Exception as e:
-                        result['error'] = str(e)
+                        # 如果整个关键词搜索出错，为所有目标设置错误信息
+                        for asin_upper in results_by_asin:
+                            results_by_asin[asin_upper]['error'] = str(e)
 
-                    all_results.append((monitoring_id, result))
+                    # 为每个目标输出结果
+                    for monitoring_id, asin in targets:
+                        asin_upper = asin.upper()
+                        result = results_by_asin[asin_upper]
 
-                    # 输出进度（实时）
-                    progress = {
-                        "type": "progress",
-                        "monitoring_id": monitoring_id,
-                        "result": result
-                    }
-                    output = json.dumps(progress, ensure_ascii=False)
-                    sys.stdout.buffer.write(output.encode('utf-8'))
-                    sys.stdout.buffer.write(b'\n')
-                    sys.stdout.flush()
+                        all_results.append((monitoring_id, result))
+
+                        # 输出进度（实时）
+                        progress = {
+                            "type": "progress",
+                            "monitoring_id": monitoring_id,
+                            "result": result
+                        }
+                        output = json.dumps(progress, ensure_ascii=False)
+                        sys.stdout.buffer.write(output.encode('utf-8'))
+                        sys.stdout.buffer.write(b'\n')
+                        sys.stdout.flush()
 
                     # 关键词间短延迟（同一国家内）
-                    if idx < len(keywords):
+                    if kw_idx < unique_keyword_count:
                         await page.wait_for_timeout(2000)
 
             except Exception as e:

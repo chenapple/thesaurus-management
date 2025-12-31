@@ -366,9 +366,9 @@
 
         <el-table-column label="ASIN" prop="asin" width="120" />
 
-        <el-table-column label="价格" prop="price" width="80" align="center">
+        <el-table-column label="价格" prop="price" width="90" align="center">
           <template #default="{ row }">
-            <span>{{ row.price ?? '-' }}</span>
+            <span class="price-cell">{{ row.price ?? '-' }}</span>
           </template>
         </el-table-column>
 
@@ -400,7 +400,7 @@
               <span class="rank-page">第{{ row.latest_organic_page || 1 }}页</span>
               <span class="rank-position">第{{ row.latest_organic_rank }}名</span>
             </span>
-            <span v-else class="no-rank">前5页无排名</span>
+            <span v-else class="no-rank">{{ noRankText }}</span>
           </template>
         </el-table-column>
 
@@ -434,7 +434,7 @@
               <span class="rank-page">第{{ row.latest_sponsored_page || 1 }}页</span>
               <span class="rank-position">第{{ row.latest_sponsored_rank }}名</span>
             </span>
-            <span v-else class="no-rank">前5页无排名</span>
+            <span v-else class="no-rank">{{ noRankText }}</span>
           </template>
         </el-table-column>
 
@@ -859,6 +859,7 @@ import {
   checkAllRankings,
   checkSelectedRankings,
   checkDependencies,
+  getSchedulerSettings,
 } from '../api';
 import type { KeywordMonitoring, MonitoringStats, OptimizationEvent } from '../types';
 import { COUNTRY_OPTIONS, PRIORITY_OPTIONS, getCountryFlag, EVENT_MAIN_TYPES, EVENT_SUB_TYPES, type EventMainType, KEYWORD_TAGS } from '../types';
@@ -892,6 +893,10 @@ const searchText = ref('');
 const organicSparklines = ref<Record<number, (number | null)[]>>({});
 const sponsoredSparklines = ref<Record<number, (number | null)[]>>({});
 
+// 监控设置
+const maxPages = ref(5);  // 默认监控前5页
+const noRankText = computed(() => `前${maxPages.value}页无排名`);
+
 // 进度条状态
 const checkProgress = reactive({
   current: 0,
@@ -902,6 +907,7 @@ const checkProgress = reactive({
 // 事件监听器
 let unlistenProgress: UnlistenFn | null = null;
 let unlistenComplete: UnlistenFn | null = null;
+let unlistenSettingsUpdated: UnlistenFn | null = null;
 
 const stats = reactive<MonitoringStats>({
   total: 0,
@@ -965,7 +971,7 @@ async function handleCheckGroup(group: GroupRow) {
     let errorCount = 0;
     for (const child of group.children) {
       try {
-        const result = await checkSingleRanking(child.id, 3);
+        const result = await checkSingleRanking(child.id, maxPages.value);
         if (result.error) {
           errorCount++;
         } else {
@@ -1289,7 +1295,7 @@ async function handleCheckSingle(row: KeywordMonitoring) {
 
   checkingId.value = row.id;
   try {
-    const result = await checkSingleRanking(row.id, 5);
+    const result = await checkSingleRanking(row.id, maxPages.value);
     if (result.error) {
       // 检查是否为依赖错误
       if (result.error.includes('Playwright') || result.error.includes('Python') || result.error.includes('缺少')) {
@@ -1344,11 +1350,11 @@ async function handleCheckRankings() {
     if (isSelectedMode) {
       // 检测选中的关键词
       console.log('Calling checkSelectedRankings with ids:', selectedIds.value);
-      results = await checkSelectedRankings(selectedIds.value, 5);
+      results = await checkSelectedRankings(selectedIds.value, maxPages.value);
     } else {
       // 检测全部
       console.log('Calling checkAllRankings...');
-      results = await checkAllRankings(props.productId, 5, 0);  // 0 = 无时间限制
+      results = await checkAllRankings(props.productId, maxPages.value, 0);  // 0 = 无时间限制
     }
 
     // 检查是否有依赖相关错误
@@ -1581,6 +1587,14 @@ async function setupEventListeners() {
       checkProgress.message = '';
     }
   );
+
+  // 监听设置更新事件
+  unlistenSettingsUpdated = await listen<{ max_pages: number }>(
+    'scheduler-settings-updated',
+    (event) => {
+      maxPages.value = event.payload.max_pages || 5;
+    }
+  );
 }
 
 // ============ 优化事件管理 ============
@@ -1659,10 +1673,21 @@ function getKeywordCount(event: OptimizationEvent): number {
   }
 }
 
+// 加载监控设置
+async function loadMonitoringSettings() {
+  try {
+    const settings = await getSchedulerSettings();
+    maxPages.value = settings.max_pages || 5;
+  } catch (e) {
+    console.error('加载监控设置失败:', e);
+  }
+}
+
 onMounted(() => {
   loadData();
   loadStats();
   loadEvents();
+  loadMonitoringSettings();
   setupEventListeners();
 });
 
@@ -1673,6 +1698,9 @@ onUnmounted(() => {
   }
   if (unlistenComplete) {
     unlistenComplete();
+  }
+  if (unlistenSettingsUpdated) {
+    unlistenSettingsUpdated();
   }
 });
 </script>
@@ -1816,6 +1844,11 @@ onUnmounted(() => {
 
 .rank-position {
   font-weight: bold;
+}
+
+/* 价格样式 */
+.price-cell {
+  white-space: nowrap;
 }
 
 /* 评论星级样式 */

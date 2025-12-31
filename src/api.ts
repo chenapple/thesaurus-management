@@ -561,6 +561,13 @@ export async function getRunningTask(): Promise<TaskLog | null> {
   return await invoke("get_running_task");
 }
 
+/**
+ * 清空任务记录
+ */
+export async function clearTaskLogs(): Promise<void> {
+  return await invoke("clear_task_logs");
+}
+
 // ==================== 依赖安装 ====================
 
 import type { DependencyStatus, InstallResult } from "./types";

@@ -241,6 +241,7 @@ export interface SchedulerSettings {
   notify_on_exit_top10: boolean;
   notify_on_new_rank: boolean;
   notify_on_lost_rank: boolean;
+  max_pages: number;         // 监控页数: 1/3/5
 }
 
 // 调度器状态
@@ -331,6 +332,7 @@ export const DEFAULT_SCHEDULER_SETTINGS: SchedulerSettings = {
   notify_on_exit_top10: true,
   notify_on_new_rank: true,
   notify_on_lost_rank: true,
+  max_pages: 5,              // 默认监控前5页
 };
 
 // ==================== 依赖安装 ====================

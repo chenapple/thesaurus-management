@@ -98,6 +98,15 @@ use([
   MarkLineComponent,
 ]);
 
+// 每页自然位数量（Amazon 固定值）
+const ORGANIC_ITEMS_PER_PAGE = 48;
+
+// 计算自然排名的绝对排名
+function calculateAbsoluteRank(page: number | null, rank: number | null): number | null {
+  if (page === null || rank === null) return null;
+  return (page - 1) * ORGANIC_ITEMS_PER_PAGE + rank;
+}
+
 type EChartsOption = ComposeOption<
   | LineSeriesOption
   | TitleComponentOption
@@ -243,8 +252,20 @@ function getEventMarkLines() {
 // 图表配置
 const chartOption = computed<EChartsOption>(() => {
   const dates = history.value.map(h => formatDateShort(h.check_date));
-  const organicRanks = history.value.map(h => h.organic_rank);
-  const sponsoredRanks = history.value.map(h => h.sponsored_rank);
+
+  // 自然排名：计算绝对排名
+  const organicData = history.value.map(h => ({
+    page: h.organic_page,
+    rank: h.organic_rank,
+    absolute: calculateAbsoluteRank(h.organic_page, h.organic_rank),
+  }));
+
+  // 广告排名：不计算绝对排名（广告位数量不固定）
+  const sponsoredData = history.value.map(h => ({
+    page: h.sponsored_page,
+    rank: h.sponsored_rank,
+    absolute: h.sponsored_rank,  // 直接使用页内排名作为 Y 轴值
+  }));
 
   // 根据 displayType 过滤图例和系列
   const legendData: string[] = [];
@@ -257,13 +278,18 @@ const chartOption = computed<EChartsOption>(() => {
   const eventDates = new Set(markLineData.map(m => m.xAxis as string));
 
   // 生成带高亮的数据点
-  function createDataWithHighlight(ranks: (number | null)[], color: string) {
-    return ranks.map((rank, index) => {
+  function createDataWithHighlight(
+    dataList: Array<{ page: number | null; rank: number | null; absolute: number | null }>,
+    color: string
+  ) {
+    return dataList.map((item, index) => {
       const date = dates[index];
       const hasEvent = eventDates.has(date);
-      if (rank === null) return null;
+      if (item.absolute === null) return null;
       return {
-        value: rank,
+        value: item.absolute,  // Y轴使用绝对排名（自然位）或页内排名（广告位）
+        page: item.page,       // 保存页码用于 tooltip
+        rank: item.rank,       // 保存页内排名用于 tooltip
         symbolSize: hasEvent ? 10 : 6,
         itemStyle: hasEvent ? {
           color: color,
@@ -302,7 +328,7 @@ const chartOption = computed<EChartsOption>(() => {
     series.push({
       name: '自然排名',
       type: 'line',
-      data: createDataWithHighlight(organicRanks, '#67c23a'),
+      data: createDataWithHighlight(organicData, '#67c23a'),
       smooth: true,
       symbol: 'circle',
       symbolSize: 6,
@@ -323,7 +349,7 @@ const chartOption = computed<EChartsOption>(() => {
     series.push({
       name: '广告排名',
       type: 'line',
-      data: createDataWithHighlight(sponsoredRanks, '#409eff'),
+      data: createDataWithHighlight(sponsoredData, '#409eff'),
       smooth: true,
       symbol: 'circle',
       symbolSize: 6,
@@ -346,8 +372,19 @@ const chartOption = computed<EChartsOption>(() => {
         const date = params[0]?.axisValue;
         let html = `<div style="font-weight:bold">${date}</div>`;
         for (const p of params) {
-          const value = p.value ?? '-';
-          html += `<div>${p.marker} ${p.seriesName}: ${value}</div>`;
+          if (p.data === null) continue;
+          const { page, rank, value } = p.data;
+          if (value !== undefined && value !== null) {
+            if (p.seriesName === '自然排名') {
+              // 自然排名显示绝对排名
+              html += `<div>${p.marker} ${p.seriesName}: 第${page}页 第${rank}名 (总第${value}名)</div>`;
+            } else {
+              // 广告排名只显示页码和页内排名
+              html += `<div>${p.marker} ${p.seriesName}: 第${page}页 第${rank}名</div>`;
+            }
+          } else {
+            html += `<div>${p.marker} ${p.seriesName}: -</div>`;
+          }
         }
         return html;
       },

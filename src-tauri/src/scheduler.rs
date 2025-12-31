@@ -17,6 +17,7 @@ pub struct SchedulerStatus {
 
 // 调度器设置
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct SchedulerSettings {
     pub enabled: bool,
     pub morning_start: u32,     // 8
@@ -28,6 +29,7 @@ pub struct SchedulerSettings {
     pub notify_on_exit_top10: bool,
     pub notify_on_new_rank: bool,
     pub notify_on_lost_rank: bool,
+    pub max_pages: u32,         // 监控页数: 1/3/5
 }
 
 impl Default for SchedulerSettings {
@@ -43,6 +45,7 @@ impl Default for SchedulerSettings {
             notify_on_exit_top10: true,
             notify_on_new_rank: true,
             notify_on_lost_rank: true,
+            max_pages: 5,  // 默认监控前5页
         }
     }
 }

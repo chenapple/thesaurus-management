@@ -627,6 +627,11 @@ fn get_running_task() -> Result<Option<db::SchedulerTaskLog>, String> {
     db::get_running_task().map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn clear_task_logs() -> Result<(), String> {
+    db::clear_task_logs().map_err(|e| e.to_string())
+}
+
 // ==================== 依赖安装 ====================
 
 #[tauri::command]
@@ -835,6 +840,7 @@ pub fn run() {
             get_scheduler_status,
             get_task_logs,
             get_running_task,
+            clear_task_logs,
             // 依赖安装
             check_dependencies,
             install_all_dependencies,
