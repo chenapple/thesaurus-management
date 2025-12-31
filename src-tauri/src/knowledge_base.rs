@@ -41,6 +41,7 @@ pub fn parse_document(file_path: &str) -> Result<ParsedDocument, String> {
         "pdf" => parse_pdf(file_path, &file_name),
         "docx" => parse_docx(file_path, &file_name),
         "xlsx" | "xls" => parse_excel(file_path, &file_name),
+        "pptx" => parse_pptx(file_path, &file_name),
         "md" | "markdown" => parse_markdown(file_path, &file_name),
         "txt" => parse_text(file_path, &file_name),
         _ => Err(format!("不支持的文件类型: {}", extension)),
@@ -171,6 +172,134 @@ fn parse_excel(file_path: &str, title: &str) -> Result<ParsedDocument, String> {
         pages,
         file_type: "xlsx".to_string(),
     })
+}
+
+/// 解析 PowerPoint 文件 (.pptx)
+fn parse_pptx(file_path: &str, title: &str) -> Result<ParsedDocument, String> {
+    use std::io::Read;
+    use zip::ZipArchive;
+    use quick_xml::Reader;
+    use quick_xml::events::Event;
+
+    let file = fs::File::open(file_path).map_err(|e| format!("打开文件失败: {}", e))?;
+    let mut archive = ZipArchive::new(file).map_err(|e| format!("PPTX 解压失败: {}", e))?;
+
+    // 收集所有幻灯片文件名并排序
+    let mut slide_names: Vec<String> = Vec::new();
+    for i in 0..archive.len() {
+        if let Ok(file) = archive.by_index(i) {
+            let name = file.name().to_string();
+            if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
+                slide_names.push(name);
+            }
+        }
+    }
+
+    // 按幻灯片编号排序 (slide1.xml, slide2.xml, ...)
+    slide_names.sort_by(|a, b| {
+        let num_a = extract_slide_number(a);
+        let num_b = extract_slide_number(b);
+        num_a.cmp(&num_b)
+    });
+
+    let mut all_content: Vec<String> = Vec::new();
+    let mut pages: Vec<PageContent> = Vec::new();
+
+    for (idx, slide_name) in slide_names.iter().enumerate() {
+        let page_number = (idx + 1) as i64;
+
+        if let Ok(mut slide_file) = archive.by_name(slide_name) {
+            let mut xml_content = String::new();
+            if slide_file.read_to_string(&mut xml_content).is_ok() {
+                let slide_text = extract_text_from_pptx_xml(&xml_content);
+
+                if !slide_text.is_empty() {
+                    let slide_content = format!("## 幻灯片 {}\n{}", page_number, slide_text);
+                    all_content.push(slide_content.clone());
+
+                    pages.push(PageContent {
+                        page_number,
+                        content: slide_content,
+                    });
+                }
+            }
+        }
+    }
+
+    let content = all_content.join("\n\n---\n\n");
+
+    Ok(ParsedDocument {
+        title: title.to_string(),
+        content,
+        pages,
+        file_type: "pptx".to_string(),
+    })
+}
+
+/// 从幻灯片文件名中提取编号
+fn extract_slide_number(name: &str) -> i32 {
+    // ppt/slides/slide1.xml -> 1
+    name.chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0)
+}
+
+/// 从 PPTX XML 中提取文本内容
+fn extract_text_from_pptx_xml(xml: &str) -> String {
+    use quick_xml::Reader;
+    use quick_xml::events::Event;
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    let mut texts: Vec<String> = Vec::new();
+    let mut current_paragraph: Vec<String> = Vec::new();
+    let mut in_text_element = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                // <a:t> 是文本元素
+                if e.name().as_ref() == b"a:t" {
+                    in_text_element = true;
+                }
+            }
+            Ok(Event::Text(e)) => {
+                if in_text_element {
+                    if let Ok(text) = e.unescape() {
+                        let text = text.trim();
+                        if !text.is_empty() {
+                            current_paragraph.push(text.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                if e.name().as_ref() == b"a:t" {
+                    in_text_element = false;
+                }
+                // <a:p> 是段落结束
+                if e.name().as_ref() == b"a:p" {
+                    if !current_paragraph.is_empty() {
+                        texts.push(current_paragraph.join(""));
+                        current_paragraph.clear();
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+
+    // 处理剩余的段落
+    if !current_paragraph.is_empty() {
+        texts.push(current_paragraph.join(""));
+    }
+
+    texts.join("\n")
 }
 
 /// 解析 Markdown 文件

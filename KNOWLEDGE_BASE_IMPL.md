@@ -114,7 +114,7 @@ kb_messages         -- AI 消息
 ## 功能特性
 
 1. **文档管理**
-   - 支持 PDF, Word (docx), Excel (xlsx/xls), Markdown, 纯文本
+   - 支持 PDF, Word (docx), Excel (xlsx/xls), PowerPoint (pptx), Markdown, 纯文本
    - 自动解析和分块
    - 递归分割算法，支持重叠
 
