@@ -3528,11 +3528,23 @@ pub fn kb_get_chunks(document_id: i64) -> Result<Vec<KbChunk>> {
 
 // ==================== 知识库搜索 ====================
 
-// 全文搜索
+// 全文搜索（支持中文）
 pub fn kb_search(query: String, limit: i64) -> Result<Vec<KbSearchResult>> {
     let conn = get_db().lock();
 
-    // 使用 FTS5 全文搜索
+    // 先尝试 FTS5 搜索
+    let fts_results = try_fts_search(&conn, &query, limit)?;
+
+    // 如果 FTS5 没有结果，使用 LIKE 搜索（对中文更友好）
+    if fts_results.is_empty() {
+        return like_search(&conn, &query, limit);
+    }
+
+    Ok(fts_results)
+}
+
+// FTS5 搜索
+fn try_fts_search(conn: &rusqlite::Connection, query: &str, limit: i64) -> Result<Vec<KbSearchResult>> {
     let mut stmt = conn.prepare(
         "SELECT c.id, c.document_id, d.title, c.content, c.page_number,
                 bm25(kb_chunks_fts) as score
@@ -3545,6 +3557,53 @@ pub fn kb_search(query: String, limit: i64) -> Result<Vec<KbSearchResult>> {
     )?;
 
     let results = stmt.query_map(rusqlite::params![query, limit], |row| {
+        Ok(KbSearchResult {
+            chunk_id: row.get(0)?,
+            document_id: row.get(1)?,
+            document_title: row.get(2)?,
+            content: row.get(3)?,
+            page_number: row.get(4)?,
+            score: row.get(5)?,
+        })
+    })?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    Ok(results)
+}
+
+// LIKE 搜索（支持中文）
+fn like_search(conn: &rusqlite::Connection, query: &str, limit: i64) -> Result<Vec<KbSearchResult>> {
+    // 提取查询中的关键词（按空格、逗号分割，或者对中文逐字符匹配）
+    let keywords: Vec<&str> = query
+        .split(|c: char| c.is_whitespace() || c == ',' || c == '，')
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if keywords.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // 构建 LIKE 查询条件
+    let like_conditions: Vec<String> = keywords
+        .iter()
+        .map(|k| format!("c.content LIKE '%{}%'", k.replace("'", "''")))
+        .collect();
+
+    let where_clause = like_conditions.join(" OR ");
+
+    let sql = format!(
+        "SELECT c.id, c.document_id, d.title, c.content, c.page_number, 0.0 as score
+         FROM kb_chunks c
+         JOIN kb_documents d ON c.document_id = d.id
+         WHERE {}
+         LIMIT ?1",
+        where_clause
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+
+    let results = stmt.query_map(rusqlite::params![limit], |row| {
         Ok(KbSearchResult {
             chunk_id: row.get(0)?,
             document_id: row.get(1)?,
