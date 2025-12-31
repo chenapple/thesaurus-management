@@ -23,7 +23,22 @@ const apiKeyConfigs: ApiKeyConfig[] = [
   {
     name: 'deepseek',
     displayName: 'DeepSeek',
-    description: '用于 AI 词根分析和关键词分类',
+    description: '用于 AI 词根分析、关键词分类和知识库问答',
+  },
+  {
+    name: 'openai',
+    displayName: 'OpenAI',
+    description: '用于知识库问答 (GPT-4o, GPT-4 等)',
+  },
+  {
+    name: 'claude',
+    displayName: 'Claude',
+    description: '用于知识库问答 (Claude 3.5 Sonnet 等)',
+  },
+  {
+    name: 'gemini',
+    displayName: 'Gemini',
+    description: '用于知识库问答 (Gemini 2.0, 1.5 等)',
   },
 ];
 

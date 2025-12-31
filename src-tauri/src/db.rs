@@ -364,6 +364,9 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
     // 迁移关键词监控表：添加 tags 列
     migrate_keyword_monitoring_tags(&conn)?;
 
+    // 初始化知识库表
+    init_knowledge_base_tables(&conn)?;
+
     DB.set(Mutex::new(conn))
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
@@ -3170,4 +3173,477 @@ pub fn delete_optimization_event(id: i64) -> Result<()> {
     let conn = get_db().lock();
     conn.execute("DELETE FROM optimization_events WHERE id = ?1", [id])?;
     Ok(())
+}
+
+// ==================== 知识库模块 ====================
+
+// 知识库分类结构
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KbCategory {
+    pub id: i64,
+    pub name: String,
+    pub parent_id: Option<i64>,
+    pub created_at: String,
+}
+
+// 知识库文档结构
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KbDocument {
+    pub id: i64,
+    pub category_id: Option<i64>,
+    pub title: String,
+    pub file_name: String,
+    pub file_path: String,
+    pub file_type: String,
+    pub file_size: Option<i64>,
+    pub status: String,
+    pub chunk_count: i64,
+    pub created_at: String,
+}
+
+// 文档分块结构
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KbChunk {
+    pub id: i64,
+    pub document_id: i64,
+    pub chunk_index: i64,
+    pub content: String,
+    pub page_number: Option<i64>,
+}
+
+// 搜索结果结构
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KbSearchResult {
+    pub chunk_id: i64,
+    pub document_id: i64,
+    pub document_title: String,
+    pub content: String,
+    pub page_number: Option<i64>,
+    pub score: f64,
+}
+
+// AI 对话结构
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KbConversation {
+    pub id: i64,
+    pub title: Option<String>,
+    pub ai_provider: String,
+    pub ai_model: Option<String>,
+    pub created_at: String,
+}
+
+// AI 消息结构
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KbMessage {
+    pub id: i64,
+    pub conversation_id: i64,
+    pub role: String,
+    pub content: String,
+    pub sources: Option<String>,
+    pub created_at: String,
+}
+
+// 初始化知识库表
+pub fn init_knowledge_base_tables(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        -- 知识库分类表
+        CREATE TABLE IF NOT EXISTS kb_categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            parent_id INTEGER,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (parent_id) REFERENCES kb_categories(id) ON DELETE SET NULL
+        );
+
+        -- 知识库文档表
+        CREATE TABLE IF NOT EXISTS kb_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category_id INTEGER,
+            title TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_type TEXT NOT NULL,
+            file_size INTEGER,
+            status TEXT DEFAULT 'pending',
+            chunk_count INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (category_id) REFERENCES kb_categories(id) ON DELETE SET NULL
+        );
+
+        -- 文档分块表（用于 RAG 检索）
+        CREATE TABLE IF NOT EXISTS kb_chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id INTEGER NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            content TEXT NOT NULL,
+            page_number INTEGER,
+            FOREIGN KEY (document_id) REFERENCES kb_documents(id) ON DELETE CASCADE
+        );
+
+        -- AI 对话表
+        CREATE TABLE IF NOT EXISTS kb_conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            ai_provider TEXT NOT NULL,
+            ai_model TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- AI 消息表
+        CREATE TABLE IF NOT EXISTS kb_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            sources TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (conversation_id) REFERENCES kb_conversations(id) ON DELETE CASCADE
+        );
+
+        -- 索引
+        CREATE INDEX IF NOT EXISTS idx_kb_documents_category ON kb_documents(category_id);
+        CREATE INDEX IF NOT EXISTS idx_kb_documents_status ON kb_documents(status);
+        CREATE INDEX IF NOT EXISTS idx_kb_chunks_document ON kb_chunks(document_id);
+        CREATE INDEX IF NOT EXISTS idx_kb_messages_conversation ON kb_messages(conversation_id);
+        "
+    )?;
+
+    // 创建 FTS5 全文搜索虚拟表
+    // 注意：FTS5 表需要单独创建，不能在 execute_batch 中创建
+    let fts_exists: bool = conn
+        .prepare("SELECT 1 FROM kb_chunks_fts LIMIT 1")
+        .is_ok();
+
+    if !fts_exists {
+        conn.execute(
+            "CREATE VIRTUAL TABLE kb_chunks_fts USING fts5(content, content=kb_chunks, content_rowid=id)",
+            [],
+        )?;
+
+        // 创建触发器以保持 FTS 索引同步
+        conn.execute_batch(
+            "
+            -- 插入触发器
+            CREATE TRIGGER IF NOT EXISTS kb_chunks_fts_insert AFTER INSERT ON kb_chunks BEGIN
+                INSERT INTO kb_chunks_fts(rowid, content) VALUES (new.id, new.content);
+            END;
+
+            -- 删除触发器
+            CREATE TRIGGER IF NOT EXISTS kb_chunks_fts_delete AFTER DELETE ON kb_chunks BEGIN
+                INSERT INTO kb_chunks_fts(kb_chunks_fts, rowid, content) VALUES('delete', old.id, old.content);
+            END;
+
+            -- 更新触发器
+            CREATE TRIGGER IF NOT EXISTS kb_chunks_fts_update AFTER UPDATE ON kb_chunks BEGIN
+                INSERT INTO kb_chunks_fts(kb_chunks_fts, rowid, content) VALUES('delete', old.id, old.content);
+                INSERT INTO kb_chunks_fts(rowid, content) VALUES (new.id, new.content);
+            END;
+            "
+        )?;
+    }
+
+    Ok(())
+}
+
+// ==================== 知识库分类 CRUD ====================
+
+// 创建知识库分类
+pub fn kb_create_category(name: String, parent_id: Option<i64>) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT INTO kb_categories (name, parent_id) VALUES (?1, ?2)",
+        rusqlite::params![name, parent_id],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+// 获取所有知识库分类
+pub fn kb_get_categories() -> Result<Vec<KbCategory>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, name, parent_id, created_at FROM kb_categories ORDER BY name"
+    )?;
+
+    let categories = stmt.query_map([], |row| {
+        Ok(KbCategory {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            parent_id: row.get(2)?,
+            created_at: row.get(3)?,
+        })
+    })?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    Ok(categories)
+}
+
+// 删除知识库分类
+pub fn kb_delete_category(id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("DELETE FROM kb_categories WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+// ==================== 知识库文档 CRUD ====================
+
+// 添加文档记录
+pub fn kb_add_document(
+    category_id: Option<i64>,
+    title: String,
+    file_name: String,
+    file_path: String,
+    file_type: String,
+    file_size: Option<i64>,
+) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT INTO kb_documents (category_id, title, file_name, file_path, file_type, file_size, status)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending')",
+        rusqlite::params![category_id, title, file_name, file_path, file_type, file_size],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+// 更新文档状态
+pub fn kb_update_document_status(id: i64, status: String, chunk_count: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE kb_documents SET status = ?1, chunk_count = ?2 WHERE id = ?3",
+        rusqlite::params![status, chunk_count, id],
+    )?;
+    Ok(())
+}
+
+// 获取文档列表
+pub fn kb_get_documents(category_id: Option<i64>) -> Result<Vec<KbDocument>> {
+    let conn = get_db().lock();
+
+    let sql = if category_id.is_some() {
+        "SELECT id, category_id, title, file_name, file_path, file_type, file_size, status, chunk_count, created_at
+         FROM kb_documents WHERE category_id = ?1 ORDER BY created_at DESC"
+    } else {
+        "SELECT id, category_id, title, file_name, file_path, file_type, file_size, status, chunk_count, created_at
+         FROM kb_documents ORDER BY created_at DESC"
+    };
+
+    let mut stmt = conn.prepare(sql)?;
+
+    let documents = if let Some(cat_id) = category_id {
+        stmt.query_map([cat_id], |row| {
+            Ok(KbDocument {
+                id: row.get(0)?,
+                category_id: row.get(1)?,
+                title: row.get(2)?,
+                file_name: row.get(3)?,
+                file_path: row.get(4)?,
+                file_type: row.get(5)?,
+                file_size: row.get(6)?,
+                status: row.get(7)?,
+                chunk_count: row.get(8)?,
+                created_at: row.get(9)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect()
+    } else {
+        stmt.query_map([], |row| {
+            Ok(KbDocument {
+                id: row.get(0)?,
+                category_id: row.get(1)?,
+                title: row.get(2)?,
+                file_name: row.get(3)?,
+                file_path: row.get(4)?,
+                file_type: row.get(5)?,
+                file_size: row.get(6)?,
+                status: row.get(7)?,
+                chunk_count: row.get(8)?,
+                created_at: row.get(9)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect()
+    };
+
+    Ok(documents)
+}
+
+// 删除文档
+pub fn kb_delete_document(id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    // 级联删除会自动删除相关的 chunks
+    conn.execute("DELETE FROM kb_documents WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+// ==================== 文档分块 CRUD ====================
+
+// 添加文档分块
+pub fn kb_add_chunk(document_id: i64, chunk_index: i64, content: String, page_number: Option<i64>) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT INTO kb_chunks (document_id, chunk_index, content, page_number) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![document_id, chunk_index, content, page_number],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+// 批量添加文档分块
+pub fn kb_add_chunks_batch(document_id: i64, chunks: Vec<(String, Option<i64>)>) -> Result<i64> {
+    let conn = get_db().lock();
+
+    for (index, (content, page_number)) in chunks.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO kb_chunks (document_id, chunk_index, content, page_number) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![document_id, index as i64, content, page_number],
+        )?;
+    }
+
+    Ok(chunks.len() as i64)
+}
+
+// 获取文档的所有分块
+pub fn kb_get_chunks(document_id: i64) -> Result<Vec<KbChunk>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, document_id, chunk_index, content, page_number
+         FROM kb_chunks WHERE document_id = ?1 ORDER BY chunk_index"
+    )?;
+
+    let chunks = stmt.query_map([document_id], |row| {
+        Ok(KbChunk {
+            id: row.get(0)?,
+            document_id: row.get(1)?,
+            chunk_index: row.get(2)?,
+            content: row.get(3)?,
+            page_number: row.get(4)?,
+        })
+    })?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    Ok(chunks)
+}
+
+// ==================== 知识库搜索 ====================
+
+// 全文搜索
+pub fn kb_search(query: String, limit: i64) -> Result<Vec<KbSearchResult>> {
+    let conn = get_db().lock();
+
+    // 使用 FTS5 全文搜索
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.document_id, d.title, c.content, c.page_number,
+                bm25(kb_chunks_fts) as score
+         FROM kb_chunks_fts
+         JOIN kb_chunks c ON kb_chunks_fts.rowid = c.id
+         JOIN kb_documents d ON c.document_id = d.id
+         WHERE kb_chunks_fts MATCH ?1
+         ORDER BY score
+         LIMIT ?2"
+    )?;
+
+    let results = stmt.query_map(rusqlite::params![query, limit], |row| {
+        Ok(KbSearchResult {
+            chunk_id: row.get(0)?,
+            document_id: row.get(1)?,
+            document_title: row.get(2)?,
+            content: row.get(3)?,
+            page_number: row.get(4)?,
+            score: row.get(5)?,
+        })
+    })?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    Ok(results)
+}
+
+// ==================== AI 对话 CRUD ====================
+
+// 创建对话
+pub fn kb_create_conversation(ai_provider: String, ai_model: Option<String>, title: Option<String>) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT INTO kb_conversations (ai_provider, ai_model, title) VALUES (?1, ?2, ?3)",
+        rusqlite::params![ai_provider, ai_model, title],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+// 获取对话列表
+pub fn kb_get_conversations() -> Result<Vec<KbConversation>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, title, ai_provider, ai_model, created_at
+         FROM kb_conversations ORDER BY created_at DESC"
+    )?;
+
+    let conversations = stmt.query_map([], |row| {
+        Ok(KbConversation {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            ai_provider: row.get(2)?,
+            ai_model: row.get(3)?,
+            created_at: row.get(4)?,
+        })
+    })?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    Ok(conversations)
+}
+
+// 更新对话标题
+pub fn kb_update_conversation_title(id: i64, title: String) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("UPDATE kb_conversations SET title = ?1 WHERE id = ?2", rusqlite::params![title, id])?;
+    Ok(())
+}
+
+// 删除对话
+pub fn kb_delete_conversation(id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("DELETE FROM kb_conversations WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+// 添加消息
+pub fn kb_add_message(
+    conversation_id: i64,
+    role: String,
+    content: String,
+    sources: Option<String>,
+) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT INTO kb_messages (conversation_id, role, content, sources) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![conversation_id, role, content, sources],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+// 获取对话消息
+pub fn kb_get_messages(conversation_id: i64) -> Result<Vec<KbMessage>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, conversation_id, role, content, sources, created_at
+         FROM kb_messages WHERE conversation_id = ?1 ORDER BY created_at"
+    )?;
+
+    let messages = stmt.query_map([conversation_id], |row| {
+        Ok(KbMessage {
+            id: row.get(0)?,
+            conversation_id: row.get(1)?,
+            role: row.get(2)?,
+            content: row.get(3)?,
+            sources: row.get(4)?,
+            created_at: row.get(5)?,
+        })
+    })?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    Ok(messages)
 }

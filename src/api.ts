@@ -668,3 +668,182 @@ export async function updateOptimizationEvent(
 export async function deleteOptimizationEvent(id: number): Promise<void> {
   return await invoke("delete_optimization_event", { id });
 }
+
+// ==================== 知识库管理 ====================
+
+import type { KbCategory, KbDocument, KbChunk, KbSearchResult, KbConversation, KbMessage } from "./types";
+
+/**
+ * 创建知识库分类
+ */
+export async function kbCreateCategory(name: string, parentId?: number): Promise<number> {
+  return await invoke("kb_create_category", { name, parentId: parentId || null });
+}
+
+/**
+ * 获取所有知识库分类
+ */
+export async function kbGetCategories(): Promise<KbCategory[]> {
+  return await invoke("kb_get_categories");
+}
+
+/**
+ * 删除知识库分类
+ */
+export async function kbDeleteCategory(id: number): Promise<void> {
+  return await invoke("kb_delete_category", { id });
+}
+
+/**
+ * 添加文档
+ */
+export async function kbAddDocument(
+  categoryId: number | null,
+  title: string,
+  fileName: string,
+  filePath: string,
+  fileType: string,
+  fileSize?: number
+): Promise<number> {
+  return await invoke("kb_add_document", {
+    categoryId,
+    title,
+    fileName,
+    filePath,
+    fileType,
+    fileSize: fileSize || null,
+  });
+}
+
+/**
+ * 更新文档状态
+ */
+export async function kbUpdateDocumentStatus(
+  id: number,
+  status: string,
+  chunkCount: number
+): Promise<void> {
+  return await invoke("kb_update_document_status", { id, status, chunkCount });
+}
+
+/**
+ * 获取文档列表
+ */
+export async function kbGetDocuments(categoryId?: number): Promise<KbDocument[]> {
+  return await invoke("kb_get_documents", { categoryId: categoryId || null });
+}
+
+/**
+ * 删除文档
+ */
+export async function kbDeleteDocument(id: number): Promise<void> {
+  return await invoke("kb_delete_document", { id });
+}
+
+/**
+ * 处理文档（解析 + 分块）
+ */
+export async function kbProcessDocument(documentId: number, filePath: string): Promise<number> {
+  return await invoke("kb_process_document", { documentId, filePath });
+}
+
+/**
+ * 添加单个分块
+ */
+export async function kbAddChunk(
+  documentId: number,
+  chunkIndex: number,
+  content: string,
+  pageNumber?: number
+): Promise<number> {
+  return await invoke("kb_add_chunk", {
+    documentId,
+    chunkIndex,
+    content,
+    pageNumber: pageNumber || null,
+  });
+}
+
+/**
+ * 批量添加分块
+ */
+export async function kbAddChunksBatch(
+  documentId: number,
+  chunks: { index: number; content: string; page_number?: number }[]
+): Promise<number> {
+  return await invoke("kb_add_chunks_batch", { documentId, chunks });
+}
+
+/**
+ * 获取文档分块
+ */
+export async function kbGetChunks(documentId: number): Promise<KbChunk[]> {
+  return await invoke("kb_get_chunks", { documentId });
+}
+
+/**
+ * 搜索知识库
+ */
+export async function kbSearch(query: string, limit: number = 5): Promise<KbSearchResult[]> {
+  return await invoke("kb_search", { query, limit });
+}
+
+/**
+ * 创建对话
+ */
+export async function kbCreateConversation(
+  aiProvider: string,
+  aiModel?: string,
+  title?: string
+): Promise<number> {
+  return await invoke("kb_create_conversation", {
+    aiProvider,
+    aiModel: aiModel || null,
+    title: title || null,
+  });
+}
+
+/**
+ * 获取对话列表
+ */
+export async function kbGetConversations(): Promise<KbConversation[]> {
+  return await invoke("kb_get_conversations");
+}
+
+/**
+ * 更新对话标题
+ */
+export async function kbUpdateConversationTitle(id: number, title: string): Promise<void> {
+  return await invoke("kb_update_conversation_title", { id, title });
+}
+
+/**
+ * 删除对话
+ */
+export async function kbDeleteConversation(id: number): Promise<void> {
+  return await invoke("kb_delete_conversation", { id });
+}
+
+/**
+ * 添加消息
+ */
+export async function kbAddMessage(
+  conversationId: number,
+  role: 'user' | 'assistant',
+  content: string,
+  sources?: string
+): Promise<number> {
+  return await invoke("kb_add_message", {
+    conversationId,
+    role,
+    content,
+    sources: sources || null,
+  });
+}
+
+/**
+ * 获取对话消息
+ */
+export async function kbGetMessages(conversationId: number): Promise<KbMessage[]> {
+  return await invoke("kb_get_messages", { conversationId });
+}

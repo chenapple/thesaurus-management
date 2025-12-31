@@ -27,6 +27,7 @@ const ApiKeyDialog = defineAsyncComponent(() => import("./components/ApiKeyDialo
 const KeywordMonitoringTab = defineAsyncComponent(() => import("./components/KeywordMonitoringTab.vue"));
 const SettingsDialog = defineAsyncComponent(() => import("./components/SettingsDialog.vue"));
 const QuickAddMonitoringDialog = defineAsyncComponent(() => import("./components/QuickAddMonitoringDialog.vue"));
+const KnowledgeBaseTab = defineAsyncComponent(() => import("./components/KnowledgeBaseTab.vue"));
 
 // ==================== 产品相关状态 ====================
 const products = ref<Product[]>([]);
@@ -180,8 +181,8 @@ const updateDownloading = ref(false);
 const updateProgress = ref(0);
 const updateTotal = ref(0);
 
-// 视图模式: 'keywords' | 'roots' | 'wordcloud' | 'monitoring'
-const viewMode = ref<'keywords' | 'roots' | 'wordcloud' | 'monitoring'>('keywords');
+// 视图模式: 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'knowledge'
+const viewMode = ref<'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'knowledge'>('keywords');
 const wordCloudRef = ref<InstanceType<typeof WordCloud> | null>(null);
 const allRootsForCloud = ref<Root[]>([]);
 const loadingCloud = ref(false);
@@ -530,7 +531,7 @@ async function loadAllRootsForCloud() {
 }
 
 // 切换视图模式
-function switchViewMode(mode: 'keywords' | 'roots' | 'wordcloud' | 'monitoring') {
+function switchViewMode(mode: 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'knowledge') {
   viewMode.value = mode;
   if (mode === 'wordcloud' && allRootsForCloud.value.length === 0) {
     loadAllRootsForCloud();
@@ -539,7 +540,7 @@ function switchViewMode(mode: 'keywords' | 'roots' | 'wordcloud' | 'monitoring')
   } else if (mode === 'roots' && roots.value.length === 0) {
     loadRoots();
   }
-  // monitoring 视图由组件自行加载数据
+  // monitoring 和 knowledge 视图由组件自行加载数据
 }
 
 // 词云点击处理
@@ -2052,6 +2053,13 @@ onUnmounted(() => {
               <el-icon><TrendCharts /></el-icon>
               排名监控
             </el-button>
+            <el-button
+              :type="viewMode === 'knowledge' ? 'primary' : 'default'"
+              @click="switchViewMode('knowledge')"
+            >
+              <el-icon><ChatDotRound /></el-icon>
+              知识库
+            </el-button>
           </el-button-group>
 
           <el-divider direction="vertical" />
@@ -2454,6 +2462,12 @@ onUnmounted(() => {
       <KeywordMonitoringTab
         v-if="selectedProduct && viewMode === 'monitoring'"
         :product-id="selectedProduct.id"
+      />
+
+      <!-- 知识库视图 -->
+      <KnowledgeBaseTab
+        v-if="viewMode === 'knowledge'"
+        class="knowledge-base-view"
       />
 
       <!-- 词根表格 -->
@@ -3180,6 +3194,15 @@ body,
   background: var(--el-bg-color);
   border-radius: 8px;
   margin: 0 16px;
+}
+
+.knowledge-base-view {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+  margin: 0 16px;
+  background: var(--el-bg-color);
+  border-radius: 8px;
 }
 
 .view-toggle {

@@ -362,3 +362,118 @@ export interface InstallResult {
   message: string;
   python_path: string | null;
 }
+
+// ==================== 知识库 ====================
+
+// 知识库分类
+export interface KbCategory {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  created_at: string;
+}
+
+// 知识库文档
+export interface KbDocument {
+  id: number;
+  category_id: number | null;
+  title: string;
+  file_name: string;
+  file_path: string;
+  file_type: string;  // pdf/docx/xlsx/txt/md
+  file_size: number | null;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  chunk_count: number;
+  created_at: string;
+}
+
+// 文档分块
+export interface KbChunk {
+  id: number;
+  document_id: number;
+  chunk_index: number;
+  content: string;
+  page_number: number | null;
+}
+
+// 搜索结果
+export interface KbSearchResult {
+  chunk_id: number;
+  document_id: number;
+  document_title: string;
+  content: string;
+  page_number: number | null;
+  score: number;
+}
+
+// AI 对话
+export interface KbConversation {
+  id: number;
+  title: string | null;
+  ai_provider: string;
+  ai_model: string | null;
+  created_at: string;
+}
+
+// AI 消息
+export interface KbMessage {
+  id: number;
+  conversation_id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  sources: string | null;  // JSON: 引用的文档来源
+  created_at: string;
+}
+
+// 消息来源（解析后的）
+export interface MessageSource {
+  document_id: number;
+  document_title: string;
+  chunk_id: number;
+  page_number: number | null;
+  snippet: string;
+}
+
+// AI 服务提供商
+export type AIProvider = 'deepseek' | 'openai' | 'claude' | 'gemini';
+
+// AI 服务配置
+export interface AIProviderConfig {
+  provider: AIProvider;
+  name: string;
+  models: string[];
+  defaultModel: string;
+  apiKeyName: string;  // 用于密钥链存储的名称
+}
+
+// 已支持的 AI 服务
+export const AI_PROVIDERS: Record<AIProvider, AIProviderConfig> = {
+  deepseek: {
+    provider: 'deepseek',
+    name: 'DeepSeek',
+    models: ['deepseek-chat', 'deepseek-reasoner'],
+    defaultModel: 'deepseek-chat',
+    apiKeyName: 'deepseek',
+  },
+  openai: {
+    provider: 'openai',
+    name: 'OpenAI',
+    models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+    defaultModel: 'gpt-4o-mini',
+    apiKeyName: 'openai',
+  },
+  claude: {
+    provider: 'claude',
+    name: 'Claude',
+    models: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022'],
+    defaultModel: 'claude-3-5-sonnet-20241022',
+    apiKeyName: 'claude',
+  },
+  gemini: {
+    provider: 'gemini',
+    name: 'Gemini',
+    models: ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+    defaultModel: 'gemini-2.5-flash',
+    apiKeyName: 'gemini',
+  },
+};

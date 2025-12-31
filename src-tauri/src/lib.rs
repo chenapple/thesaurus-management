@@ -3,8 +3,10 @@ mod crawler;
 mod scheduler;
 mod notification;
 mod installer;
+mod knowledge_base;
 
 use db::{BackupInfo, Category, KeywordData, KeywordMonitoring, MonitoringSparkline, MonitoringStats, Product, RankingHistory, RankingSnapshot, RootWithCategories, TrafficLevelStats, UncategorizedKeyword, WorkflowStatus};
+use db::{KbCategory, KbDocument, KbChunk, KbSearchResult, KbConversation, KbMessage};
 use scheduler::{SchedulerSettings, SchedulerStatus, SCHEDULER};
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
@@ -695,6 +697,154 @@ fn delete_optimization_event(id: i64) -> Result<(), String> {
     db::delete_optimization_event(id).map_err(|e| e.to_string())
 }
 
+// ==================== 知识库管理 ====================
+
+// 分类管理
+#[tauri::command]
+fn kb_create_category(name: String, parent_id: Option<i64>) -> Result<i64, String> {
+    db::kb_create_category(name, parent_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_get_categories() -> Result<Vec<KbCategory>, String> {
+    db::kb_get_categories().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_delete_category(id: i64) -> Result<(), String> {
+    db::kb_delete_category(id).map_err(|e| e.to_string())
+}
+
+// 文档管理
+#[tauri::command]
+fn kb_add_document(
+    category_id: Option<i64>,
+    title: String,
+    file_name: String,
+    file_path: String,
+    file_type: String,
+    file_size: Option<i64>,
+) -> Result<i64, String> {
+    db::kb_add_document(category_id, title, file_name, file_path, file_type, file_size)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_update_document_status(id: i64, status: String, chunk_count: i64) -> Result<(), String> {
+    db::kb_update_document_status(id, status, chunk_count).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_get_documents(category_id: Option<i64>) -> Result<Vec<KbDocument>, String> {
+    db::kb_get_documents(category_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_delete_document(id: i64) -> Result<(), String> {
+    db::kb_delete_document(id).map_err(|e| e.to_string())
+}
+
+// 文档分块
+#[tauri::command]
+fn kb_add_chunk(
+    document_id: i64,
+    chunk_index: i64,
+    content: String,
+    page_number: Option<i64>,
+) -> Result<i64, String> {
+    db::kb_add_chunk(document_id, chunk_index, content, page_number).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_add_chunks_batch(
+    document_id: i64,
+    chunks: Vec<(String, Option<i64>)>,
+) -> Result<i64, String> {
+    db::kb_add_chunks_batch(document_id, chunks).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_get_chunks(document_id: i64) -> Result<Vec<KbChunk>, String> {
+    db::kb_get_chunks(document_id).map_err(|e| e.to_string())
+}
+
+// 知识库搜索
+#[tauri::command]
+fn kb_search(query: String, limit: i64) -> Result<Vec<KbSearchResult>, String> {
+    db::kb_search(query, limit).map_err(|e| e.to_string())
+}
+
+// AI 对话管理
+#[tauri::command]
+fn kb_create_conversation(
+    ai_provider: String,
+    ai_model: Option<String>,
+    title: Option<String>,
+) -> Result<i64, String> {
+    db::kb_create_conversation(ai_provider, ai_model, title).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_get_conversations() -> Result<Vec<KbConversation>, String> {
+    db::kb_get_conversations().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_update_conversation_title(id: i64, title: String) -> Result<(), String> {
+    db::kb_update_conversation_title(id, title).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_delete_conversation(id: i64) -> Result<(), String> {
+    db::kb_delete_conversation(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_add_message(
+    conversation_id: i64,
+    role: String,
+    content: String,
+    sources: Option<String>,
+) -> Result<i64, String> {
+    db::kb_add_message(conversation_id, role, content, sources).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_get_messages(conversation_id: i64) -> Result<Vec<KbMessage>, String> {
+    db::kb_get_messages(conversation_id).map_err(|e| e.to_string())
+}
+
+/// 处理上传的文档：解析 + 分块 + 存储
+#[tauri::command]
+fn kb_process_document(document_id: i64, file_path: String) -> Result<i64, String> {
+    use knowledge_base::{process_document, ChunkerConfig};
+
+    // 配置分块参数
+    let config = ChunkerConfig {
+        chunk_size: 800,
+        chunk_overlap: 100,
+    };
+
+    // 解析并分块文档
+    let (doc, chunks) = process_document(&file_path, Some(config))
+        .map_err(|e| format!("文档处理失败: {}", e))?;
+
+    // 将分块存储到数据库
+    let chunk_data: Vec<(String, Option<i64>)> = chunks
+        .iter()
+        .map(|c| (c.content.clone(), c.page_number))
+        .collect();
+
+    let chunk_count = db::kb_add_chunks_batch(document_id, chunk_data)
+        .map_err(|e| format!("存储分块失败: {}", e))?;
+
+    // 更新文档状态为已完成
+    db::kb_update_document_status(document_id, "completed".to_string(), chunk_count)
+        .map_err(|e| format!("更新状态失败: {}", e))?;
+
+    Ok(chunk_count)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -850,6 +1000,25 @@ pub fn run() {
             get_optimization_events,
             update_optimization_event,
             delete_optimization_event,
+            // 知识库管理
+            kb_create_category,
+            kb_get_categories,
+            kb_delete_category,
+            kb_add_document,
+            kb_update_document_status,
+            kb_get_documents,
+            kb_delete_document,
+            kb_add_chunk,
+            kb_add_chunks_batch,
+            kb_get_chunks,
+            kb_search,
+            kb_create_conversation,
+            kb_get_conversations,
+            kb_update_conversation_title,
+            kb_delete_conversation,
+            kb_add_message,
+            kb_get_messages,
+            kb_process_document,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
