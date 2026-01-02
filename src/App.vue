@@ -1815,31 +1815,11 @@ async function checkForUpdates() {
   }
 }
 
-// ==================== API Key 迁移 ====================
-
-async function migrateApiKey() {
-  try {
-    // 检查是否已经配置了 API Key
-    const hasKey = await api.hasApiKey("deepseek");
-    if (!hasKey) {
-      // 迁移旧的 API Key 到系统密钥链
-      const oldApiKey = "sk-260241b985f243a78114c8f8d360c34c";
-      await api.setApiKey("deepseek", oldApiKey);
-      console.log("API Key 已迁移到系统密钥链");
-    }
-  } catch (e) {
-    console.error("API Key 迁移失败:", e);
-  }
-}
-
 // ==================== 初始化 ====================
 
 onMounted(async () => {
   // 初始化主题
   initTheme();
-
-  // 迁移 API Key（一次性）
-  await migrateApiKey();
 
   // 初始化侧边栏宽度
   initSidebarWidth();
