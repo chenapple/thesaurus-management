@@ -653,34 +653,6 @@ async function loadWorkflowStatus() {
   }
 }
 
-// 计算当前流程步骤 (0-4)
-const currentWorkflowStep = computed(() => {
-  const s = workflowStatus.value;
-  if (!s.has_data) return 0;
-  if (!s.has_traffic_level) return 1;
-  if (!s.has_category) return 2;
-  if (!s.has_phrase_tag) return 3;
-  if (!s.has_orderliness) return 4;
-  return 5; // 全部完成
-});
-
-// 计算完成的步骤数
-function getCompletedSteps(): number {
-  const s = workflowStatus.value;
-  let count = 0;
-  if (s.has_data) count++;
-  if (s.has_traffic_level) count++;
-  if (s.has_category) count++;
-  if (s.has_phrase_tag) count++;
-  if (s.has_orderliness) count++;
-  return count;
-}
-
-// 计算工作流进度百分比
-function getWorkflowProgress(): number {
-  return (getCompletedSteps() / 5) * 100;
-}
-
 // 获取工作流状态文字
 function getWorkflowStatusText(): { text: string; type: 'warning' | 'info' | 'success' } {
   const s = workflowStatus.value;
