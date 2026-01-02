@@ -16,6 +16,9 @@ pub struct DependencyStatus {
     pub python_path: Option<String>,
     pub playwright_installed: bool,
     pub chromium_installed: bool,
+    // PDF 处理依赖
+    pub pdf2image_installed: bool,
+    pub poppler_installed: bool,
     pub error_message: Option<String>,
 }
 
@@ -155,6 +158,71 @@ except Exception as e:
     }
 }
 
+/// 检查 pdf2image 是否安装
+fn check_pdf2image_installed(python_path: &str) -> bool {
+    let check_script = r#"
+try:
+    from pdf2image import convert_from_path
+    print("ok")
+except ImportError:
+    print("missing")
+"#;
+
+    let mut cmd = Command::new(python_path);
+    cmd.arg("-c").arg(check_script);
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    match cmd.output() {
+        Ok(output) => String::from_utf8_lossy(&output.stdout).trim() == "ok",
+        Err(_) => false,
+    }
+}
+
+/// 检查 poppler 是否安装
+fn check_poppler_installed() -> bool {
+    #[cfg(windows)]
+    {
+        // Windows: 检查 pdftoppm.exe 是否在 PATH 中或常见位置
+        let candidates = vec![
+            "pdftoppm",
+            "C:\\Program Files\\poppler\\bin\\pdftoppm.exe",
+            "C:\\poppler\\bin\\pdftoppm.exe",
+        ];
+        for candidate in candidates {
+            let mut cmd = Command::new(candidate);
+            cmd.arg("-v").creation_flags(CREATE_NO_WINDOW);
+            if cmd.output().is_ok() {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: 检查 pdftoppm 是否存在
+        let candidates = vec![
+            "pdftoppm",
+            "/opt/homebrew/bin/pdftoppm",
+            "/usr/local/bin/pdftoppm",
+        ];
+        for candidate in candidates {
+            if Command::new(candidate).arg("-v").output().is_ok() {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        // Linux: 检查 pdftoppm
+        Command::new("pdftoppm").arg("-v").output().is_ok()
+    }
+}
+
 /// 检查所有依赖状态
 pub fn check_dependency_status() -> DependencyStatus {
     let mut status = DependencyStatus {
@@ -163,6 +231,8 @@ pub fn check_dependency_status() -> DependencyStatus {
         python_path: None,
         playwright_installed: false,
         chromium_installed: false,
+        pdf2image_installed: false,
+        poppler_installed: false,
         error_message: None,
     };
 
@@ -179,6 +249,10 @@ pub fn check_dependency_status() -> DependencyStatus {
             if status.playwright_installed {
                 status.chromium_installed = check_chromium_installed(&path);
             }
+
+            // 检查 PDF 依赖
+            status.pdf2image_installed = check_pdf2image_installed(&path);
+            status.poppler_installed = check_poppler_installed();
         }
         Err(e) => {
             status.error_message = Some(e);
@@ -558,6 +632,238 @@ fn install_chromium_via_script(python_path: &str) -> Result<(), String> {
             let stderr = String::from_utf8_lossy(&output.stderr);
             Err(format!("安装失败: {}", stderr.chars().take(500).collect::<String>()))
         }
+    }
+}
+
+/// 安装 pdf2image
+pub async fn install_pdf2image(app: tauri::AppHandle, python_path: &str) -> Result<(), String> {
+    use tauri::Emitter;
+
+    let emit_progress = |progress: f32, message: &str, is_error: bool| {
+        let _ = app.emit("install-progress", InstallProgress {
+            step: "pdf2image".to_string(),
+            step_name: "安装 pdf2image".to_string(),
+            progress,
+            message: message.to_string(),
+            is_error,
+        });
+    };
+
+    emit_progress(0.0, "正在安装 pdf2image...", false);
+
+    let mut cmd = Command::new(python_path);
+    cmd.args(["-m", "pip", "install", "--upgrade", "pdf2image"])
+        .env("PYTHONUNBUFFERED", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let mut child = cmd.spawn()
+        .map_err(|e| format!("启动 pip 失败: {}", e))?;
+
+    let stdout = child.stdout.take();
+    if let Some(stdout) = stdout {
+        let reader = BufReader::new(stdout);
+        let mut progress: f32 = 10.0;
+        for line in reader.lines().map_while(Result::ok) {
+            if line.contains("Downloading") || line.contains("Collecting") {
+                progress = (progress + 15.0).min(80.0);
+            } else if line.contains("Installing") {
+                progress = 85.0;
+            } else if line.contains("Successfully") {
+                progress = 95.0;
+            }
+            if !line.is_empty() {
+                emit_progress(progress, &line, false);
+            }
+        }
+    }
+
+    let status = child.wait().map_err(|e| format!("等待安装完成失败: {}", e))?;
+
+    if status.success() {
+        emit_progress(100.0, "pdf2image 安装完成!", false);
+        Ok(())
+    } else {
+        emit_progress(0.0, "pdf2image 安装失败", true);
+        Err("pdf2image 安装失败".to_string())
+    }
+}
+
+/// macOS: 安装 poppler
+#[cfg(target_os = "macos")]
+pub async fn install_poppler(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Emitter;
+
+    let emit_progress = |progress: f32, message: &str, is_error: bool| {
+        let _ = app.emit("install-progress", InstallProgress {
+            step: "poppler".to_string(),
+            step_name: "安装 Poppler".to_string(),
+            progress,
+            message: message.to_string(),
+            is_error,
+        });
+    };
+
+    emit_progress(0.0, "正在检查 Homebrew...", false);
+
+    // 检查 Homebrew 是否可用
+    let brew_check = Command::new("brew").arg("--version").output();
+
+    if brew_check.is_err() || !brew_check.unwrap().status.success() {
+        emit_progress(0.0, "Homebrew 未安装", true);
+        return Err("请先安装 Homebrew: /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"".to_string());
+    }
+
+    emit_progress(10.0, "正在使用 Homebrew 安装 Poppler...", false);
+
+    let mut child = Command::new("brew")
+        .args(["install", "poppler"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("启动 brew 失败: {}", e))?;
+
+    let stderr = child.stderr.take();
+    if let Some(stderr) = stderr {
+        let reader = BufReader::new(stderr);
+        let mut progress: f32 = 10.0;
+        for line in reader.lines().map_while(Result::ok) {
+            progress = (progress + 2.0).min(90.0);
+            if !line.is_empty() {
+                emit_progress(progress, &line, false);
+            }
+        }
+    }
+
+    let status = child.wait().map_err(|e| format!("等待安装完成失败: {}", e))?;
+
+    if status.success() {
+        emit_progress(100.0, "Poppler 安装完成!", false);
+        Ok(())
+    } else {
+        emit_progress(0.0, "Poppler 安装失败", true);
+        Err("Poppler 安装失败，请手动运行: brew install poppler".to_string())
+    }
+}
+
+/// Windows: 安装 poppler
+#[cfg(windows)]
+pub async fn install_poppler(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Emitter;
+
+    let emit_progress = |progress: f32, message: &str, is_error: bool| {
+        let _ = app.emit("install-progress", InstallProgress {
+            step: "poppler".to_string(),
+            step_name: "安装 Poppler".to_string(),
+            progress,
+            message: message.to_string(),
+            is_error,
+        });
+    };
+
+    emit_progress(0.0, "正在检查 winget...", false);
+
+    // 检查 winget 是否可用
+    let winget_check = Command::new("winget")
+        .arg("--version")
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+
+    if winget_check.is_err() || !winget_check.unwrap().status.success() {
+        emit_progress(0.0, "winget 不可用，请手动安装 Poppler", true);
+        return Err("winget 不可用。请从 https://github.com/oschwartz10612/poppler-windows/releases 下载安装 Poppler".to_string());
+    }
+
+    emit_progress(10.0, "正在使用 winget 安装 Poppler...", false);
+
+    // 使用 winget 安装 Poppler
+    let mut child = Command::new("winget")
+        .args([
+            "install", "-e", "--id", "poppler.poppler",
+            "--accept-package-agreements", "--accept-source-agreements",
+            "--silent"
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map_err(|e| format!("启动 winget 失败: {}", e))?;
+
+    let stdout = child.stdout.take();
+    if let Some(stdout) = stdout {
+        let reader = BufReader::new(stdout);
+        let mut progress: f32 = 10.0;
+        for line in reader.lines().map_while(Result::ok) {
+            progress = (progress + 5.0).min(90.0);
+            emit_progress(progress, &line, false);
+        }
+    }
+
+    let status = child.wait().map_err(|e| format!("等待安装完成失败: {}", e))?;
+
+    if status.success() {
+        emit_progress(100.0, "Poppler 安装完成!", false);
+        Ok(())
+    } else {
+        emit_progress(0.0, "Poppler 安装失败", true);
+        Err("Poppler 安装失败。请从 https://github.com/oschwartz10612/poppler-windows/releases 下载安装".to_string())
+    }
+}
+
+/// Linux: 安装 poppler
+#[cfg(all(not(windows), not(target_os = "macos")))]
+pub async fn install_poppler(_app: tauri::AppHandle) -> Result<(), String> {
+    Err("请使用系统包管理器安装 Poppler:\nsudo apt install poppler-utils (Debian/Ubuntu)\nsudo dnf install poppler-utils (Fedora)".to_string())
+}
+
+/// 安装 PDF 依赖 (pdf2image + poppler)
+pub async fn install_pdf_dependencies(app: tauri::AppHandle) -> InstallResult {
+    use tauri::Emitter;
+
+    let status = check_dependency_status();
+
+    let python_path = match status.python_path {
+        Some(path) => path,
+        None => {
+            return InstallResult {
+                success: false,
+                message: "未找到 Python，请先安装 Python 3".to_string(),
+                python_path: None,
+            };
+        }
+    };
+
+    // 1. 安装 poppler (需要先安装，因为 pdf2image 依赖它)
+    if !status.poppler_installed {
+        if let Err(e) = install_poppler(app.clone()).await {
+            return InstallResult {
+                success: false,
+                message: e,
+                python_path: Some(python_path),
+            };
+        }
+    }
+
+    // 2. 安装 pdf2image
+    if !status.pdf2image_installed {
+        if let Err(e) = install_pdf2image(app.clone(), &python_path).await {
+            return InstallResult {
+                success: false,
+                message: e,
+                python_path: Some(python_path),
+            };
+        }
+    }
+
+    let _ = app.emit("install-complete", serde_json::json!({ "success": true }));
+
+    InstallResult {
+        success: true,
+        message: "PDF 依赖安装完成!".to_string(),
+        python_path: Some(python_path),
     }
 }
 

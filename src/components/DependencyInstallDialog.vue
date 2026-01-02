@@ -209,6 +209,8 @@ const status = reactive<DependencyStatus>({
   python_path: null,
   playwright_installed: false,
   chromium_installed: false,
+  pdf2image_installed: false,
+  poppler_installed: false,
   error_message: null,
 });
 

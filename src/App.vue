@@ -170,6 +170,13 @@ const showApiKeyDialog = ref(false);
 
 // 监控设置弹窗
 const showSettingsDialog = ref(false);
+const settingsInitialTab = ref<'monitoring' | 'auto' | 'logs'>('monitoring');
+
+// 打开监控设置指定标签页
+function openSettingsTab(tab: 'monitoring' | 'auto' | 'logs') {
+  settingsInitialTab.value = tab;
+  showSettingsDialog.value = true;
+}
 
 // 应用版本
 const appVersion = ref("");
@@ -656,6 +663,34 @@ const currentWorkflowStep = computed(() => {
   if (!s.has_orderliness) return 4;
   return 5; // 全部完成
 });
+
+// 计算完成的步骤数
+function getCompletedSteps(): number {
+  const s = workflowStatus.value;
+  let count = 0;
+  if (s.has_data) count++;
+  if (s.has_traffic_level) count++;
+  if (s.has_category) count++;
+  if (s.has_phrase_tag) count++;
+  if (s.has_orderliness) count++;
+  return count;
+}
+
+// 计算工作流进度百分比
+function getWorkflowProgress(): number {
+  return (getCompletedSteps() / 5) * 100;
+}
+
+// 获取工作流状态文字
+function getWorkflowStatusText(): { text: string; type: 'warning' | 'info' | 'success' } {
+  const s = workflowStatus.value;
+  if (!s.has_data) return { text: '待导入', type: 'warning' };
+  if (!s.has_traffic_level) return { text: '待设流量', type: 'info' };
+  if (!s.has_category) return { text: '待分类', type: 'info' };
+  if (!s.has_phrase_tag) return { text: '待打标', type: 'info' };
+  if (!s.has_orderliness) return { text: '待排序', type: 'info' };
+  return { text: '已完成 ✓', type: 'success' };
+}
 
 // ==================== 流量设置功能 ====================
 
@@ -1881,8 +1916,64 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 侧边栏 - 产品列表 -->
-    <aside class="sidebar" :style="{ width: sidebarWidth + 'px' }">
+    <!-- 顶部导航栏 - 视图切换（始终可见，固定在最上方） -->
+    <nav class="top-nav">
+      <el-button-group class="view-toggle">
+        <el-button
+          :type="viewMode === 'keywords' ? 'primary' : 'default'"
+          @click="switchViewMode('keywords')"
+        >
+          <el-icon><Document /></el-icon>
+          关键词
+        </el-button>
+        <el-button
+          :type="viewMode === 'roots' ? 'primary' : 'default'"
+          @click="switchViewMode('roots')"
+        >
+          <el-icon><Grid /></el-icon>
+          词根
+        </el-button>
+        <el-button
+          :type="viewMode === 'wordcloud' ? 'primary' : 'default'"
+          @click="switchViewMode('wordcloud')"
+        >
+          <el-icon><PieChart /></el-icon>
+          词云
+        </el-button>
+        <el-button
+          :type="viewMode === 'monitoring' ? 'primary' : 'default'"
+          @click="switchViewMode('monitoring')"
+        >
+          <el-icon><TrendCharts /></el-icon>
+          排名监控
+        </el-button>
+        <el-button
+          :type="viewMode === 'knowledge' ? 'primary' : 'default'"
+          @click="switchViewMode('knowledge')"
+        >
+          <el-icon><ChatDotRound /></el-icon>
+          知识库
+        </el-button>
+      </el-button-group>
+      <el-dropdown trigger="click" class="global-settings-dropdown">
+        <el-button>
+          <el-icon><Setting /></el-icon>
+          设置
+          <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+        </el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item @click="showApiKeyDialog = true">API Key</el-dropdown-item>
+            <el-dropdown-item @click="showShortcutsDialog = true">快捷键</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+    </nav>
+
+    <!-- 主体区域 -->
+    <div class="app-body">
+      <!-- 侧边栏 - 产品列表（知识库视图时隐藏） -->
+    <aside v-if="viewMode !== 'knowledge'" class="sidebar" :style="{ width: sidebarWidth + 'px' }">
       <div class="sidebar-header">
         <span class="sidebar-title">产品列表</span>
         <el-button type="primary" size="small" circle @click="openAddProductDialog">
@@ -1902,6 +1993,12 @@ onUnmounted(() => {
             <div class="product-meta" v-if="product.country">
               <span class="country-flag-small" v-html="getCountryFlag(product.country)"></span>
               <span>{{ getCountryName(product.country) }}</span>
+            </div>
+            <!-- 工作流状态标签 -->
+            <div class="product-status" v-if="selectedProduct?.id === product.id">
+              <el-tag size="small" :type="getWorkflowStatusText().type">
+                {{ getWorkflowStatusText().text }}
+              </el-tag>
             </div>
           </div>
           <el-dropdown trigger="click" @click.stop>
@@ -1941,8 +2038,9 @@ onUnmounted(() => {
       </div>
     </aside>
 
-    <!-- 拖动调整手柄 -->
+    <!-- 拖动调整手柄（知识库视图时隐藏） -->
     <div
+      v-if="viewMode !== 'knowledge'"
       class="resize-handle"
       :class="{ resizing: isResizing }"
       @mousedown="startResize"
@@ -1950,10 +2048,14 @@ onUnmounted(() => {
 
     <!-- 主内容区 -->
     <main class="main-content">
-      <!-- 顶部工具栏 -->
-      <header class="header">
+      <!-- 顶部工具栏（知识库视图时隐藏） -->
+      <header v-if="viewMode !== 'knowledge'" class="header">
         <div class="header-left">
           <h1 class="title">{{ selectedProduct?.name || '请选择产品' }}</h1>
+          <div class="header-stats" v-if="selectedProduct">
+            <span>关键词: {{ stats.keywordCount }}</span>
+            <span>词根: {{ stats.rootCount }}</span>
+          </div>
         </div>
 
         <!-- 一级分类标签 - 仅词根视图显示 -->
@@ -2004,86 +2106,31 @@ onUnmounted(() => {
           </el-input>
         </div>
 
-        <!-- 流程进度条 - 仅关键词视图显示 -->
-        <div class="workflow-steps-header" v-if="selectedProduct && viewMode === 'keywords'">
-          <el-steps :active="currentWorkflowStep" finish-status="success" simple>
-            <el-step title="导入数据" :status="workflowStatus.has_data ? 'success' : 'wait'" />
-            <el-step title="流量级别" :status="workflowStatus.has_traffic_level ? 'success' : (workflowStatus.has_data ? 'process' : 'wait')" />
-            <el-step title="AI分类" :status="workflowStatus.has_category ? 'success' : (workflowStatus.has_traffic_level ? 'process' : 'wait')" />
-            <el-step title="词组打标" :status="workflowStatus.has_phrase_tag ? 'success' : (workflowStatus.has_category ? 'process' : 'wait')" />
-            <el-step title="有序性" :status="workflowStatus.has_orderliness ? 'success' : (workflowStatus.has_phrase_tag ? 'process' : 'wait')" />
-          </el-steps>
-        </div>
-      </header>
-
-      <!-- 统计和操作栏 -->
-      <div class="toolbar" v-if="selectedProduct">
-        <div class="stats">
-          <span>关键词: {{ stats.keywordCount }}</span>
-          <span>词根: {{ stats.rootCount }}</span>
-        </div>
-        <div class="actions">
-          <!-- 视图切换按钮组 -->
-          <el-button-group class="view-toggle">
-            <el-button
-              :type="viewMode === 'keywords' ? 'primary' : 'default'"
-              @click="switchViewMode('keywords')"
-            >
-              <el-icon><Document /></el-icon>
-              关键词
-            </el-button>
-            <el-button
-              :type="viewMode === 'roots' ? 'primary' : 'default'"
-              @click="switchViewMode('roots')"
-            >
-              <el-icon><Grid /></el-icon>
-              词根
-            </el-button>
-            <el-button
-              :type="viewMode === 'wordcloud' ? 'primary' : 'default'"
-              @click="switchViewMode('wordcloud')"
-            >
-              <el-icon><PieChart /></el-icon>
-              词云
-            </el-button>
-            <el-button
-              :type="viewMode === 'monitoring' ? 'primary' : 'default'"
-              @click="switchViewMode('monitoring')"
-            >
-              <el-icon><TrendCharts /></el-icon>
-              排名监控
-            </el-button>
-            <el-button
-              :type="viewMode === 'knowledge' ? 'primary' : 'default'"
-              @click="switchViewMode('knowledge')"
-            >
-              <el-icon><ChatDotRound /></el-icon>
-              知识库
-            </el-button>
-          </el-button-group>
-
-          <el-divider direction="vertical" />
-
+        <!-- 操作按钮区域 -->
+        <div class="header-actions" v-if="selectedProduct">
           <!-- 工作流操作 - 关键词视图 -->
           <template v-if="viewMode === 'keywords'">
-            <el-button @click="openTrafficDialog">
+            <el-button size="small" @click="openTrafficDialog">
               流量设置
             </el-button>
             <el-button
+              size="small"
               v-if="!classifying"
               @click="handleKeywordClassify"
             >
               AI分类
             </el-button>
             <el-button
+              size="small"
               v-else
               type="danger"
               @click="cancelClassify"
             >
               <el-icon><Close /></el-icon>
-              停止分类 ({{ classifyProgress.current }}/{{ classifyProgress.total }})
+              停止 ({{ classifyProgress.current }}/{{ classifyProgress.total }})
             </el-button>
             <el-button
+              size="small"
               :loading="phraseTagging"
               @click="handlePhraseTagging"
             >
@@ -2094,6 +2141,7 @@ onUnmounted(() => {
           <!-- 工作流操作 - 词根视图 -->
           <template v-if="viewMode === 'roots'">
             <el-button
+              size="small"
               v-if="!analyzing"
               type="success"
               @click="handleAIAnalysis"
@@ -2102,66 +2150,79 @@ onUnmounted(() => {
               智能分析
             </el-button>
             <el-button
+              size="small"
               v-else
               type="danger"
               @click="cancelAnalysis"
             >
               <el-icon><Close /></el-icon>
-              停止分析 ({{ analysisProgress.current }}/{{ analysisProgress.total }})
+              停止 ({{ analysisProgress.current }}/{{ analysisProgress.total }})
             </el-button>
           </template>
 
-          <el-divider direction="vertical" />
-
-          <!-- 数据管理下拉菜单 -->
-          <el-dropdown trigger="click">
-            <el-button>
-              <el-icon><FolderOpened /></el-icon>
-              数据
-              <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          <!-- 排名监控视图 - 独立按钮 -->
+          <template v-if="viewMode === 'monitoring'">
+            <el-divider direction="vertical" />
+            <el-button size="small" @click="openSettingsTab('monitoring')">
+              <el-icon><Setting /></el-icon>
+              监控设置
             </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item @click="handleImport" :disabled="importing">
-                  <el-icon><Upload /></el-icon> 导入Excel
-                </el-dropdown-item>
-                <el-dropdown-item
-                  v-if="viewMode === 'keywords'"
-                  @click="handleKeywordExport"
-                  :disabled="keywordExporting"
-                >
-                  <el-icon><Download /></el-icon> 导出关键词
-                </el-dropdown-item>
-                <el-dropdown-item
-                  v-else
-                  @click="handleExport"
-                  :disabled="exporting"
-                >
-                  <el-icon><Download /></el-icon> 导出词根
-                </el-dropdown-item>
-                <el-dropdown-item divided @click="openBackupDialog">
-                  <el-icon><FolderOpened /></el-icon> 备份管理
-                </el-dropdown-item>
-                <el-dropdown-item @click="showApiKeyDialog = true">
-                  <el-icon><Key /></el-icon> API Key 设置
-                </el-dropdown-item>
-                <el-dropdown-item @click="showSettingsDialog = true">
-                  <el-icon><Timer /></el-icon> 监控设置
-                </el-dropdown-item>
-                <el-dropdown-item divided @click="handleClearData">
-                  <el-icon color="#f56c6c"><Delete /></el-icon>
-                  <span style="color: #f56c6c">重置词库</span>
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+            <el-button size="small" @click="openSettingsTab('auto')">
+              <el-icon><Timer /></el-icon>
+              自动检测
+            </el-button>
+            <el-button size="small" @click="openSettingsTab('logs')">
+              <el-icon><Document /></el-icon>
+              任务记录
+            </el-button>
+          </template>
 
-          <el-button @click="showColumnConfig = true">
+          <!-- 其他视图 - 数据管理下拉菜单 -->
+          <template v-else>
+            <el-divider direction="vertical" />
+            <el-dropdown trigger="click">
+              <el-button size="small">
+                <el-icon><FolderOpened /></el-icon>
+                数据
+                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item @click="handleImport" :disabled="importing">
+                    <el-icon><Upload /></el-icon> 导入Excel
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="viewMode === 'keywords'"
+                    @click="handleKeywordExport"
+                    :disabled="keywordExporting"
+                  >
+                    <el-icon><Download /></el-icon> 导出关键词
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    v-else
+                    @click="handleExport"
+                    :disabled="exporting"
+                  >
+                    <el-icon><Download /></el-icon> 导出词根
+                  </el-dropdown-item>
+                  <el-dropdown-item divided @click="openBackupDialog">
+                    <el-icon><FolderOpened /></el-icon> 备份管理
+                  </el-dropdown-item>
+                  <el-dropdown-item divided @click="handleClearData">
+                    <el-icon color="#f56c6c"><Delete /></el-icon>
+                    <span style="color: #f56c6c">重置词库</span>
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </template>
+
+          <el-button v-if="viewMode === 'keywords'" size="small" @click="showColumnConfig = true">
             <el-icon><Setting /></el-icon>
             列配置
           </el-button>
         </div>
-      </div>
+      </header>
 
       <!-- 关键词筛选栏 -->
       <div class="keyword-filter-bar" v-if="selectedProduct && viewMode === 'keywords'">
@@ -2615,6 +2676,7 @@ onUnmounted(() => {
         />
       </div>
     </main>
+    </div><!-- app-body -->
 
     <!-- 产品编辑对话框 -->
     <ProductDialog
@@ -2679,6 +2741,7 @@ onUnmounted(() => {
     <!-- 监控设置弹窗 -->
     <SettingsDialog
       v-model="showSettingsDialog"
+      :initial-tab="settingsInitialTab"
     />
 
     <!-- 快速批量添加监控弹窗 -->
@@ -2817,8 +2880,33 @@ body,
 .app-container {
   height: 100vh;
   display: flex;
+  flex-direction: column;
   background-color: var(--bg-primary);
   position: relative;
+}
+
+/* 顶部导航栏 */
+.top-nav {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 10px 20px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.global-settings-dropdown {
+  position: absolute;
+  right: 20px;
+}
+
+/* 主体区域 */
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
 }
 
 .keyword-cell {
@@ -2974,6 +3062,14 @@ body,
   gap: 8px;
 }
 
+.product-status {
+  margin-top: 6px;
+}
+
+.product-status .el-tag {
+  font-size: 11px;
+}
+
 .product-action {
   opacity: 0;
   transition: opacity 0.2s;
@@ -3111,19 +3207,20 @@ body,
 
 .category-tabs {
   display: flex;
-  gap: 12px;
+  gap: 8px;
   flex: 1;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-items: center;
 }
 
 .category-tag {
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 16px;
-  height: 36px;
-  font-size: 14px;
+  gap: 4px;
+  padding: 0 10px;
+  height: 28px;
+  font-size: 13px;
 }
 
 .more-tag {
@@ -3136,26 +3233,18 @@ body,
   gap: 12px;
 }
 
-.toolbar {
+.header-stats {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 20px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-color);
-  flex-shrink: 0;
-}
-
-.stats {
-  display: flex;
-  gap: 20px;
-  font-size: 14px;
+  gap: 16px;
+  font-size: 13px;
   color: var(--text-secondary);
 }
 
-.actions {
+.header-actions {
   display: flex;
-  gap: 10px;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .table-container {

@@ -416,11 +416,19 @@ async fn check_all_rankings(
         .map(|m| (m.id, m.keyword, m.asin, m.country))
         .collect();
 
-    // 执行批量检测
+    // 获取并发浏览器数量设置
+    let max_browsers = db::get_setting("max_browsers")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(3);  // 默认3个并发浏览器
+
+    // 执行批量检测（并发模式）
     let app_clone = app.clone();
     let results = crawler::check_rankings_batch(
         keywords,
         max_pages.unwrap_or(5),
+        max_browsers,
         move |current, total, message| {
             // 发送进度事件到前端
             app_clone.emit("ranking-check-progress", serde_json::json!({
@@ -500,11 +508,19 @@ async fn check_selected_rankings(
         .map(|m| (m.id, m.keyword, m.asin, m.country))
         .collect();
 
-    // 执行批量检测
+    // 获取并发浏览器数量设置
+    let max_browsers = db::get_setting("max_browsers")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(3);  // 默认3个并发浏览器
+
+    // 执行批量检测（并发模式）
     let app_clone = app.clone();
     let results = crawler::check_rankings_batch(
         keywords,
         max_pages.unwrap_or(5),
+        max_browsers,
         move |current, total, message| {
             // 发送进度事件到前端
             app_clone.emit("ranking-check-progress", serde_json::json!({
@@ -651,6 +667,11 @@ async fn install_playwright_only(app: tauri::AppHandle) -> Result<installer::Ins
     Ok(installer::install_playwright_only(app).await)
 }
 
+#[tauri::command]
+async fn install_pdf_dependencies(app: tauri::AppHandle) -> Result<installer::InstallResult, String> {
+    Ok(installer::install_pdf_dependencies(app).await)
+}
+
 // 优化事件管理
 #[tauri::command]
 fn add_optimization_event(
@@ -713,6 +734,11 @@ fn kb_get_categories() -> Result<Vec<KbCategory>, String> {
 #[tauri::command]
 fn kb_delete_category(id: i64) -> Result<(), String> {
     db::kb_delete_category(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_update_category(id: i64, name: String) -> Result<(), String> {
+    db::kb_update_category(id, name).map_err(|e| e.to_string())
 }
 
 // 文档管理
@@ -843,6 +869,218 @@ fn kb_process_document(document_id: i64, file_path: String) -> Result<i64, Strin
         .map_err(|e| format!("更新状态失败: {}", e))?;
 
     Ok(chunk_count)
+}
+
+/// 从文档中提取嵌入的图片
+#[tauri::command]
+fn kb_extract_images(file_path: String) -> Result<Vec<knowledge_base::ExtractedImage>, String> {
+    knowledge_base::extract_images(&file_path)
+}
+
+/// 读取文件并返回 base64 编码数据（用于 PDF OCR）
+#[tauri::command]
+fn kb_read_file_base64(file_path: String) -> Result<String, String> {
+    use std::fs;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    let data = fs::read(&file_path)
+        .map_err(|e| format!("读取文件失败: {}", e))?;
+
+    Ok(STANDARD.encode(&data))
+}
+
+/// PDF 转图片结果
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PdfPageImage {
+    pub page_number: i32,
+    pub mime_type: String,
+    pub base64_data: String,
+}
+
+/// 将 PDF 转换为图片（用于 OCR）
+#[tauri::command]
+fn kb_pdf_to_images(file_path: String) -> Result<Vec<PdfPageImage>, String> {
+    use std::process::Command;
+    use std::env;
+
+    // 获取脚本路径
+    let exe_dir = env::current_exe()
+        .map_err(|e| format!("获取程序路径失败: {}", e))?
+        .parent()
+        .ok_or("无法获取程序目录")?
+        .to_path_buf();
+
+    let script_path = exe_dir.join("scripts").join("pdf_to_images.py");
+
+    // 如果脚本不存在，尝试开发环境路径
+    let script_path = if script_path.exists() {
+        script_path
+    } else {
+        // 开发环境：src-tauri/scripts/
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("scripts")
+            .join("pdf_to_images.py")
+    };
+
+    if !script_path.exists() {
+        return Err(format!("脚本不存在: {:?}", script_path));
+    }
+
+    // 查找 Python
+    let python_candidates = if cfg!(target_os = "windows") {
+        vec!["python", "python3", "py"]
+    } else {
+        vec!["python3", "python", "/opt/homebrew/bin/python3", "/usr/local/bin/python3"]
+    };
+
+    let mut python_cmd = None;
+    for candidate in &python_candidates {
+        if Command::new(candidate).arg("--version").output().is_ok() {
+            python_cmd = Some(candidate.to_string());
+            break;
+        }
+    }
+
+    let python = python_cmd.ok_or("未找到 Python，请确保已安装 Python 3")?;
+
+    // 调用 Python 脚本
+    let output = Command::new(&python)
+        .arg(&script_path)
+        .arg(&file_path)
+        .arg("200") // DPI
+        .output()
+        .map_err(|e| format!("执行脚本失败: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("脚本执行失败: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // 解析 JSON 结果
+    let result: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|e| format!("解析结果失败: {} - 原始输出: {}", e, stdout))?;
+
+    if !result["success"].as_bool().unwrap_or(false) {
+        let error = result["error"].as_str().unwrap_or("未知错误");
+        return Err(error.to_string());
+    }
+
+    let images: Vec<PdfPageImage> = result["images"]
+        .as_array()
+        .ok_or("无效的图片数据")?
+        .iter()
+        .map(|img| PdfPageImage {
+            page_number: img["page_number"].as_i64().unwrap_or(0) as i32,
+            mime_type: img["mime_type"].as_str().unwrap_or("image/png").to_string(),
+            base64_data: img["base64_data"].as_str().unwrap_or("").to_string(),
+        })
+        .collect();
+
+    Ok(images)
+}
+
+/// 获取图片存储目录
+fn get_images_dir() -> Result<std::path::PathBuf, String> {
+    let home = dirs::home_dir().ok_or("无法获取用户目录")?;
+    let images_dir = home.join(".thesaurus-kb").join("images");
+    std::fs::create_dir_all(&images_dir)
+        .map_err(|e| format!("创建图片目录失败: {}", e))?;
+    Ok(images_dir)
+}
+
+/// 保存图片到本地并返回路径
+fn save_image_to_disk(document_id: i64, image_name: &str, base64_data: &str) -> Result<String, String> {
+    use base64::{Engine as _, engine::general_purpose};
+
+    let images_dir = get_images_dir()?;
+
+    // 生成唯一文件名: {document_id}_{timestamp}_{original_name}
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("获取时间戳失败: {}", e))?
+        .as_millis();
+
+    // 清理文件名中的非法字符
+    let safe_name: String = image_name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' })
+        .collect();
+
+    let filename = format!("{}_{:x}_{}", document_id, timestamp, safe_name);
+    let file_path = images_dir.join(&filename);
+
+    // 解码 base64 并保存
+    let decoded = general_purpose::STANDARD
+        .decode(base64_data)
+        .map_err(|e| format!("Base64 解码失败: {}", e))?;
+
+    std::fs::write(&file_path, decoded)
+        .map_err(|e| format!("保存图片失败: {}", e))?;
+
+    Ok(file_path.to_string_lossy().to_string())
+}
+
+/// 将图片识别结果作为 chunk 添加到文档（不保存图片）
+#[tauri::command]
+fn kb_add_image_chunk(document_id: i64, image_name: String, description: String) -> Result<i64, String> {
+    let content = format!("[图片: {}]\n{}", image_name, description);
+    db::kb_add_chunk(document_id, 0, content, None)
+        .map_err(|e| format!("添加图片描述失败: {}", e))
+}
+
+/// 将图片识别结果作为 chunk 添加到文档（同时保存图片用于图文问答）
+#[tauri::command]
+fn kb_add_image_chunk_with_file(
+    document_id: i64,
+    image_name: String,
+    description: String,
+    base64_data: String
+) -> Result<i64, String> {
+    // 保存图片到本地
+    let image_path = save_image_to_disk(document_id, &image_name, &base64_data)?;
+
+    // 存储 chunk 并关联图片路径
+    let content = format!("[图片: {}]\n{}", image_name, description);
+    db::kb_add_chunk_with_image(document_id, 0, content, None, image_path)
+        .map_err(|e| format!("添加图片描述失败: {}", e))
+}
+
+/// 更新分块的 embedding 向量
+#[tauri::command]
+fn kb_update_chunk_embedding(chunk_id: i64, embedding: Vec<f32>) -> Result<(), String> {
+    db::kb_update_chunk_embedding(chunk_id, embedding)
+        .map_err(|e| format!("更新 embedding 失败: {}", e))
+}
+
+/// 清除所有 embedding（用于迁移到新的 embedding 模型）
+#[tauri::command]
+fn kb_clear_all_embeddings() -> Result<i64, String> {
+    db::kb_clear_all_embeddings()
+        .map_err(|e| format!("清除 embedding 失败: {}", e))
+}
+
+/// 获取没有 embedding 的分块
+#[tauri::command]
+fn kb_get_chunks_without_embedding(document_id: i64) -> Result<Vec<db::KbChunk>, String> {
+    db::kb_get_chunks_without_embedding(document_id)
+        .map_err(|e| format!("获取分块失败: {}", e))
+}
+
+/// 获取文档的向量化统计（总分块数，已向量化数）
+#[tauri::command]
+fn kb_get_document_embedding_stats(document_id: i64) -> Result<(i64, i64), String> {
+    db::kb_get_document_embedding_stats(document_id)
+        .map_err(|e| format!("获取向量化统计失败: {}", e))
+}
+
+/// 向量相似度搜索（支持相关度阈值过滤）
+#[tauri::command]
+fn kb_vector_search(query_embedding: Vec<f32>, limit: i64, min_score: Option<f64>) -> Result<Vec<db::KbSearchResult>, String> {
+    let threshold = min_score.unwrap_or(0.0); // 默认不过滤
+    db::kb_vector_search(query_embedding, limit, threshold)
+        .map_err(|e| format!("向量搜索失败: {}", e))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -995,6 +1233,7 @@ pub fn run() {
             check_dependencies,
             install_all_dependencies,
             install_playwright_only,
+            install_pdf_dependencies,
             // 优化事件管理
             add_optimization_event,
             get_optimization_events,
@@ -1004,6 +1243,7 @@ pub fn run() {
             kb_create_category,
             kb_get_categories,
             kb_delete_category,
+            kb_update_category,
             kb_add_document,
             kb_update_document_status,
             kb_get_documents,
@@ -1019,6 +1259,16 @@ pub fn run() {
             kb_add_message,
             kb_get_messages,
             kb_process_document,
+            kb_extract_images,
+            kb_read_file_base64,
+            kb_pdf_to_images,
+            kb_add_image_chunk,
+            kb_add_image_chunk_with_file,
+            kb_update_chunk_embedding,
+            kb_clear_all_embeddings,
+            kb_get_chunks_without_embedding,
+            kb_get_document_embedding_stats,
+            kb_vector_search,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

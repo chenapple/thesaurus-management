@@ -1,53 +1,68 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    title="监控设置"
+    :title="dialogTitle"
     width="550px"
     @update:model-value="$emit('update:modelValue', $event)"
     @close="handleClose"
   >
-    <el-tabs v-model="activeTab">
-      <!-- Tab 1: 监控设置 -->
-      <el-tab-pane label="监控设置" name="monitoring">
-        <el-form :model="settings" label-width="100px" v-loading="loading">
-          <el-form-item label="监控页数">
-            <el-radio-group v-model="settings.max_pages">
-              <el-radio :value="1">仅首页</el-radio>
-              <el-radio :value="3">前3页</el-radio>
-              <el-radio :value="5">前5页</el-radio>
-            </el-radio-group>
-            <div class="form-tip">
-              设置排名检测时搜索的页数，页数越多检测越慢但结果更全面
-            </div>
-          </el-form-item>
+    <!-- 监控设置 -->
+    <div v-if="initialTab === 'monitoring'">
+      <el-form :model="settings" label-width="100px" v-loading="loading">
+        <el-form-item label="监控页数">
+          <el-radio-group v-model="settings.max_pages">
+            <el-radio :value="1">仅首页</el-radio>
+            <el-radio :value="3">前3页</el-radio>
+            <el-radio :value="5">前5页</el-radio>
+          </el-radio-group>
+          <div class="form-tip">
+            设置排名检测时搜索的页数，页数越多检测越慢但结果更全面
+          </div>
+        </el-form-item>
 
-          <!-- 状态显示 -->
-          <el-divider content-position="left">运行状态</el-divider>
-
-          <el-form-item label="调度器状态">
-            <el-tag :type="status.is_running ? 'success' : 'info'" size="small">
-              {{ status.is_running ? '运行中' : '已停止' }}
-            </el-tag>
-          </el-form-item>
-
-          <el-form-item v-if="status.last_check_time" label="上次检测">
-            {{ formatDateTime(status.last_check_time) }}
-          </el-form-item>
-        </el-form>
-      </el-tab-pane>
-
-      <!-- Tab 2: 自动检测 -->
-      <el-tab-pane label="自动检测" name="auto">
-        <el-form :model="settings" label-width="100px" v-loading="loading">
-          <!-- 启用开关 -->
-          <el-form-item label="自动检测">
-            <el-switch
-              v-model="settings.enabled"
-              active-text="启用"
-              inactive-text="关闭"
+        <el-form-item label="并发浏览器">
+          <div class="slider-wrapper">
+            <el-slider
+              v-model="maxBrowsers"
+              :min="1"
+              :max="5"
+              :step="1"
+              :marks="{ 1: '1', 2: '2', 3: '3', 4: '4', 5: '5' }"
+              style="width: 200px;"
             />
-            <div class="form-tip">
-              启用后将在指定时间自动检测关键词排名
+          </div>
+          <div class="form-tip" style="margin-top: 24px;">
+            多国家检测时的并发数量。建议2-3个，过多可能触发反爬
+          </div>
+        </el-form-item>
+
+        <!-- 状态显示 -->
+        <el-divider content-position="left">运行状态</el-divider>
+
+        <el-form-item label="调度器状态">
+          <el-tag :type="status.is_running ? 'success' : 'info'" size="small">
+            {{ status.is_running ? '运行中' : '已停止' }}
+          </el-tag>
+        </el-form-item>
+
+        <el-form-item v-if="status.last_check_time" label="上次检测">
+          {{ formatDateTime(status.last_check_time) }}
+        </el-form-item>
+      </el-form>
+    </div>
+
+    <!-- 自动检测 -->
+    <div v-else-if="initialTab === 'auto'">
+      <el-form :model="settings" label-width="100px" v-loading="loading">
+        <!-- 启用开关 -->
+        <el-form-item label="自动检测">
+          <el-switch
+            v-model="settings.enabled"
+            active-text="启用"
+            inactive-text="关闭"
+          />
+          <div class="form-tip">
+            启用后将在指定时间自动检测关键词排名
             </div>
           </el-form-item>
 
@@ -137,71 +152,70 @@
             </div>
           </el-form-item>
         </el-form>
-      </el-tab-pane>
+      </div>
 
-      <!-- Tab 3: 任务记录 -->
-      <el-tab-pane label="任务记录" name="logs">
-        <div class="task-logs-header">
-          <el-button link type="primary" size="small" @click="loadTaskLogs">
-            <el-icon><Refresh /></el-icon> 刷新
-          </el-button>
-          <el-popconfirm
-            title="确定清空所有任务记录吗？"
-            confirm-button-text="确定"
-            cancel-button-text="取消"
-            @confirm="handleClearLogs"
-          >
-            <template #reference>
-              <el-button link type="danger" size="small" :disabled="taskLogs.length === 0">
-                <el-icon><Delete /></el-icon> 清空记录
-              </el-button>
+    <!-- 任务记录 -->
+    <div v-else>
+      <div class="task-logs-header">
+        <el-button link type="primary" size="small" @click="loadTaskLogs">
+          <el-icon><Refresh /></el-icon> 刷新
+        </el-button>
+        <el-popconfirm
+          title="确定清空所有任务记录吗？"
+          confirm-button-text="确定"
+          cancel-button-text="取消"
+          @confirm="handleClearLogs"
+        >
+          <template #reference>
+            <el-button link type="danger" size="small" :disabled="taskLogs.length === 0">
+              <el-icon><Delete /></el-icon> 清空记录
+            </el-button>
+          </template>
+        </el-popconfirm>
+      </div>
+
+      <div class="task-logs" v-loading="loadingLogs">
+        <el-empty v-if="taskLogs.length === 0" description="暂无任务记录" :image-size="60" />
+        <el-table v-else :data="taskLogs" size="small" max-height="300">
+          <el-table-column label="时间" width="140">
+            <template #default="{ row }">
+              {{ formatDateTime(row.started_at) }}
             </template>
-          </el-popconfirm>
-        </div>
-
-        <div class="task-logs" v-loading="loadingLogs">
-          <el-empty v-if="taskLogs.length === 0" description="暂无任务记录" :image-size="60" />
-          <el-table v-else :data="taskLogs" size="small" max-height="300">
-            <el-table-column label="时间" width="140">
-              <template #default="{ row }">
-                {{ formatDateTime(row.started_at) }}
-              </template>
-            </el-table-column>
-            <el-table-column label="状态" width="80">
-              <template #default="{ row }">
-                <el-tag
-                  :type="row.status === 'completed' ? 'success' : row.status === 'running' ? 'warning' : 'danger'"
-                  size="small"
-                >
-                  {{ row.status === 'completed' ? '完成' : row.status === 'running' ? '进行中' : '失败' }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="关键词" width="80">
-              <template #default="{ row }">
-                {{ row.total_keywords }}
-              </template>
-            </el-table-column>
-            <el-table-column label="成功/失败" width="90">
-              <template #default="{ row }">
-                <span class="success-count">{{ row.success_count }}</span>
-                /
-                <span class="failed-count">{{ row.failed_count }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="耗时">
-              <template #default="{ row }">
-                {{ row.ended_at ? formatDuration(row.started_at, row.ended_at) : '-' }}
-              </template>
-            </el-table-column>
-          </el-table>
-        </div>
-      </el-tab-pane>
-    </el-tabs>
+          </el-table-column>
+          <el-table-column label="状态" width="80">
+            <template #default="{ row }">
+              <el-tag
+                :type="row.status === 'completed' ? 'success' : row.status === 'running' ? 'warning' : 'danger'"
+                size="small"
+              >
+                {{ row.status === 'completed' ? '完成' : row.status === 'running' ? '进行中' : '失败' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="关键词" width="80">
+            <template #default="{ row }">
+              {{ row.total_keywords }}
+            </template>
+          </el-table-column>
+          <el-table-column label="成功/失败" width="90">
+            <template #default="{ row }">
+              <span class="success-count">{{ row.success_count }}</span>
+              /
+              <span class="failed-count">{{ row.failed_count }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="耗时">
+            <template #default="{ row }">
+              {{ row.ended_at ? formatDuration(row.started_at, row.ended_at) : '-' }}
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </div>
 
     <template #footer>
-      <el-button @click="handleClose">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="handleSave">
+      <el-button @click="handleClose">{{ initialTab === 'logs' ? '关闭' : '取消' }}</el-button>
+      <el-button v-if="initialTab !== 'logs'" type="primary" :loading="saving" @click="handleSave">
         保存设置
       </el-button>
     </template>
@@ -209,7 +223,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch } from 'vue';
+import { ref, reactive, computed, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Refresh, Delete } from '@element-plus/icons-vue';
 import { emit as tauriEmit } from '@tauri-apps/api/event';
@@ -221,23 +235,36 @@ import {
   stopScheduler,
   getTaskLogs,
   clearTaskLogs,
+  getApiKey,
+  setApiKey,
 } from '../api';
 import type { SchedulerSettings, SchedulerStatus, TaskLog } from '../types';
 import { DEFAULT_SCHEDULER_SETTINGS } from '../types';
 
 const props = defineProps<{
   modelValue: boolean;
+  initialTab?: 'monitoring' | 'auto' | 'logs';
 }>();
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void;
 }>();
 
-const activeTab = ref('monitoring');
+// 动态标题
+const dialogTitle = computed(() => {
+  switch (props.initialTab) {
+    case 'monitoring': return '监控设置';
+    case 'auto': return '自动检测';
+    case 'logs': return '任务记录';
+    default: return '监控设置';
+  }
+});
+
 const loading = ref(false);
 const saving = ref(false);
 
 const settings = reactive<SchedulerSettings>({ ...DEFAULT_SCHEDULER_SETTINGS });
+const maxBrowsers = ref(3);  // 并发浏览器数量，默认3
 
 const status = reactive<SchedulerStatus>({
   is_running: false,
@@ -276,13 +303,22 @@ async function handleClearLogs() {
 async function loadSettings() {
   loading.value = true;
   try {
-    const [savedSettings, savedStatus] = await Promise.all([
+    const [savedSettings, savedStatus, savedMaxBrowsers] = await Promise.all([
       getSchedulerSettings(),
       getSchedulerStatus(),
+      getApiKey('max_browsers'),
     ]);
 
     Object.assign(settings, savedSettings);
     Object.assign(status, savedStatus);
+
+    // 加载并发浏览器设置
+    if (savedMaxBrowsers) {
+      const parsed = parseInt(savedMaxBrowsers, 10);
+      if (!isNaN(parsed) && parsed >= 1 && parsed <= 5) {
+        maxBrowsers.value = parsed;
+      }
+    }
 
     // 同时加载任务记录
     loadTaskLogs();
@@ -297,7 +333,11 @@ async function loadSettings() {
 async function handleSave() {
   saving.value = true;
   try {
-    await updateSchedulerSettings({ ...settings });
+    // 保存调度器设置和并发浏览器设置
+    await Promise.all([
+      updateSchedulerSettings({ ...settings }),
+      setApiKey('max_browsers', maxBrowsers.value.toString()),
+    ]);
 
     // 根据设置启动或停止调度器
     if (settings.enabled) {
@@ -311,7 +351,10 @@ async function handleSave() {
     Object.assign(status, newStatus);
 
     // 通知其他组件设置已更新
-    await tauriEmit('scheduler-settings-updated', { max_pages: settings.max_pages });
+    await tauriEmit('scheduler-settings-updated', {
+      max_pages: settings.max_pages,
+      max_browsers: maxBrowsers.value,
+    });
 
     ElMessage.success('设置已保存');
     emit('update:modelValue', false);
@@ -361,7 +404,6 @@ function formatDuration(startStr: string, endStr: string): string {
 // 监听对话框打开
 watch(() => props.modelValue, (val) => {
   if (val) {
-    activeTab.value = 'monitoring';
     loadSettings();
   }
 });

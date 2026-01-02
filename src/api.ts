@@ -593,6 +593,13 @@ export async function installPlaywrightOnly(): Promise<InstallResult> {
   return await invoke("install_playwright_only");
 }
 
+/**
+ * 安装 PDF 处理依赖 (pdf2image + poppler)
+ */
+export async function installPdfDependencies(): Promise<InstallResult> {
+  return await invoke("install_pdf_dependencies");
+}
+
 // ==================== 优化事件管理 ====================
 
 import type { OptimizationEvent, EventMainType, EventSubType } from "./types";
@@ -671,7 +678,7 @@ export async function deleteOptimizationEvent(id: number): Promise<void> {
 
 // ==================== 知识库管理 ====================
 
-import type { KbCategory, KbDocument, KbChunk, KbSearchResult, KbConversation, KbMessage } from "./types";
+import type { KbCategory, KbDocument, KbChunk, KbSearchResult, KbConversation, KbMessage, ExtractedImage, PdfPageImage } from "./types";
 
 /**
  * 创建知识库分类
@@ -692,6 +699,13 @@ export async function kbGetCategories(): Promise<KbCategory[]> {
  */
 export async function kbDeleteCategory(id: number): Promise<void> {
   return await invoke("kb_delete_category", { id });
+}
+
+/**
+ * 更新知识库分类名称
+ */
+export async function kbUpdateCategory(id: number, name: string): Promise<void> {
+  return await invoke("kb_update_category", { id, name });
 }
 
 /**
@@ -745,6 +759,89 @@ export async function kbDeleteDocument(id: number): Promise<void> {
  */
 export async function kbProcessDocument(documentId: number, filePath: string): Promise<number> {
   return await invoke("kb_process_document", { documentId, filePath });
+}
+
+/**
+ * 从文档中提取嵌入的图片
+ */
+export async function kbExtractImages(filePath: string): Promise<ExtractedImage[]> {
+  return await invoke("kb_extract_images", { filePath });
+}
+
+/**
+ * 读取文件并返回 base64 编码（用于 PDF OCR）
+ */
+export async function kbReadFileBase64(filePath: string): Promise<string> {
+  return await invoke("kb_read_file_base64", { filePath });
+}
+
+/**
+ * 将 PDF 转换为图片（用于 OCR）
+ */
+export async function kbPdfToImages(filePath: string): Promise<PdfPageImage[]> {
+  return await invoke("kb_pdf_to_images", { filePath });
+}
+
+/**
+ * 将图片识别结果作为 chunk 添加到文档（不保存图片）
+ */
+export async function kbAddImageChunk(documentId: number, imageName: string, description: string): Promise<number> {
+  return await invoke("kb_add_image_chunk", { documentId, imageName, description });
+}
+
+/**
+ * 将图片识别结果作为 chunk 添加到文档（同时保存图片用于图文问答）
+ */
+export async function kbAddImageChunkWithFile(
+  documentId: number,
+  imageName: string,
+  description: string,
+  base64Data: string
+): Promise<number> {
+  return await invoke("kb_add_image_chunk_with_file", { documentId, imageName, description, base64Data });
+}
+
+/**
+ * 更新分块的 embedding 向量
+ */
+export async function kbUpdateChunkEmbedding(chunkId: number, embedding: number[]): Promise<void> {
+  return await invoke("kb_update_chunk_embedding", { chunkId, embedding });
+}
+
+/**
+ * 清除所有 embedding（用于迁移到新的 embedding 模型）
+ * @returns 清除的 embedding 数量
+ */
+export async function kbClearAllEmbeddings(): Promise<number> {
+  return await invoke("kb_clear_all_embeddings");
+}
+
+/**
+ * 获取没有 embedding 的分块
+ */
+export async function kbGetChunksWithoutEmbedding(documentId: number): Promise<KbChunk[]> {
+  return await invoke("kb_get_chunks_without_embedding", { documentId });
+}
+
+/**
+ * 获取文档的向量化统计（总分块数，已向量化数）
+ */
+export async function kbGetDocumentEmbeddingStats(documentId: number): Promise<[number, number]> {
+  return await invoke("kb_get_document_embedding_stats", { documentId });
+}
+
+/**
+ * 向量相似度搜索（支持相关度阈值过滤）
+ * @param queryEmbedding 查询向量
+ * @param limit 最大返回数量
+ * @param minScore 最低相关度阈值 (0.0-1.0)，低于此值的结果会被过滤
+ */
+export async function kbVectorSearch(
+  queryEmbedding: number[],
+  limit: number = 50,
+  minScore: number = 0.5
+): Promise<KbSearchResult[]> {
+  return await invoke("kb_vector_search", { queryEmbedding, limit, minScore });
 }
 
 /**

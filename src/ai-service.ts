@@ -1,5 +1,5 @@
 // 多 AI 服务抽象层
-// 支持 DeepSeek, OpenAI, Claude, Gemini
+// 支持 DeepSeek, OpenAI, Gemini, 通义千问
 
 import { getApiKey } from "./api";
 import type { AIProvider, KbSearchResult } from "./types";
@@ -10,8 +10,8 @@ import { AI_PROVIDERS } from "./types";
 const API_ENDPOINTS: Record<AIProvider, string> = {
   deepseek: "https://api.deepseek.com/chat/completions",
   openai: "https://api.openai.com/v1/chat/completions",
-  claude: "https://api.anthropic.com/v1/messages",
   gemini: "https://generativelanguage.googleapis.com/v1beta/models",
+  qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
 };
 
 // ==================== 消息类型 ====================
@@ -81,11 +81,10 @@ export async function chat(
   const endpoint = API_ENDPOINTS[provider];
   const actualModel = model || AI_PROVIDERS[provider].defaultModel;
 
-  if (provider === 'claude') {
-    return chatClaude(messages, apiKey, actualModel, temperature, maxTokens, signal);
-  } else if (provider === 'gemini') {
+  if (provider === 'gemini') {
     return chatGemini(messages, apiKey, actualModel, temperature, maxTokens, signal);
   } else {
+    // OpenAI 兼容格式: deepseek, openai, qwen
     return chatOpenAICompatible(messages, apiKey, endpoint, actualModel, temperature, maxTokens, signal);
   }
 }
@@ -126,52 +125,6 @@ async function chatOpenAICompatible(
 
   const data = await response.json();
   return data.choices[0]?.message?.content || "";
-}
-
-// Claude 接口
-async function chatClaude(
-  messages: ChatMessage[],
-  apiKey: string,
-  model: string,
-  temperature: number,
-  maxTokens: number,
-  signal?: AbortSignal
-): Promise<string> {
-  // Claude 需要单独处理 system 消息
-  const systemMessage = messages.find(m => m.role === 'system');
-  const chatMessages = messages.filter(m => m.role !== 'system').map(m => ({
-    role: m.role as 'user' | 'assistant',
-    content: m.content,
-  }));
-
-  const response = await fetchWithTimeout(
-    API_ENDPOINTS.claude,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        system: systemMessage?.content,
-        messages: chatMessages,
-        temperature,
-      }),
-      signal,
-    },
-    120000
-  );
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Claude API 错误: ${error}`);
-  }
-
-  const data = await response.json();
-  return data.content[0]?.text || "";
 }
 
 // Gemini 接口
@@ -240,9 +193,7 @@ export async function* chatStream(
   const endpoint = API_ENDPOINTS[provider];
   const actualModel = model || AI_PROVIDERS[provider].defaultModel;
 
-  if (provider === 'claude') {
-    yield* chatStreamClaude(messages, apiKey, actualModel, temperature, maxTokens, signal);
-  } else if (provider === 'gemini') {
+  if (provider === 'gemini') {
     yield* chatStreamGemini(messages, apiKey, actualModel, temperature, maxTokens, signal);
   } else {
     yield* chatStreamOpenAICompatible(messages, apiKey, endpoint, actualModel, temperature, maxTokens, signal);
@@ -308,81 +259,6 @@ async function* chatStreamOpenAICompatible(
           const content = json.choices[0]?.delta?.content || "";
           if (content) {
             yield { content, done: false };
-          }
-        } catch {
-          // 忽略解析错误
-        }
-      }
-    }
-  }
-
-  yield { content: "", done: true };
-}
-
-// Claude 流式接口
-async function* chatStreamClaude(
-  messages: ChatMessage[],
-  apiKey: string,
-  model: string,
-  temperature: number,
-  maxTokens: number,
-  signal?: AbortSignal
-): AsyncGenerator<StreamChunk> {
-  const systemMessage = messages.find(m => m.role === 'system');
-  const chatMessages = messages.filter(m => m.role !== 'system').map(m => ({
-    role: m.role as 'user' | 'assistant',
-    content: m.content,
-  }));
-
-  const response = await fetch(API_ENDPOINTS.claude, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      system: systemMessage?.content,
-      messages: chatMessages,
-      temperature,
-      stream: true,
-    }),
-    signal,
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Claude API 错误: ${error}`);
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) {
-    throw new Error("无法读取响应流");
-  }
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (line.startsWith("data: ")) {
-        const data = line.slice(6);
-        try {
-          const json = JSON.parse(data);
-          if (json.type === "content_block_delta" && json.delta?.text) {
-            yield { content: json.delta.text, done: false };
-          } else if (json.type === "message_stop") {
-            yield { content: "", done: true };
-            return;
           }
         } catch {
           // 忽略解析错误
@@ -508,8 +384,8 @@ ${sourceTexts}`;
 export function parseSourceReferences(
   answer: string,
   sources: KbSearchResult[]
-): { document_id: number; document_title: string; snippet: string }[] {
-  const refs: { document_id: number; document_title: string; snippet: string }[] = [];
+): { document_id: number; document_title: string; snippet: string; image_path?: string | null }[] {
+  const refs: { document_id: number; document_title: string; snippet: string; image_path?: string | null }[] = [];
   const pattern = /\[来源(\d+)\]/g;
   const matches = answer.matchAll(pattern);
   const usedIndices = new Set<number>();
@@ -523,6 +399,7 @@ export function parseSourceReferences(
         document_id: source.document_id,
         document_title: source.document_title,
         snippet: source.content.substring(0, 100) + "...",
+        image_path: source.image_path,  // 添加图片路径用于图文问答
       });
     }
   }
@@ -535,4 +412,508 @@ export async function checkApiKeyConfigured(provider: AIProvider): Promise<boole
   const config = AI_PROVIDERS[provider];
   const apiKey = await getApiKey(config.apiKeyName);
   return !!apiKey;
+}
+
+// ==================== 图片识别 ====================
+
+export interface ImageRecognitionResult {
+  success: boolean;
+  description: string;
+  error?: string;
+}
+
+/**
+ * 使用 Gemini Vision API 识别图片内容
+ * @param base64Data Base64 编码的图片数据
+ * @param mimeType 图片 MIME 类型 (如 "image/png", "image/jpeg")
+ * @param prompt 识别提示词
+ * @param retryCount 重试次数
+ * @returns 图片内容描述
+ */
+export async function recognizeImageWithGemini(
+  base64Data: string,
+  mimeType: string,
+  prompt: string = "请详细描述这张图片中的所有内容，包括文字、数字、表格、图表等。如果图片中有文字，请完整提取出来。",
+  retryCount: number = 0
+): Promise<ImageRecognitionResult> {
+  const MAX_RETRIES = 3;
+
+  try {
+    const apiKey = await getApiKey("gemini");
+    if (!apiKey) {
+      return {
+        success: false,
+        description: "",
+        error: "Gemini API Key 未配置",
+      };
+    }
+
+    // 使用 Gemini 2.5 Flash 模型（支持视觉）
+    const model = "gemini-2.5-flash";
+    const endpoint = `${API_ENDPOINTS.gemini}/${model}:generateContent?key=${apiKey}`;
+
+    const requestBody = {
+      contents: [
+        {
+          parts: [
+            {
+              inline_data: {
+                mime_type: mimeType,
+                data: base64Data,
+              },
+            },
+            {
+              text: prompt,
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 4096,
+      },
+    };
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    // 处理速率限制 (429)
+    if (response.status === 429 && retryCount < MAX_RETRIES) {
+      const retryAfter = 25; // 默认等待 25 秒
+      console.log(`Gemini API 速率限制，${retryAfter} 秒后重试 (${retryCount + 1}/${MAX_RETRIES})...`);
+      await sleep(retryAfter * 1000);
+      return recognizeImageWithGemini(base64Data, mimeType, prompt, retryCount + 1);
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Gemini Vision API 错误:", errorText);
+      return {
+        success: false,
+        description: "",
+        error: `API 请求失败: ${response.status} ${response.statusText}`,
+      };
+    }
+
+    const data = await response.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+    if (!text) {
+      return {
+        success: false,
+        description: "",
+        error: "未能识别图片内容",
+      };
+    }
+
+    return {
+      success: true,
+      description: text,
+    };
+  } catch (error) {
+    console.error("图片识别失败:", error);
+    return {
+      success: false,
+      description: "",
+      error: error instanceof Error ? error.message : "未知错误",
+    };
+  }
+}
+
+/**
+ * 使用通义千问视觉模型识别图片内容
+ * @param base64Data 图片的 base64 数据
+ * @param mimeType 图片 MIME 类型 (如 image/png, image/jpeg)
+ * @param prompt 识别提示词
+ * @param retryCount 重试次数
+ */
+export async function recognizeImageWithQwen(
+  base64Data: string,
+  mimeType: string,
+  prompt: string = "请完整提取图片中的所有文字内容，并保留表格和公式的结构。如果有表格请用 Markdown 表格格式输出，如果有公式请用 LaTeX 格式。",
+  retryCount: number = 0
+): Promise<ImageRecognitionResult> {
+  const MAX_RETRIES = 3;
+
+  try {
+    const apiKey = await getApiKey("qwen");
+    if (!apiKey) {
+      return {
+        success: false,
+        description: "",
+        error: "通义千问 API Key 未配置",
+      };
+    }
+
+    // 使用通义千问视觉模型 (qwen-vl-max 基于 Qwen3-VL-32B，OCR 能力更强)
+    const model = "qwen-vl-max";
+    const endpoint = API_ENDPOINTS.qwen;
+
+    // 构建 base64 URL
+    const imageUrl = `data:${mimeType};base64,${base64Data}`;
+
+    const requestBody = {
+      model: model,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image_url",
+              image_url: {
+                url: imageUrl,
+              },
+            },
+            {
+              type: "text",
+              text: prompt,
+            },
+          ],
+        },
+      ],
+      max_tokens: 4096,
+    };
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    // 处理速率限制 (429)
+    if (response.status === 429 && retryCount < MAX_RETRIES) {
+      const retryAfter = 10; // 默认等待 10 秒
+      console.log(`通义千问 API 速率限制，${retryAfter} 秒后重试 (${retryCount + 1}/${MAX_RETRIES})...`);
+      await sleep(retryAfter * 1000);
+      return recognizeImageWithQwen(base64Data, mimeType, prompt, retryCount + 1);
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("通义千问 Vision API 错误:", errorText);
+      return {
+        success: false,
+        description: "",
+        error: `API 请求失败: ${response.status} ${response.statusText}`,
+      };
+    }
+
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content || "";
+
+    if (!text) {
+      return {
+        success: false,
+        description: "",
+        error: "未能识别图片内容",
+      };
+    }
+
+    return {
+      success: true,
+      description: text,
+    };
+  } catch (error) {
+    console.error("通义千问图片识别失败:", error);
+    return {
+      success: false,
+      description: "",
+      error: error instanceof Error ? error.message : "未知错误",
+    };
+  }
+}
+
+/**
+ * 统一图片识别接口 - 自动选择可用的 AI 服务
+ * 优先使用通义千问，失败则尝试 Gemini
+ */
+export async function recognizeImage(
+  base64Data: string,
+  mimeType: string,
+  prompt?: string
+): Promise<ImageRecognitionResult> {
+  // 先尝试通义千问
+  const hasQwenKey = await checkApiKeyConfigured('qwen');
+  if (hasQwenKey) {
+    console.log('[图片识别] 使用通义千问...');
+    const result = await recognizeImageWithQwen(base64Data, mimeType, prompt);
+    if (result.success) {
+      return result;
+    }
+    console.log('[图片识别] 通义千问失败，尝试 Gemini...', result.error);
+  }
+
+  // 再尝试 Gemini
+  const hasGeminiKey = await checkApiKeyConfigured('gemini');
+  if (hasGeminiKey) {
+    console.log('[图片识别] 使用 Gemini...');
+    return recognizeImageWithGemini(base64Data, mimeType, prompt);
+  }
+
+  return {
+    success: false,
+    description: "",
+    error: "请先配置通义千问或 Gemini API Key",
+  };
+}
+
+// 辅助函数：延迟
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ==================== Embedding 向量化 ====================
+
+export interface EmbeddingResult {
+  success: boolean;
+  embedding: number[];
+  error?: string;
+}
+
+/**
+ * 使用 DeepSeek Embedding API 获取文本向量
+ */
+async function getEmbeddingFromDeepSeek(
+  text: string,
+  apiKey: string,
+  retryCount: number = 0
+): Promise<EmbeddingResult> {
+  const MAX_RETRIES = 3;
+
+  try {
+    const response = await fetch("https://api.deepseek.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "deepseek-embedding",
+        input: text,
+      }),
+    });
+
+    // 处理速率限制 (429)
+    if (response.status === 429 && retryCount < MAX_RETRIES) {
+      const retryAfter = 10;
+      console.log(`DeepSeek Embedding API 速率限制，${retryAfter} 秒后重试 (${retryCount + 1}/${MAX_RETRIES})...`);
+      await sleep(retryAfter * 1000);
+      return getEmbeddingFromDeepSeek(text, apiKey, retryCount + 1);
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("DeepSeek Embedding API 错误:", errorText);
+      return {
+        success: false,
+        embedding: [],
+        error: `DeepSeek API 请求失败: ${response.status} ${response.statusText}`,
+      };
+    }
+
+    const data = await response.json();
+    const embedding = data.data?.[0]?.embedding || [];
+
+    if (embedding.length === 0) {
+      return {
+        success: false,
+        embedding: [],
+        error: "DeepSeek 未能获取向量",
+      };
+    }
+
+    return {
+      success: true,
+      embedding,
+    };
+  } catch (error) {
+    console.error("DeepSeek 获取向量失败:", error);
+    return {
+      success: false,
+      embedding: [],
+      error: error instanceof Error ? error.message : "未知错误",
+    };
+  }
+}
+
+/**
+ * 使用千问 Embedding API 获取文本向量
+ */
+async function getEmbeddingFromQwen(
+  text: string,
+  apiKey: string,
+  retryCount: number = 0
+): Promise<EmbeddingResult> {
+  const MAX_RETRIES = 3;
+
+  try {
+    const response = await fetch("https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "text-embedding-v4",
+        input: text,
+      }),
+    });
+
+    // 处理速率限制 (429)
+    if (response.status === 429 && retryCount < MAX_RETRIES) {
+      const retryAfter = 10;
+      console.log(`千问 Embedding API 速率限制，${retryAfter} 秒后重试 (${retryCount + 1}/${MAX_RETRIES})...`);
+      await sleep(retryAfter * 1000);
+      return getEmbeddingFromQwen(text, apiKey, retryCount + 1);
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("千问 Embedding API 错误:", errorText);
+      return {
+        success: false,
+        embedding: [],
+        error: `千问 API 请求失败: ${response.status} ${response.statusText}`,
+      };
+    }
+
+    const data = await response.json();
+    const embedding = data.data?.[0]?.embedding || [];
+
+    if (embedding.length === 0) {
+      return {
+        success: false,
+        embedding: [],
+        error: "千问未能获取向量",
+      };
+    }
+
+    return {
+      success: true,
+      embedding,
+    };
+  } catch (error) {
+    console.error("千问获取向量失败:", error);
+    return {
+      success: false,
+      embedding: [],
+      error: error instanceof Error ? error.message : "未知错误",
+    };
+  }
+}
+
+/**
+ * 获取文本向量（优先使用千问，DeepSeek embedding 暂不可用）
+ * @param text 要向量化的文本
+ * @param retryCount 重试次数
+ * @returns 向量数组
+ */
+export async function getTextEmbedding(
+  text: string,
+  retryCount: number = 0
+): Promise<EmbeddingResult> {
+  // 优先使用千问（DeepSeek embedding API 目前不可用）
+  const qwenKey = await getApiKey("qwen");
+  if (qwenKey) {
+    console.log("[Embedding] 使用千问 text-embedding-v4");
+    return getEmbeddingFromQwen(text, qwenKey, retryCount);
+  }
+
+  // 备选：尝试 DeepSeek（如果未来支持的话）
+  const deepseekKey = await getApiKey("deepseek");
+  if (deepseekKey) {
+    console.log("[Embedding] 尝试 DeepSeek");
+    const result = await getEmbeddingFromDeepSeek(text, deepseekKey, retryCount);
+    if (result.success) {
+      return result;
+    }
+    console.log("[Embedding] DeepSeek 失败，无其他备选");
+  }
+
+  return {
+    success: false,
+    embedding: [],
+    error: "未配置千问 API Key（用于 Embedding）",
+  };
+}
+
+/**
+ * 批量获取文本向量（带延迟避免速率限制）- 串行版本（已弃用）
+ */
+export async function getTextEmbeddingsBatch(
+  texts: { id: number; content: string }[],
+  onProgress?: (current: number, total: number) => void
+): Promise<Map<number, number[]>> {
+  const results = new Map<number, number[]>();
+
+  for (let i = 0; i < texts.length; i++) {
+    const { id, content } = texts[i];
+
+    // 报告进度
+    if (onProgress) {
+      onProgress(i + 1, texts.length);
+    }
+
+    // 获取向量
+    const result = await getTextEmbedding(content);
+    if (result.success) {
+      results.set(id, result.embedding);
+    } else {
+      console.warn(`Chunk ${id} 向量化失败:`, result.error);
+    }
+
+    // 添加延迟避免速率限制
+    if (i < texts.length - 1) {
+      await sleep(500); // 500ms 延迟
+    }
+  }
+
+  return results;
+}
+
+/**
+ * 批量获取文本向量 - 并行版本（推荐使用）
+ * 通过并发请求大幅提升处理速度
+ */
+export async function getTextEmbeddingsBatchParallel(
+  texts: { id: number; content: string }[],
+  onProgress?: (current: number, total: number) => void,
+  concurrency: number = 5  // 并发数
+): Promise<Map<number, number[]>> {
+  const results = new Map<number, number[]>();
+  let completed = 0;
+
+  // 分批处理
+  for (let i = 0; i < texts.length; i += concurrency) {
+    const batch = texts.slice(i, i + concurrency);
+
+    // 并行请求
+    const promises = batch.map(async ({ id, content }) => {
+      const result = await getTextEmbedding(content);
+      if (result.success) {
+        results.set(id, result.embedding);
+      } else {
+        console.warn(`Chunk ${id} 向量化失败:`, result.error);
+      }
+      completed++;
+      onProgress?.(completed, texts.length);
+    });
+
+    await Promise.all(promises);
+
+    // 批次间延迟（避免限流）
+    if (i + concurrency < texts.length) {
+      await sleep(200);
+    }
+  }
+
+  return results;
 }

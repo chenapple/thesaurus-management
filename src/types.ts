@@ -344,12 +344,15 @@ export interface DependencyStatus {
   python_path: string | null;
   playwright_installed: boolean;
   chromium_installed: boolean;
+  // PDF 处理依赖
+  pdf2image_installed: boolean;
+  poppler_installed: boolean;
   error_message: string | null;
 }
 
 // 安装进度
 export interface InstallProgress {
-  step: 'python' | 'playwright' | 'chromium';
+  step: 'python' | 'playwright' | 'chromium' | 'pdf2image' | 'poppler';
   step_name: string;
   progress: number;
   message: string;
@@ -385,6 +388,17 @@ export interface KbDocument {
   status: 'pending' | 'processing' | 'completed' | 'failed';
   chunk_count: number;
   created_at: string;
+  // 向量化统计（前端加载时填充）
+  embedding_total?: number;    // 总分块数
+  embedding_count?: number;    // 已向量化数
+}
+
+// 从文档中提取的图片
+export interface ExtractedImage {
+  name: string;           // 图片文件名
+  mime_type: string;      // MIME 类型 (image/png, image/jpeg, etc.)
+  base64_data: string;    // Base64 编码的图片数据
+  source_location: string; // 来源位置（如 "Sheet1", "Slide 3"）
 }
 
 // 文档分块
@@ -394,6 +408,7 @@ export interface KbChunk {
   chunk_index: number;
   content: string;
   page_number: number | null;
+  image_path: string | null;  // 关联的图片路径（用于图文问答）
 }
 
 // 搜索结果
@@ -404,6 +419,7 @@ export interface KbSearchResult {
   content: string;
   page_number: number | null;
   score: number;
+  image_path: string | null;  // 关联的图片路径（用于图文问答）
 }
 
 // AI 对话
@@ -432,10 +448,18 @@ export interface MessageSource {
   chunk_id: number;
   page_number: number | null;
   snippet: string;
+  image_path?: string | null;  // 关联的图片路径（用于图文问答）
+}
+
+// PDF 页面图片（用于 OCR）
+export interface PdfPageImage {
+  page_number: number;
+  mime_type: string;
+  base64_data: string;
 }
 
 // AI 服务提供商
-export type AIProvider = 'deepseek' | 'openai' | 'claude' | 'gemini';
+export type AIProvider = 'deepseek' | 'openai' | 'gemini' | 'qwen';
 
 // AI 服务配置
 export interface AIProviderConfig {
@@ -462,18 +486,18 @@ export const AI_PROVIDERS: Record<AIProvider, AIProviderConfig> = {
     defaultModel: 'gpt-4o-mini',
     apiKeyName: 'openai',
   },
-  claude: {
-    provider: 'claude',
-    name: 'Claude',
-    models: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022'],
-    defaultModel: 'claude-3-5-sonnet-20241022',
-    apiKeyName: 'claude',
-  },
   gemini: {
     provider: 'gemini',
     name: 'Gemini',
     models: ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
     defaultModel: 'gemini-2.5-flash',
     apiKeyName: 'gemini',
+  },
+  qwen: {
+    provider: 'qwen',
+    name: '通义千问',
+    models: ['qwen-turbo', 'qwen-plus', 'qwen-max', 'qwen-vl-plus', 'qwen-vl-max'],
+    defaultModel: 'qwen-plus',
+    apiKeyName: 'qwen',
   },
 };

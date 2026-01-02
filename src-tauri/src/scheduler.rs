@@ -237,11 +237,19 @@ impl Scheduler {
                                 .map(|m| (m.id, m.keyword.clone(), m.asin.clone(), m.country.clone()))
                                 .collect();
 
-                            // 使用批量模式检测（同一站点复用浏览器）
+                            // 获取并发浏览器数量设置
+                            let max_browsers = db::get_setting("max_browsers")
+                                .ok()
+                                .flatten()
+                                .and_then(|s| s.parse::<i64>().ok())
+                                .unwrap_or(3);  // 默认3个并发浏览器
+
+                            // 使用批量模式检测（并发模式，同一站点复用浏览器）
                             let task_id_clone = task_id;
                             let results = crawler::check_rankings_batch(
                                 keywords,
                                 5, // max_pages
+                                max_browsers,
                                 move |completed, _total, msg| {
                                     println!("[Scheduler] {}", msg);
                                     // 更新任务进度（这里无法准确统计成功/失败，在结果处理时再统计）

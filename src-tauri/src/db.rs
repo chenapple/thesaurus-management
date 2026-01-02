@@ -2543,11 +2543,11 @@ pub fn update_ranking_result(
             ],
         )?;
 
-        // 插入历史记录
+        // 插入历史记录（使用北京时间的日期）
         conn.execute(
             "INSERT INTO keyword_ranking_history
                 (monitoring_id, check_date, organic_rank, organic_page, sponsored_rank, sponsored_page)
-             VALUES (?1, date('now'), ?2, ?3, ?4, ?5)",
+             VALUES (?1, date('now', '+8 hours'), ?2, ?3, ?4, ?5)",
             rusqlite::params![monitoring_id, organic_rank, organic_page, sponsored_rank, sponsored_page],
         )?;
 
@@ -2574,7 +2574,7 @@ pub fn get_ranking_history(monitoring_id: i64, days: i64) -> Result<Vec<RankingH
         "SELECT id, monitoring_id, check_date, organic_rank, organic_page,
                 sponsored_rank, sponsored_page, checked_at
          FROM keyword_ranking_history
-         WHERE monitoring_id = ?1 AND check_date >= date('now', ?2)
+         WHERE monitoring_id = ?1 AND check_date >= date('now', '+8 hours', ?2)
          ORDER BY check_date ASC"
     )?;
 
@@ -2629,7 +2629,7 @@ pub fn save_ranking_snapshot(
     conn.execute(
         "INSERT OR REPLACE INTO ranking_snapshots
             (keyword, country, snapshot_date, organic_top_50, sponsored_top_20)
-         VALUES (?1, ?2, date('now'), ?3, ?4)",
+         VALUES (?1, ?2, date('now', '+8 hours'), ?3, ?4)",
         rusqlite::params![keyword, country, organic_top_50, sponsored_top_20],
     )?;
 
@@ -2643,7 +2643,7 @@ pub fn get_ranking_snapshots(keyword: &str, country: &str, days: i64) -> Result<
     let mut stmt = conn.prepare(
         "SELECT id, keyword, country, snapshot_date, organic_top_50, sponsored_top_20, created_at
          FROM ranking_snapshots
-         WHERE keyword = ?1 AND country = ?2 AND snapshot_date >= date('now', ?3)
+         WHERE keyword = ?1 AND country = ?2 AND snapshot_date >= date('now', '+8 hours', ?3)
          ORDER BY snapshot_date DESC"
     )?;
 
@@ -2895,7 +2895,7 @@ pub fn get_monitoring_sparklines(product_id: i64, days: i64) -> Result<Vec<Monit
         "SELECT h.monitoring_id, h.check_date, h.organic_rank, h.sponsored_rank
          FROM keyword_ranking_history h
          JOIN keyword_monitoring m ON h.monitoring_id = m.id
-         WHERE m.product_id = ?1 AND h.check_date >= date('now', ?2)
+         WHERE m.product_id = ?1 AND h.check_date >= date('now', '+8 hours', ?2)
          ORDER BY h.monitoring_id, h.check_date ASC"
     )?;
 
@@ -3209,6 +3209,7 @@ pub struct KbChunk {
     pub chunk_index: i64,
     pub content: String,
     pub page_number: Option<i64>,
+    pub image_path: Option<String>,  // 关联的图片路径（用于图文问答）
 }
 
 // 搜索结果结构
@@ -3220,6 +3221,7 @@ pub struct KbSearchResult {
     pub content: String,
     pub page_number: Option<i64>,
     pub score: f64,
+    pub image_path: Option<String>,  // 关联的图片路径（用于图文问答）
 }
 
 // AI 对话结构
@@ -3278,6 +3280,7 @@ pub fn init_knowledge_base_tables(conn: &Connection) -> Result<()> {
             chunk_index INTEGER NOT NULL,
             content TEXT NOT NULL,
             page_number INTEGER,
+            embedding BLOB,
             FOREIGN KEY (document_id) REFERENCES kb_documents(id) ON DELETE CASCADE
         );
 
@@ -3343,6 +3346,26 @@ pub fn init_knowledge_base_tables(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // 数据库迁移：为 kb_chunks 表添加 embedding 字段（兼容旧版本）
+    let has_embedding_column: bool = conn
+        .prepare("SELECT embedding FROM kb_chunks LIMIT 1")
+        .is_ok();
+
+    if !has_embedding_column {
+        conn.execute("ALTER TABLE kb_chunks ADD COLUMN embedding BLOB", [])?;
+        println!("[DB Migration] Added embedding column to kb_chunks table");
+    }
+
+    // 数据库迁移：为 kb_chunks 表添加 image_path 字段（用于图文问答）
+    let has_image_path_column: bool = conn
+        .prepare("SELECT image_path FROM kb_chunks LIMIT 1")
+        .is_ok();
+
+    if !has_image_path_column {
+        conn.execute("ALTER TABLE kb_chunks ADD COLUMN image_path TEXT", [])?;
+        println!("[DB Migration] Added image_path column to kb_chunks table");
+    }
+
     Ok(())
 }
 
@@ -3383,6 +3406,13 @@ pub fn kb_get_categories() -> Result<Vec<KbCategory>> {
 pub fn kb_delete_category(id: i64) -> Result<()> {
     let conn = get_db().lock();
     conn.execute("DELETE FROM kb_categories WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+// 更新知识库分类名称
+pub fn kb_update_category(id: i64, name: String) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("UPDATE kb_categories SET name = ?1 WHERE id = ?2", rusqlite::params![name, id])?;
     Ok(())
 }
 
@@ -3489,6 +3519,16 @@ pub fn kb_add_chunk(document_id: i64, chunk_index: i64, content: String, page_nu
     Ok(conn.last_insert_rowid())
 }
 
+// 添加带图片路径的文档分块（用于图文问答）
+pub fn kb_add_chunk_with_image(document_id: i64, chunk_index: i64, content: String, page_number: Option<i64>, image_path: String) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT INTO kb_chunks (document_id, chunk_index, content, page_number, image_path) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![document_id, chunk_index, content, page_number, image_path],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
 // 批量添加文档分块
 pub fn kb_add_chunks_batch(document_id: i64, chunks: Vec<(String, Option<i64>)>) -> Result<i64> {
     let conn = get_db().lock();
@@ -3507,7 +3547,7 @@ pub fn kb_add_chunks_batch(document_id: i64, chunks: Vec<(String, Option<i64>)>)
 pub fn kb_get_chunks(document_id: i64) -> Result<Vec<KbChunk>> {
     let conn = get_db().lock();
     let mut stmt = conn.prepare(
-        "SELECT id, document_id, chunk_index, content, page_number
+        "SELECT id, document_id, chunk_index, content, page_number, image_path
          FROM kb_chunks WHERE document_id = ?1 ORDER BY chunk_index"
     )?;
 
@@ -3518,12 +3558,148 @@ pub fn kb_get_chunks(document_id: i64) -> Result<Vec<KbChunk>> {
             chunk_index: row.get(2)?,
             content: row.get(3)?,
             page_number: row.get(4)?,
+            image_path: row.get(5)?,
         })
     })?
     .filter_map(|r| r.ok())
     .collect();
 
     Ok(chunks)
+}
+
+// 更新分块的 embedding 向量
+pub fn kb_update_chunk_embedding(chunk_id: i64, embedding: Vec<f32>) -> Result<()> {
+    let conn = get_db().lock();
+    // 将 f32 向量转换为字节数组存储
+    let embedding_bytes: Vec<u8> = embedding
+        .iter()
+        .flat_map(|f| f.to_le_bytes())
+        .collect();
+
+    conn.execute(
+        "UPDATE kb_chunks SET embedding = ?1 WHERE id = ?2",
+        rusqlite::params![embedding_bytes, chunk_id],
+    )?;
+    Ok(())
+}
+
+// 清除所有 embedding（用于迁移到新的 embedding 模型）
+pub fn kb_clear_all_embeddings() -> Result<i64> {
+    let conn = get_db().lock();
+    let count = conn.execute("UPDATE kb_chunks SET embedding = NULL WHERE embedding IS NOT NULL", [])?;
+    Ok(count as i64)
+}
+
+// 获取所有没有 embedding 的分块
+pub fn kb_get_chunks_without_embedding(document_id: i64) -> Result<Vec<KbChunk>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, document_id, chunk_index, content, page_number, image_path
+         FROM kb_chunks WHERE document_id = ?1 AND embedding IS NULL ORDER BY chunk_index"
+    )?;
+
+    let chunks = stmt.query_map([document_id], |row| {
+        Ok(KbChunk {
+            id: row.get(0)?,
+            document_id: row.get(1)?,
+            chunk_index: row.get(2)?,
+            content: row.get(3)?,
+            page_number: row.get(4)?,
+            image_path: row.get(5)?,
+        })
+    })?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    Ok(chunks)
+}
+
+/// 获取文档的向量化统计（总分块数，已向量化数）
+pub fn kb_get_document_embedding_stats(document_id: i64) -> Result<(i64, i64)> {
+    let conn = get_db().lock();
+    let (total, embedded): (i64, i64) = conn.query_row(
+        "SELECT
+            COUNT(*) as total,
+            COUNT(embedding) as embedded
+         FROM kb_chunks WHERE document_id = ?1",
+        [document_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    Ok((total, embedded))
+}
+
+// 向量相似度搜索（支持相关度阈值过滤）
+pub fn kb_vector_search(query_embedding: Vec<f32>, limit: i64, min_score: f64) -> Result<Vec<KbSearchResult>> {
+    let conn = get_db().lock();
+
+    // 获取所有有 embedding 的 chunks
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.document_id, d.title, c.content, c.page_number, c.embedding, c.image_path
+         FROM kb_chunks c
+         JOIN kb_documents d ON c.document_id = d.id
+         WHERE c.embedding IS NOT NULL"
+    )?;
+
+    let mut results: Vec<(KbSearchResult, f64)> = stmt.query_map([], |row| {
+        let chunk_id: i64 = row.get(0)?;
+        let document_id: i64 = row.get(1)?;
+        let document_title: String = row.get(2)?;
+        let content: String = row.get(3)?;
+        let page_number: Option<i64> = row.get(4)?;
+        let embedding_bytes: Vec<u8> = row.get(5)?;
+        let image_path: Option<String> = row.get(6)?;
+
+        // 将字节数组转换回 f32 向量
+        let embedding: Vec<f32> = embedding_bytes
+            .chunks(4)
+            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
+
+        // 计算余弦相似度
+        let similarity = cosine_similarity(&query_embedding, &embedding);
+
+        Ok((KbSearchResult {
+            chunk_id,
+            document_id,
+            document_title,
+            content,
+            page_number,
+            score: similarity,
+            image_path,
+        }, similarity))
+    })?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    // 按相似度降序排序
+    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // 过滤：只保留相关度 >= min_score 的结果，然后取前 limit 个
+    let results: Vec<KbSearchResult> = results
+        .into_iter()
+        .filter(|(_, score)| *score >= min_score)
+        .take(limit as usize)
+        .map(|(r, _)| r)
+        .collect();
+
+    Ok(results)
+}
+
+// 计算余弦相似度
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+
+    let dot_product: f64 = a.iter().zip(b.iter()).map(|(x, y)| (*x as f64) * (*y as f64)).sum();
+    let norm_a: f64 = a.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+    let norm_b: f64 = b.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+
+    dot_product / (norm_a * norm_b)
 }
 
 // ==================== 知识库搜索 ====================
@@ -3547,7 +3723,7 @@ pub fn kb_search(query: String, limit: i64) -> Result<Vec<KbSearchResult>> {
 fn try_fts_search(conn: &rusqlite::Connection, query: &str, limit: i64) -> Result<Vec<KbSearchResult>> {
     let mut stmt = conn.prepare(
         "SELECT c.id, c.document_id, d.title, c.content, c.page_number,
-                bm25(kb_chunks_fts) as score
+                bm25(kb_chunks_fts) as score, c.image_path
          FROM kb_chunks_fts
          JOIN kb_chunks c ON kb_chunks_fts.rowid = c.id
          JOIN kb_documents d ON c.document_id = d.id
@@ -3564,6 +3740,7 @@ fn try_fts_search(conn: &rusqlite::Connection, query: &str, limit: i64) -> Resul
             content: row.get(3)?,
             page_number: row.get(4)?,
             score: row.get(5)?,
+            image_path: row.get(6)?,
         })
     })?
     .filter_map(|r| r.ok())
@@ -3572,19 +3749,79 @@ fn try_fts_search(conn: &rusqlite::Connection, query: &str, limit: i64) -> Resul
     Ok(results)
 }
 
-// LIKE 搜索（支持中文）
+// LIKE 搜索（支持中文）- 智能分词版本
 fn like_search(conn: &rusqlite::Connection, query: &str, limit: i64) -> Result<Vec<KbSearchResult>> {
-    // 提取查询中的关键词（按空格、逗号分割，或者对中文逐字符匹配）
-    let keywords: Vec<&str> = query
-        .split(|c: char| c.is_whitespace() || c == ',' || c == '，')
+    // 中文停用词列表
+    const STOP_WORDS: &[&str] = &[
+        "的", "是", "在", "了", "和", "与", "或", "我", "我们", "你", "你们",
+        "他", "她", "它", "这", "那", "有", "没有", "不", "也", "都", "就",
+        "要", "会", "可以", "能", "请", "帮", "帮我", "查看", "查找", "搜索",
+        "知识库", "文档", "中", "里", "上", "下", "什么", "怎么", "如何",
+        "哪里", "哪个", "为什么", "告诉", "一下", "一个",
+    ];
+
+    let mut keywords: Vec<String> = Vec::new();
+
+    // 按空格和标点分割
+    let parts: Vec<&str> = query
+        .split(|c: char| c.is_whitespace() || c == ',' || c == '，' || c == '。' || c == '？' || c == '！' || c == '：' || c == ':')
         .filter(|s| !s.is_empty())
         .collect();
+
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+
+        // 如果是纯ASCII（英文），直接添加
+        if part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+            if part.len() >= 2 {
+                keywords.push(part.to_lowercase());
+            }
+        } else {
+            // 包含中文：使用滑动窗口提取2-4字符的词组
+            let chars: Vec<char> = part.chars().collect();
+
+            // 先尝试提取较长的词组（4字符），再提取短的（2字符）
+            for window_size in [4, 3, 2] {
+                if chars.len() >= window_size {
+                    for i in 0..=(chars.len() - window_size) {
+                        let word: String = chars[i..i + window_size].iter().collect();
+                        // 过滤停用词
+                        if !STOP_WORDS.contains(&word.as_str()) {
+                            keywords.push(word);
+                        }
+                    }
+                }
+            }
+
+            // 如果原始词组较短（<=4字符）且不是停用词，也添加
+            if chars.len() <= 4 && chars.len() >= 2 {
+                let word: String = chars.iter().collect();
+                if !STOP_WORDS.contains(&word.as_str()) {
+                    keywords.push(word);
+                }
+            }
+        }
+    }
+
+    // 去重
+    keywords.sort();
+    keywords.dedup();
 
     if keywords.is_empty() {
         return Ok(vec![]);
     }
 
-    // 构建 LIKE 查询条件
+    // 限制关键词数量，避免SQL过长（优先保留较长的词）
+    if keywords.len() > 15 {
+        // 按长度降序排序，保留较长的词（更有意义）
+        keywords.sort_by(|a, b| b.chars().count().cmp(&a.chars().count()));
+        keywords.truncate(15);
+    }
+
+    // 构建 LIKE 查询条件 (OR 逻辑)
     let like_conditions: Vec<String> = keywords
         .iter()
         .map(|k| format!("c.content LIKE '%{}%'", k.replace("'", "''")))
@@ -3592,13 +3829,25 @@ fn like_search(conn: &rusqlite::Connection, query: &str, limit: i64) -> Result<V
 
     let where_clause = like_conditions.join(" OR ");
 
+    // 构建相关性评分：每匹配一个关键词加1分，匹配越多越相关
+    let score_cases: Vec<String> = keywords
+        .iter()
+        .map(|k| format!("(CASE WHEN c.content LIKE '%{}%' THEN 1 ELSE 0 END)", k.replace("'", "''")))
+        .collect();
+    let score_expr = if score_cases.is_empty() {
+        "0".to_string()
+    } else {
+        score_cases.join(" + ")
+    };
+
     let sql = format!(
-        "SELECT c.id, c.document_id, d.title, c.content, c.page_number, 0.0 as score
+        "SELECT c.id, c.document_id, d.title, c.content, c.page_number, ({}) as score, c.image_path
          FROM kb_chunks c
          JOIN kb_documents d ON c.document_id = d.id
          WHERE {}
+         ORDER BY score DESC
          LIMIT ?1",
-        where_clause
+        score_expr, where_clause
     );
 
     let mut stmt = conn.prepare(&sql)?;
@@ -3611,6 +3860,7 @@ fn like_search(conn: &rusqlite::Connection, query: &str, limit: i64) -> Result<V
             content: row.get(3)?,
             page_number: row.get(4)?,
             score: row.get(5)?,
+            image_path: row.get(6)?,
         })
     })?
     .filter_map(|r| r.ok())

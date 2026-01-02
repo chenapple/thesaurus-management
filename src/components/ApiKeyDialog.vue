@@ -31,14 +31,14 @@ const apiKeyConfigs: ApiKeyConfig[] = [
     description: '用于知识库问答 (GPT-4o, GPT-4 等)',
   },
   {
-    name: 'claude',
-    displayName: 'Claude',
-    description: '用于知识库问答 (Claude 3.5 Sonnet 等)',
-  },
-  {
     name: 'gemini',
     displayName: 'Gemini',
-    description: '用于知识库问答 (Gemini 2.0, 1.5 等)',
+    description: '用于知识库问答和向量化 (Gemini 2.5 等)',
+  },
+  {
+    name: 'qwen',
+    displayName: '通义千问',
+    description: '用于知识库问答和图片/PDF OCR识别 (qwen-vl-max)',
   },
 ];
 

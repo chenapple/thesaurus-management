@@ -45,4 +45,6 @@ calamine = "0.24"             # Excel 解析
 pulldown-cmark = "0.11"       # Markdown 解析
 zip = "0.6"                   # PPTX 解压 (PPTX 是 ZIP 格式)
 quick-xml = "0.31"            # XML 解析 (用于 PPTX 内容提取)
+base64 = "0.22"               # Base64 编码 (用于图片数据传输)
+dirs = "5"                    # 获取用户目录 (用于保存图片)
 

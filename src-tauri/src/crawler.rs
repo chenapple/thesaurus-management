@@ -239,10 +239,11 @@ enum BatchMessage {
     },
 }
 
-// 批量检测接口 - 优化版本，复用浏览器实例
+// 批量检测接口 - 优化版本，复用浏览器实例，支持并发
 pub async fn check_rankings_batch(
     keywords: Vec<(i64, String, String, String)>, // (monitoring_id, keyword, asin, country)
     max_pages: i64,
+    max_browsers: i64,  // 并发浏览器数量
     progress_callback: impl Fn(i64, i64, String) + Send + 'static,
 ) -> Vec<(i64, RankingResult)> {
     let total = keywords.len() as i64;
@@ -251,8 +252,8 @@ pub async fn check_rankings_batch(
         return Vec::new();
     }
 
-    // 尝试使用批量模式
-    match call_python_crawler_batch(keywords.clone(), max_pages, total, progress_callback).await {
+    // 尝试使用批量模式（并发）
+    match call_python_crawler_batch(keywords.clone(), max_pages, max_browsers, total, progress_callback).await {
         Ok(results) => results,
         Err(e) => {
             // 批量模式失败，返回错误结果
@@ -278,10 +279,11 @@ pub async fn check_rankings_batch(
     }
 }
 
-// 调用 Python 脚本批量处理
+// 调用 Python 脚本批量处理（支持并发）
 async fn call_python_crawler_batch(
     keywords: Vec<(i64, String, String, String)>,
     max_pages: i64,
+    max_browsers: i64,  // 并发浏览器数量
     total: i64,
     progress_callback: impl Fn(i64, i64, String) + Send + 'static,
 ) -> Result<Vec<(i64, RankingResult)>, String> {
@@ -303,12 +305,13 @@ async fn call_python_crawler_batch(
 
     // 在阻塞任务中执行
     tokio::task::spawn_blocking(move || {
-        // 调用 Python 脚本 --batch 模式
+        // 调用 Python 脚本 --batch 模式（带并发参数）
         let mut cmd = Command::new(&python_cmd);
         cmd.arg(&script_path)
             .arg("--batch")
             .arg("false")  // headless=false，有头模式（窗口隐藏到屏幕外）
             .arg(max_pages.to_string())
+            .arg(max_browsers.to_string())  // 并发浏览器数量
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

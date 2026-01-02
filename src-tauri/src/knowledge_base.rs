@@ -1,8 +1,11 @@
 // 知识库文档处理模块
-// 支持 PDF、Word、Excel、Markdown、纯文本
+// 支持 PDF、Word、Excel、Markdown、纯文本、图片提取
 
 use std::fs;
+use std::io::Read;
 use std::path::Path;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use serde::{Deserialize, Serialize};
 
 // ==================== 文档解析结果 ====================
 
@@ -18,6 +21,16 @@ pub struct ParsedDocument {
 pub struct PageContent {
     pub page_number: i64,
     pub content: String,
+}
+
+// ==================== 图片提取结果 ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractedImage {
+    pub name: String,           // 图片文件名
+    pub mime_type: String,      // MIME 类型 (image/png, image/jpeg, etc.)
+    pub base64_data: String,    // Base64 编码的图片数据
+    pub source_location: String, // 来源位置（如 "Sheet1", "Slide 3"）
 }
 
 // ==================== 文档解析器 ====================
@@ -52,18 +65,39 @@ pub fn parse_document(file_path: &str) -> Result<ParsedDocument, String> {
 fn parse_pdf(file_path: &str, title: &str) -> Result<ParsedDocument, String> {
     use pdf_extract::extract_text;
 
-    let content = extract_text(file_path).map_err(|e| format!("PDF 解析失败: {}", e))?;
+    println!("[PDF] 开始解析: {}", file_path);
+
+    let content = extract_text(file_path).map_err(|e| {
+        println!("[PDF] 解析错误: {}", e);
+        format!("PDF 解析失败: {}", e)
+    })?;
+
+    let content_len = content.chars().count();
+    let content_trimmed = content.trim();
+    let trimmed_len = content_trimmed.chars().count();
+
+    println!("[PDF] 提取内容长度: {} 字符 (去空白后: {} 字符)", content_len, trimmed_len);
+
+    // 如果内容为空或只有空白字符，给出警告
+    if trimmed_len == 0 {
+        println!("[PDF] 警告: PDF 内容为空，可能是扫描版 PDF 或特殊编码");
+        return Err("PDF 解析成功但未提取到文本内容。可能原因：1) 扫描版 PDF（图片）；2) 特殊字体编码；3) 加密 PDF。建议：将 PDF 转换为 Word 后重新上传。".to_string());
+    }
+
+    // 打印前100个字符用于调试
+    let preview: String = content_trimmed.chars().take(100).collect();
+    println!("[PDF] 内容预览: {}...", preview);
 
     // PDF 通常没有明确的页面分隔，我们按换行符分割估算
     // 实际上 pdf-extract 不提供页面信息，所以我们将整个内容作为一页
     let pages = vec![PageContent {
         page_number: 1,
-        content: content.clone(),
+        content: content_trimmed.to_string(),
     }];
 
     Ok(ParsedDocument {
         title: title.to_string(),
-        content,
+        content: content_trimmed.to_string(),
         pages,
         file_type: "pdf".to_string(),
     })
@@ -557,6 +591,155 @@ pub fn process_document(file_path: &str, chunk_config: Option<ChunkerConfig>) ->
     let chunks = chunk_document(&doc, &config);
 
     Ok((doc, chunks))
+}
+
+// ==================== 图片提取 ====================
+
+/// 从文档中提取嵌入的图片
+pub fn extract_images(file_path: &str) -> Result<Vec<ExtractedImage>, String> {
+    let path = Path::new(file_path);
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    match extension.as_str() {
+        "xlsx" | "xls" => extract_images_from_xlsx(file_path),
+        "pptx" => extract_images_from_pptx(file_path),
+        "docx" => extract_images_from_docx(file_path),
+        _ => Ok(vec![]), // 其他格式不支持图片提取
+    }
+}
+
+/// 从 Excel (.xlsx) 中提取图片
+fn extract_images_from_xlsx(file_path: &str) -> Result<Vec<ExtractedImage>, String> {
+    use zip::ZipArchive;
+
+    let file = fs::File::open(file_path).map_err(|e| format!("打开文件失败: {}", e))?;
+    let mut archive = ZipArchive::new(file).map_err(|e| format!("解压失败: {}", e))?;
+
+    let mut images: Vec<ExtractedImage> = Vec::new();
+
+    // Excel 图片通常在 xl/media/ 目录下
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| format!("读取压缩包失败: {}", e))?;
+        let name = file.name().to_string();
+
+        if name.starts_with("xl/media/") {
+            if let Some(mime_type) = get_image_mime_type(&name) {
+                let mut buffer = Vec::new();
+                file.read_to_end(&mut buffer).map_err(|e| format!("读取图片失败: {}", e))?;
+
+                let base64_data = BASE64.encode(&buffer);
+                let image_name = name.split('/').last().unwrap_or(&name).to_string();
+
+                images.push(ExtractedImage {
+                    name: image_name,
+                    mime_type,
+                    base64_data,
+                    source_location: "Excel 嵌入图片".to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(images)
+}
+
+/// 从 PowerPoint (.pptx) 中提取图片
+fn extract_images_from_pptx(file_path: &str) -> Result<Vec<ExtractedImage>, String> {
+    use zip::ZipArchive;
+
+    let file = fs::File::open(file_path).map_err(|e| format!("打开文件失败: {}", e))?;
+    let mut archive = ZipArchive::new(file).map_err(|e| format!("解压失败: {}", e))?;
+
+    let mut images: Vec<ExtractedImage> = Vec::new();
+
+    // PPT 图片通常在 ppt/media/ 目录下
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| format!("读取压缩包失败: {}", e))?;
+        let name = file.name().to_string();
+
+        if name.starts_with("ppt/media/") {
+            if let Some(mime_type) = get_image_mime_type(&name) {
+                let mut buffer = Vec::new();
+                file.read_to_end(&mut buffer).map_err(|e| format!("读取图片失败: {}", e))?;
+
+                let base64_data = BASE64.encode(&buffer);
+                let image_name = name.split('/').last().unwrap_or(&name).to_string();
+
+                images.push(ExtractedImage {
+                    name: image_name,
+                    mime_type,
+                    base64_data,
+                    source_location: "PPT 嵌入图片".to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(images)
+}
+
+/// 从 Word (.docx) 中提取图片
+fn extract_images_from_docx(file_path: &str) -> Result<Vec<ExtractedImage>, String> {
+    use zip::ZipArchive;
+
+    let file = fs::File::open(file_path).map_err(|e| format!("打开文件失败: {}", e))?;
+    let mut archive = ZipArchive::new(file).map_err(|e| format!("解压失败: {}", e))?;
+
+    let mut images: Vec<ExtractedImage> = Vec::new();
+
+    // Word 图片通常在 word/media/ 目录下
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| format!("读取压缩包失败: {}", e))?;
+        let name = file.name().to_string();
+
+        if name.starts_with("word/media/") {
+            if let Some(mime_type) = get_image_mime_type(&name) {
+                let mut buffer = Vec::new();
+                file.read_to_end(&mut buffer).map_err(|e| format!("读取图片失败: {}", e))?;
+
+                let base64_data = BASE64.encode(&buffer);
+                let image_name = name.split('/').last().unwrap_or(&name).to_string();
+
+                images.push(ExtractedImage {
+                    name: image_name,
+                    mime_type,
+                    base64_data,
+                    source_location: "Word 嵌入图片".to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(images)
+}
+
+/// 根据文件扩展名获取 MIME 类型
+fn get_image_mime_type(file_name: &str) -> Option<String> {
+    let lower_name = file_name.to_lowercase();
+
+    if lower_name.ends_with(".png") {
+        Some("image/png".to_string())
+    } else if lower_name.ends_with(".jpg") || lower_name.ends_with(".jpeg") {
+        Some("image/jpeg".to_string())
+    } else if lower_name.ends_with(".gif") {
+        Some("image/gif".to_string())
+    } else if lower_name.ends_with(".bmp") {
+        Some("image/bmp".to_string())
+    } else if lower_name.ends_with(".webp") {
+        Some("image/webp".to_string())
+    } else if lower_name.ends_with(".tiff") || lower_name.ends_with(".tif") {
+        Some("image/tiff".to_string())
+    } else if lower_name.ends_with(".emf") {
+        Some("image/x-emf".to_string())
+    } else if lower_name.ends_with(".wmf") {
+        Some("image/x-wmf".to_string())
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
