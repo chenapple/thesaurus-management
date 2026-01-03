@@ -5,7 +5,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import * as api from '../api';
-import { chat, chatStream, buildRAGSystemPrompt, buildStrictModePrompt, buildAnalysisModePrompt, buildDirectChatPrompt, parseSourceReferences, checkApiKeyConfigured, recognizeImage, getTextEmbedding, getTextEmbeddingsBatchParallel } from '../ai-service';
+import { chat, chatStream, buildStrictModePrompt, buildAnalysisModePrompt, buildDirectChatPrompt, parseSourceReferences, checkApiKeyConfigured, recognizeImage, getTextEmbedding, getTextEmbeddingsBatchParallel } from '../ai-service';
 import type { ChatMessage } from '../ai-service';
 import type { KbDocument, KbConversation, KbMessage, KbSearchResult, KbChunk, AIProvider, DependencyStatus, InstallProgress } from '../types';
 import { AI_PROVIDERS } from '../types';
