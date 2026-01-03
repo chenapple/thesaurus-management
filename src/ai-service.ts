@@ -4,6 +4,7 @@
 import { getApiKey } from "./api";
 import type { AIProvider, KbSearchResult } from "./types";
 import { AI_PROVIDERS } from "./types";
+import { parseHttpError, parseError } from "./error-utils";
 
 // ==================== API 配置 ====================
 
@@ -119,8 +120,8 @@ async function chatOpenAICompatible(
   );
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`API 错误: ${error}`);
+    const errorText = await response.text();
+    throw new Error(parseHttpError(response.status, errorText));
   }
 
   const data = await response.json();
@@ -174,8 +175,8 @@ async function chatGemini(
   );
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Gemini API 错误: ${error}`);
+    const errorText = await response.text();
+    throw new Error(parseHttpError(response.status, errorText, 'Gemini'));
   }
 
   const data = await response.json();
@@ -227,8 +228,8 @@ async function* chatStreamOpenAICompatible(
   });
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`API 错误: ${error}`);
+    const errorText = await response.text();
+    throw new Error(parseHttpError(response.status, errorText));
   }
 
   const reader = response.body?.getReader();
@@ -311,8 +312,8 @@ async function* chatStreamGemini(
   });
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Gemini API 错误: ${error}`);
+    const errorText = await response.text();
+    throw new Error(parseHttpError(response.status, errorText, 'Gemini'));
   }
 
   const reader = response.body?.getReader();
@@ -357,28 +358,79 @@ async function* chatStreamGemini(
 
 // ==================== RAG 相关 ====================
 
-// 构建 RAG 系统提示词
-export function buildRAGSystemPrompt(sources: KbSearchResult[]): string {
-  if (sources.length === 0) {
-    return `你是一个企业知识库助手。当前知识库中没有找到相关信息，请根据你的知识尽力回答用户的问题。如果不确定，请明确告知。`;
-  }
-
-  const sourceTexts = sources.map((source, index) => {
+// 格式化来源文本（供多个模式使用）
+function formatSourceTexts(sources: KbSearchResult[]): string {
+  return sources.map((source, index) => {
     const pageInfo = source.page_number ? ` (第${source.page_number}页)` : "";
     return `[来源${index + 1}: ${source.document_title}${pageInfo}]\n${source.content}`;
   }).join("\n\n---\n\n");
+}
 
-  return `你是一个企业知识库助手。请根据以下参考资料回答用户问题。
+// 严格模式：只基于知识库回答，不添加 AI 分析
+export function buildStrictModePrompt(sources: KbSearchResult[]): string {
+  if (sources.length === 0) {
+    return `你是一个企业知识库助手。当前知识库中没有找到相关信息。
+
+请告知用户"知识库中未找到相关内容"，不要自行编造答案。`;
+  }
+
+  const sourceTexts = formatSourceTexts(sources);
+  return `你是一个企业知识库助手。请严格基于以下参考资料回答用户问题。
 
 回答要求：
-1. 优先使用参考资料中的信息回答问题
-2. 如果资料中没有相关信息，可以结合你的知识回答，但请明确告知
-3. 回答时请标注信息来源，如 [来源1]、[来源2]
-4. 保持回答简洁、专业
+1. 只能使用参考资料中的信息回答
+2. 如果资料中没有相关信息，明确告知"知识库中未找到相关内容"
+3. 回答时标注信息来源，如 [来源1]、[来源2]
+4. 不要添加任何资料之外的内容或个人分析
 
 参考资料：
-${sourceTexts}`;
+${sourceTexts}
+
+【重要】当前为严格模式，请忽略对话历史中可能存在的分析性回答风格，严格只使用上述参考资料回答。`;
 }
+
+// 分析模式：知识库 + AI 分析（原 buildRAGSystemPrompt）
+export function buildAnalysisModePrompt(sources: KbSearchResult[]): string {
+  if (sources.length === 0) {
+    return `你是一个专业的企业知识库助手，同时也是一个善于思考和分析的顾问。
+
+当前知识库中没有找到与问题直接相关的信息。请根据你的专业知识回答用户的问题：
+1. 如果你有把握，可以直接回答并提供有价值的分析和建议
+2. 如果不确定，请明确告知，并说明可能需要补充哪些资料到知识库
+3. 始终保持专业、务实的态度`;
+  }
+
+  const sourceTexts = formatSourceTexts(sources);
+  return `你是一个专业的企业知识库助手，同时也是一个善于思考和分析的顾问。
+
+你的回答方式：
+1. **知识库内容**：首先基于参考资料中的信息回答问题，引用时标注 [来源1]、[来源2] 等
+2. **延伸分析**：在知识库内容的基础上，结合你的专业知识进行补充分析、提供建议或延伸思考
+3. **清晰区分**：当内容来自知识库时标注来源；当是你的分析或建议时，可以用"根据我的分析"、"此外建议"等方式说明
+4. **务实有用**：不要机械地复述资料，而是理解用户真正的需求，给出有价值的回答
+
+回答格式建议：
+- 先回答用户的具体问题（基于知识库）
+- 再提供你的分析或补充见解（基于你的思考）
+- 如有必要，给出可行的建议或下一步行动
+
+参考资料：
+${sourceTexts}
+
+【当前模式】分析模式 - 请结合知识库内容与你的专业分析回答。`;
+}
+
+// 直接对话模式：纯 AI 对话，不检索知识库
+export function buildDirectChatPrompt(): string {
+  return `你是一个专业的 AI 助手，可以回答各种问题、提供建议和帮助分析。
+
+请直接与用户对话，不需要引用任何文档来源。根据你的知识和理解，尽力提供有价值的回答。
+
+【当前模式】对话模式 - 直接对话，无需引用知识库内容。`;
+}
+
+// 兼容旧代码：保留原函数名
+export const buildRAGSystemPrompt = buildAnalysisModePrompt;
 
 // 解析回答中的来源引用
 export function parseSourceReferences(
@@ -496,7 +548,7 @@ export async function recognizeImageWithGemini(
       return {
         success: false,
         description: "",
-        error: `API 请求失败: ${response.status} ${response.statusText}`,
+        error: parseHttpError(response.status, errorText, 'Gemini'),
       };
     }
 
@@ -520,7 +572,7 @@ export async function recognizeImageWithGemini(
     return {
       success: false,
       description: "",
-      error: error instanceof Error ? error.message : "未知错误",
+      error: parseError(error, 'Gemini 图片识别'),
     };
   }
 }
@@ -602,7 +654,7 @@ export async function recognizeImageWithQwen(
       return {
         success: false,
         description: "",
-        error: `API 请求失败: ${response.status} ${response.statusText}`,
+        error: parseHttpError(response.status, errorText, '通义千问'),
       };
     }
 
@@ -626,7 +678,7 @@ export async function recognizeImageWithQwen(
     return {
       success: false,
       description: "",
-      error: error instanceof Error ? error.message : "未知错误",
+      error: parseError(error, '通义千问图片识别'),
     };
   }
 }
@@ -715,7 +767,7 @@ async function getEmbeddingFromDeepSeek(
       return {
         success: false,
         embedding: [],
-        error: `DeepSeek API 请求失败: ${response.status} ${response.statusText}`,
+        error: parseHttpError(response.status, errorText, 'DeepSeek'),
       };
     }
 
@@ -739,7 +791,7 @@ async function getEmbeddingFromDeepSeek(
     return {
       success: false,
       embedding: [],
-      error: error instanceof Error ? error.message : "未知错误",
+      error: parseError(error, 'DeepSeek 向量化'),
     };
   }
 }
@@ -781,7 +833,7 @@ async function getEmbeddingFromQwen(
       return {
         success: false,
         embedding: [],
-        error: `千问 API 请求失败: ${response.status} ${response.statusText}`,
+        error: parseHttpError(response.status, errorText, '通义千问'),
       };
     }
 
@@ -805,7 +857,7 @@ async function getEmbeddingFromQwen(
     return {
       success: false,
       embedding: [],
-      error: error instanceof Error ? error.message : "未知错误",
+      error: parseError(error, '通义千问向量化'),
     };
   }
 }

@@ -1,4 +1,5 @@
 import { getApiKey } from "./api";
+import { parseHttpError } from "./error-utils";
 
 // DeepSeek API 配置
 const DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions";
@@ -118,8 +119,8 @@ ${words.join("\n")}
   );
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`DeepSeek API 错误: ${error}`);
+    const errorText = await response.text();
+    throw new Error(parseHttpError(response.status, errorText, 'DeepSeek'));
   }
 
   const data = await response.json();
@@ -136,7 +137,7 @@ ${words.join("\n")}
     return JSON.parse(jsonStr);
   } catch (e) {
     console.error("解析响应失败:", content);
-    throw new Error("解析AI响应失败");
+    throw new Error("AI 响应格式异常，请重试");
   }
 }
 
@@ -309,8 +310,8 @@ ${keywordList}
   );
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`DeepSeek API 错误: ${error}`);
+    const errorText = await response.text();
+    throw new Error(parseHttpError(response.status, errorText, 'DeepSeek'));
   }
 
   const data = await response.json();
@@ -326,7 +327,7 @@ ${keywordList}
     return JSON.parse(jsonStr);
   } catch (e) {
     console.error("解析响应失败:", content);
-    throw new Error("解析AI响应失败");
+    throw new Error("AI 响应格式异常，请重试");
   }
 }
 

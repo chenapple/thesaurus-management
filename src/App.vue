@@ -28,6 +28,8 @@ const KeywordMonitoringTab = defineAsyncComponent(() => import("./components/Key
 const SettingsDialog = defineAsyncComponent(() => import("./components/SettingsDialog.vue"));
 const QuickAddMonitoringDialog = defineAsyncComponent(() => import("./components/QuickAddMonitoringDialog.vue"));
 const KnowledgeBaseTab = defineAsyncComponent(() => import("./components/KnowledgeBaseTab.vue"));
+const SetupWizardDialog = defineAsyncComponent(() => import("./components/SetupWizardDialog.vue"));
+const DashboardTab = defineAsyncComponent(() => import("./components/DashboardTab.vue"));
 
 // ==================== 产品相关状态 ====================
 const products = ref<Product[]>([]);
@@ -168,6 +170,25 @@ const showShortcutsDialog = ref(false);
 // API Key 设置弹窗
 const showApiKeyDialog = ref(false);
 
+// 首次启动配置向导
+const showSetupWizard = ref(false);
+
+// API Key 配置状态（用于功能状态提示）
+const apiKeyStatus = ref({
+  deepseek: false,
+  qwen: false,
+});
+
+// 检查 API Key 配置状态
+async function checkApiKeyStatus() {
+  try {
+    apiKeyStatus.value.deepseek = await api.hasApiKey('deepseek');
+    apiKeyStatus.value.qwen = await api.hasApiKey('qwen');
+  } catch (e) {
+    console.error('检查 API Key 状态失败:', e);
+  }
+}
+
 // 监控设置弹窗
 const showSettingsDialog = ref(false);
 const settingsInitialTab = ref<'monitoring' | 'auto' | 'logs'>('monitoring');
@@ -189,7 +210,7 @@ const updateProgress = ref(0);
 const updateTotal = ref(0);
 
 // 视图模式: 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'knowledge'
-const viewMode = ref<'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'knowledge'>('keywords');
+const viewMode = ref<'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'knowledge'>('dashboard');
 const wordCloudRef = ref<InstanceType<typeof WordCloud> | null>(null);
 const allRootsForCloud = ref<Root[]>([]);
 const loadingCloud = ref(false);
@@ -538,7 +559,7 @@ async function loadAllRootsForCloud() {
 }
 
 // 切换视图模式
-function switchViewMode(mode: 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'knowledge') {
+function switchViewMode(mode: 'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'knowledge') {
   viewMode.value = mode;
   if (mode === 'wordcloud' && allRootsForCloud.value.length === 0) {
     loadAllRootsForCloud();
@@ -547,7 +568,7 @@ function switchViewMode(mode: 'keywords' | 'roots' | 'wordcloud' | 'monitoring' 
   } else if (mode === 'roots' && roots.value.length === 0) {
     loadRoots();
   }
-  // monitoring 和 knowledge 视图由组件自行加载数据
+  // dashboard, monitoring 和 knowledge 视图由组件自行加载数据
 }
 
 // 词云点击处理
@@ -1815,11 +1836,38 @@ async function checkForUpdates() {
   }
 }
 
+// ==================== 首次启动配置向导 ====================
+
+async function checkSetupWizard() {
+  try {
+    // 检查向导是否已完成
+    const completed = await api.hasApiKey('__setup_wizard_completed');
+    if (completed) return;
+
+    // 检查必要的 API Key 是否已配置
+    const hasDeepseek = await api.hasApiKey('deepseek');
+    const hasQwen = await api.hasApiKey('qwen');
+
+    // 如果都没配置，显示向导
+    if (!hasDeepseek && !hasQwen) {
+      showSetupWizard.value = true;
+    }
+  } catch (e) {
+    console.error('检查向导状态失败:', e);
+  }
+}
+
 // ==================== 初始化 ====================
 
 onMounted(async () => {
   // 初始化主题
   initTheme();
+
+  // 检查是否需要显示首次配置向导
+  await checkSetupWizard();
+
+  // 检查 API Key 配置状态（用于功能状态提示）
+  await checkApiKeyStatus();
 
   // 初始化侧边栏宽度
   initSidebarWidth();
@@ -1871,6 +1919,13 @@ onUnmounted(() => {
     <!-- 顶部导航栏 - 视图切换（始终可见，固定在最上方） -->
     <nav class="top-nav">
       <el-button-group class="view-toggle">
+        <el-button
+          :type="viewMode === 'dashboard' ? 'primary' : 'default'"
+          @click="switchViewMode('dashboard')"
+        >
+          <el-icon><DataLine /></el-icon>
+          概览
+        </el-button>
         <el-button
           :type="viewMode === 'keywords' ? 'primary' : 'default'"
           @click="switchViewMode('keywords')"
@@ -1924,8 +1979,8 @@ onUnmounted(() => {
 
     <!-- 主体区域 -->
     <div class="app-body">
-      <!-- 侧边栏 - 产品列表（知识库视图时隐藏） -->
-    <aside v-if="viewMode !== 'knowledge'" class="sidebar" :style="{ width: sidebarWidth + 'px' }">
+      <!-- 侧边栏 - 产品列表（仪表板和知识库视图时隐藏） -->
+    <aside v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard'" class="sidebar" :style="{ width: sidebarWidth + 'px' }">
       <div class="sidebar-header">
         <span class="sidebar-title">产品列表</span>
         <el-button type="primary" size="small" circle @click="openAddProductDialog">
@@ -1990,9 +2045,9 @@ onUnmounted(() => {
       </div>
     </aside>
 
-    <!-- 拖动调整手柄（知识库视图时隐藏） -->
+    <!-- 拖动调整手柄（仪表板和知识库视图时隐藏） -->
     <div
-      v-if="viewMode !== 'knowledge'"
+      v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard'"
       class="resize-handle"
       :class="{ resizing: isResizing }"
       @mousedown="startResize"
@@ -2000,8 +2055,8 @@ onUnmounted(() => {
 
     <!-- 主内容区 -->
     <main class="main-content">
-      <!-- 顶部工具栏（知识库视图时隐藏） -->
-      <header v-if="viewMode !== 'knowledge'" class="header">
+      <!-- 顶部工具栏（仪表板和知识库视图时隐藏） -->
+      <header v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard'" class="header">
         <div class="header-left">
           <h1 class="title">{{ selectedProduct?.name || '请选择产品' }}</h1>
           <div class="header-stats" v-if="selectedProduct">
@@ -2065,16 +2120,23 @@ onUnmounted(() => {
             <el-button size="small" @click="openTrafficDialog">
               流量设置
             </el-button>
-            <el-button
-              size="small"
+            <el-tooltip
               v-if="!classifying"
-              @click="handleKeywordClassify"
+              :disabled="apiKeyStatus.deepseek"
+              content="请先在设置中配置 DeepSeek API Key"
+              placement="bottom"
             >
-              AI分类
-            </el-button>
+              <el-button
+                size="small"
+                :disabled="!apiKeyStatus.deepseek"
+                @click="handleKeywordClassify"
+              >
+                AI分类
+              </el-button>
+            </el-tooltip>
             <el-button
-              size="small"
               v-else
+              size="small"
               type="danger"
               @click="cancelClassify"
             >
@@ -2092,18 +2154,25 @@ onUnmounted(() => {
 
           <!-- 工作流操作 - 词根视图 -->
           <template v-if="viewMode === 'roots'">
-            <el-button
-              size="small"
+            <el-tooltip
               v-if="!analyzing"
-              type="success"
-              @click="handleAIAnalysis"
+              :disabled="apiKeyStatus.deepseek"
+              content="请先在设置中配置 DeepSeek API Key"
+              placement="bottom"
             >
-              <el-icon><MagicStick /></el-icon>
-              智能分析
-            </el-button>
+              <el-button
+                size="small"
+                type="success"
+                :disabled="!apiKeyStatus.deepseek"
+                @click="handleAIAnalysis"
+              >
+                <el-icon><MagicStick /></el-icon>
+                智能分析
+              </el-button>
+            </el-tooltip>
             <el-button
-              size="small"
               v-else
+              size="small"
               type="danger"
               @click="cancelAnalysis"
             >
@@ -2483,6 +2552,14 @@ onUnmounted(() => {
         class="knowledge-base-view"
       />
 
+      <!-- 仪表板视图 -->
+      <DashboardTab
+        v-if="viewMode === 'dashboard'"
+        :selected-product="selectedProduct"
+        class="dashboard-view"
+        @switch-view="switchViewMode"
+      />
+
       <!-- 词根表格 -->
       <div class="table-container" v-if="selectedProduct && viewMode === 'roots'">
         <el-table
@@ -2688,6 +2765,13 @@ onUnmounted(() => {
     <!-- API Key 设置弹窗 -->
     <ApiKeyDialog
       v-model:visible="showApiKeyDialog"
+      @update:visible="(v) => !v && checkApiKeyStatus()"
+    />
+
+    <!-- 首次启动配置向导 -->
+    <SetupWizardDialog
+      v-model:visible="showSetupWizard"
+      @complete="checkApiKeyStatus"
     />
 
     <!-- 监控设置弹窗 -->
@@ -3240,6 +3324,15 @@ body,
 .knowledge-base-view {
   flex: 1;
   overflow: hidden;
+  min-height: 0;
+  margin: 0 16px;
+  background: var(--el-bg-color);
+  border-radius: 8px;
+}
+
+.dashboard-view {
+  flex: 1;
+  overflow-y: auto;
   min-height: 0;
   margin: 0 16px;
   background: var(--el-bg-color);
