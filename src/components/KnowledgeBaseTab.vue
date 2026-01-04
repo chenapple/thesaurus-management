@@ -958,6 +958,19 @@ async function handleDeleteDocument(doc: KbDocument) {
   }
 }
 
+async function handleMoveToCategory(doc: KbDocument, categoryId: number | null) {
+  try {
+    await api.kbUpdateDocumentCategory(doc.id, categoryId);
+    // 更新本地数据
+    doc.category_id = categoryId;
+    const catName = categoryId === null ? '未分类' : categories.value.find(c => c.id === categoryId)?.name || '未知';
+    ElMessage.success(`已移动到 "${catName}"`);
+  } catch (e) {
+    console.error('移动文档失败:', e);
+    ElMessage.error('移动失败');
+  }
+}
+
 function getFileTypeIcon(fileType: string): string {
   const icons: Record<string, string> = {
     pdf: 'DocumentCopy',
@@ -1617,6 +1630,27 @@ onMounted(async () => {
               </div>
             </div>
           </div>
+          <!-- 移动到分类 -->
+          <el-dropdown v-if="categories.length > 0" trigger="click" @command="(catId: number | null) => handleMoveToCategory(doc, catId)">
+            <el-button type="primary" text size="small" @click.stop title="移动到分类">
+              <el-icon><FolderOpened /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item :command="null" :disabled="doc.category_id === null">
+                  未分类
+                </el-dropdown-item>
+                <el-dropdown-item
+                  v-for="cat in categories"
+                  :key="cat.id"
+                  :command="cat.id"
+                  :disabled="doc.category_id === cat.id"
+                >
+                  {{ cat.name }}
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <!-- 重新向量化按钮 -->
           <el-tooltip
             v-if="doc.status === 'completed' && doc.embedding_total && doc.embedding_count !== doc.embedding_total"
@@ -1979,11 +2013,11 @@ onMounted(async () => {
               <el-icon class="stat-icon completed"><CircleCheckFilled /></el-icon>
               {{ uploadQueue.filter(t => t.status === 'completed').length }} 完成
             </span>
-            <span class="stat">
+            <span v-if="uploadQueue.filter(t => ['uploading', 'processing', 'embedding'].includes(t.status)).length > 0" class="stat">
               <el-icon class="stat-icon processing"><Loading /></el-icon>
               {{ uploadQueue.filter(t => ['uploading', 'processing', 'embedding'].includes(t.status)).length }} 处理中
             </span>
-            <span class="stat">
+            <span v-if="uploadQueue.filter(t => t.status === 'pending').length > 0" class="stat">
               <el-icon class="stat-icon pending"><Clock /></el-icon>
               {{ uploadQueue.filter(t => t.status === 'pending').length }} 等待
             </span>

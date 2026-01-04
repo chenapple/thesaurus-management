@@ -761,6 +761,11 @@ fn kb_update_document_status(id: i64, status: String, chunk_count: i64) -> Resul
 }
 
 #[tauri::command]
+fn kb_update_document_category(id: i64, category_id: Option<i64>) -> Result<(), String> {
+    db::kb_update_document_category(id, category_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn kb_get_documents(category_id: Option<i64>) -> Result<Vec<KbDocument>, String> {
     db::kb_get_documents(category_id).map_err(|e| e.to_string())
 }
@@ -1246,6 +1251,7 @@ pub fn run() {
             kb_update_category,
             kb_add_document,
             kb_update_document_status,
+            kb_update_document_category,
             kb_get_documents,
             kb_delete_document,
             kb_add_chunk,

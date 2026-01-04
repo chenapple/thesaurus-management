@@ -1479,15 +1479,14 @@ function getPriorityLabel(priority: string): string {
 }
 
 function formatDateTime(dateStr: string): string {
-  // 数据库存储的是 UTC 时间，转换为北京时间 (UTC+8)
-  // 添加 'Z' 后缀确保解析为 UTC
+  // 数据库存储的是 UTC 时间，添加 'Z' 后缀确保解析为 UTC
+  // 然后使用本地时间方法显示（浏览器会自动转换为用户本地时区）
   const utcDateStr = dateStr.endsWith('Z') ? dateStr : dateStr.replace(' ', 'T') + 'Z';
   const date = new Date(utcDateStr);
-  const beijingTime = new Date(date.getTime() + 8 * 60 * 60 * 1000);
-  const month = (beijingTime.getUTCMonth() + 1).toString().padStart(2, '0');
-  const day = beijingTime.getUTCDate().toString().padStart(2, '0');
-  const hour = beijingTime.getUTCHours().toString().padStart(2, '0');
-  const minute = beijingTime.getUTCMinutes().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const day = date.getDate().toString().padStart(2, '0');
+  const hour = date.getHours().toString().padStart(2, '0');
+  const minute = date.getMinutes().toString().padStart(2, '0');
   return `${month}-${day} ${hour}:${minute}`;
 }
 

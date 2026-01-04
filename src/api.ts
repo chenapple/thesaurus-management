@@ -741,6 +741,16 @@ export async function kbUpdateDocumentStatus(
 }
 
 /**
+ * 更新文档分类
+ */
+export async function kbUpdateDocumentCategory(
+  id: number,
+  categoryId: number | null
+): Promise<void> {
+  return await invoke("kb_update_document_category", { id, categoryId });
+}
+
+/**
  * 获取文档列表
  */
 export async function kbGetDocuments(categoryId?: number): Promise<KbDocument[]> {

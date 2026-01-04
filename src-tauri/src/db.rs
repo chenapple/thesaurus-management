@@ -3446,6 +3446,16 @@ pub fn kb_update_document_status(id: i64, status: String, chunk_count: i64) -> R
     Ok(())
 }
 
+// 更新文档分类
+pub fn kb_update_document_category(id: i64, category_id: Option<i64>) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE kb_documents SET category_id = ?1 WHERE id = ?2",
+        rusqlite::params![category_id, id],
+    )?;
+    Ok(())
+}
+
 // 获取文档列表
 pub fn kb_get_documents(category_id: Option<i64>) -> Result<Vec<KbDocument>> {
     let conn = get_db().lock();

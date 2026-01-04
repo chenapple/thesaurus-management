@@ -339,7 +339,14 @@ onUnmounted(() => {
 // 格式化时间
 function formatDateTime(dateStr: string | null): string {
   if (!dateStr) return '-';
-  const date = new Date(dateStr);
+  // 支持多种格式：RFC3339 (含时区) 或数据库格式 (UTC)
+  let normalizedStr = dateStr;
+  // 如果是数据库格式 "YYYY-MM-DD HH:MM:SS"，转换为 ISO 格式
+  if (dateStr.includes(' ') && !dateStr.includes('T')) {
+    normalizedStr = dateStr.replace(' ', 'T') + 'Z';
+  }
+  const date = new Date(normalizedStr);
+  if (isNaN(date.getTime())) return '-';
   return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
 }
 </script>
@@ -520,7 +527,8 @@ function formatDateTime(dateStr: string | null): string {
             <div class="countdown-label">检测窗口进行中</div>
             <div class="in-progress-indicator">
               <span class="pulse-dot"></span>
-              <span class="progress-text">正在执行检测任务</span>
+              <span class="progress-text" v-if="schedulerStatus?.current_task">{{ schedulerStatus.current_task }}</span>
+              <span class="progress-text idle" v-else>等待下次检测周期</span>
             </div>
           </div>
         </div>
@@ -996,6 +1004,11 @@ function formatDateTime(dateStr: string | null): string {
   font-size: 14px;
   color: var(--el-color-success);
   font-weight: 500;
+}
+
+.progress-text.idle {
+  color: var(--el-text-color-secondary);
+  font-weight: normal;
 }
 
 /* 下半部分两栏 */
