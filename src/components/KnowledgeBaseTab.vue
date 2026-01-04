@@ -120,6 +120,32 @@ function handleImageError(event: Event) {
   img.style.display = 'none';
 }
 
+// 获取消息关联的图片列表（去重）
+function getMessageImages(msg: KbMessage | { role: string; content: string; isStreaming?: boolean }): Array<{path: string, name: string}> {
+  if (!('sources' in msg) || !msg.sources) return [];
+  try {
+    const sources = JSON.parse(msg.sources as string);
+    const seen = new Set<string>();
+    return sources
+      .filter((s: any) => {
+        if (!s.image_path || seen.has(s.image_path)) return false;
+        seen.add(s.image_path);
+        return true;
+      })
+      .map((s: any) => ({
+        path: s.image_path,
+        name: s.document_title || '图片'
+      }));
+  } catch {
+    return [];
+  }
+}
+
+// 获取消息所有图片路径（用于预览列表）
+function getAllImagePaths(msg: KbMessage | { role: string; content: string; isStreaming?: boolean }): string[] {
+  return getMessageImages(msg).map(img => convertFileSrc(img.path));
+}
+
 // 文档预览状态
 const showDocPreview = ref(false);
 const previewDoc = ref<KbDocument | null>(null);
@@ -1728,6 +1754,27 @@ onMounted(async () => {
                 </div>
               </div>
             </div>
+
+            <!-- 关联图片展示（直接显示，不需要展开） -->
+            <div v-if="getMessageImages(msg).length > 0" class="message-images">
+              <div class="images-label">📷 相关图片:</div>
+              <div class="images-grid">
+                <div
+                  v-for="(img, imgIndex) in getMessageImages(msg)"
+                  :key="imgIndex"
+                  class="image-item"
+                >
+                  <el-image
+                    :src="convertFileSrc(img.path)"
+                    :preview-src-list="getAllImagePaths(msg)"
+                    :initial-index="imgIndex"
+                    fit="cover"
+                    :hide-on-click-modal="true"
+                  />
+                  <div class="image-name">{{ img.name }}</div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -2640,6 +2687,53 @@ onMounted(async () => {
   display: block;
   margin-top: 4px;
   color: var(--el-text-color-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 消息关联图片展示 */
+.message-images {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.images-label {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 8px;
+}
+
+.images-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.image-item {
+  width: 120px;
+}
+
+.image-item .el-image {
+  width: 120px;
+  height: 90px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid var(--el-border-color-lighter);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.image-item .el-image:hover {
+  transform: scale(1.02);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+.image-name {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  text-align: center;
+  margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

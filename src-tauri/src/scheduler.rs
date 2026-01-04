@@ -50,22 +50,12 @@ impl Default for SchedulerSettings {
     }
 }
 
-// 站点时区偏移（小时）
-fn get_timezone_offset(country: &str) -> i32 {
-    match country {
-        "US" => -5,  // EST (可能需要考虑夏令时)
-        "UK" => 0,   // GMT/UTC
-        "DE" | "FR" | "IT" | "ES" => 1,  // CET
-        _ => 0,
-    }
-}
-
-// 检查当前时间是否在检测窗口内（按站点当地时间）
-pub fn is_in_check_window(country: &str, settings: &SchedulerSettings) -> bool {
-    let offset_hours = get_timezone_offset(country);
-    let offset = FixedOffset::east_opt(offset_hours * 3600).unwrap();
-    let local_time = Utc::now().with_timezone(&offset);
-    let hour = local_time.hour();
+// 检查当前时间是否在检测窗口内（使用北京时间 UTC+8）
+pub fn is_in_check_window(_country: &str, settings: &SchedulerSettings) -> bool {
+    // 北京时间 UTC+8
+    let beijing_offset = FixedOffset::east_opt(8 * 3600).unwrap();
+    let beijing_time = Utc::now().with_timezone(&beijing_offset);
+    let hour = beijing_time.hour();
 
     // 检查是否在早间窗口
     if hour >= settings.morning_start && hour < settings.morning_end {

@@ -90,7 +90,7 @@
               />
               <span class="time-unit">点</span>
             </div>
-            <div class="form-tip">目标站点当地时间</div>
+            <div class="form-tip">北京时间</div>
           </el-form-item>
 
           <!-- 晚间时间窗口 -->
@@ -115,7 +115,7 @@
               />
               <span class="time-unit">点</span>
             </div>
-            <div class="form-tip">目标站点当地时间</div>
+            <div class="form-tip">北京时间</div>
           </el-form-item>
 
           <el-divider content-position="left">通知设置</el-divider>
