@@ -741,6 +741,16 @@ fn kb_update_category(id: i64, name: String) -> Result<(), String> {
     db::kb_update_category(id, name).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn kb_update_category_color(id: i64, color: String) -> Result<(), String> {
+    db::kb_update_category_color(id, color).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_update_categories_order(ids: Vec<i64>) -> Result<(), String> {
+    db::kb_update_categories_order(ids).map_err(|e| e.to_string())
+}
+
 // 文档管理
 #[tauri::command]
 fn kb_add_document(
@@ -1249,6 +1259,8 @@ pub fn run() {
             kb_get_categories,
             kb_delete_category,
             kb_update_category,
+            kb_update_category_color,
+            kb_update_categories_order,
             kb_add_document,
             kb_update_document_status,
             kb_update_document_category,

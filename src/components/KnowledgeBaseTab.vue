@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { open } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import draggable from 'vuedraggable';
 import * as api from '../api';
 import { chat, chatStream, buildStrictModePrompt, buildAnalysisModePrompt, buildDirectChatPrompt, parseSourceReferences, checkApiKeyConfigured, recognizeImage, getTextEmbedding, getTextEmbeddingsBatchParallel } from '../ai-service';
 import type { ChatMessage } from '../ai-service';
@@ -23,9 +24,26 @@ interface KbCategory {
   id: number;
   name: string;
   parent_id: number | null;
+  sort_order: number;
+  color: string;
+  created_at: string;
   document_count?: number;
 }
 const categories = ref<KbCategory[]>([]);
+
+// 预设颜色
+const CATEGORY_COLORS = [
+  { name: '蓝色', value: '#409EFF' },
+  { name: '绿色', value: '#67C23A' },
+  { name: '橙色', value: '#E6A23C' },
+  { name: '红色', value: '#F56C6C' },
+  { name: '紫色', value: '#9C27B0' },
+  { name: '青色', value: '#00BCD4' },
+  { name: '粉色', value: '#E91E63' },
+  { name: '灰色', value: '#909399' },
+];
+
+// 选中状态
 const selectedCategory = ref<number | null>(null);
 
 // 搜索和排序
@@ -375,6 +393,38 @@ function handleCategoryAction(action: string, cat: KbCategory) {
     handleRenameCategory(cat);
   } else if (action === 'delete') {
     handleDeleteCategory(cat);
+  }
+}
+
+// 更新分类颜色
+async function handleCategoryColor(id: number, color: string) {
+  try {
+    await api.kbUpdateCategoryColor(id, color);
+    await loadCategories();
+  } catch (e) {
+    console.error('更新颜色失败:', e);
+    ElMessage.error('更新颜色失败');
+  }
+}
+
+// 拖拽排序变化（使用 vuedraggable @change 事件）
+async function handleCategoryDragChange(evt: any) {
+  // @change 事件提供 { moved: { element, oldIndex, newIndex } } 结构
+  if (!evt.moved) return;
+
+  const { oldIndex, newIndex } = evt.moved;
+  if (oldIndex === newIndex) return;
+
+  // vuedraggable 已经更新了 categories 数组，直接获取新顺序
+  const newOrder = categories.value.map(c => c.id);
+
+  try {
+    await api.kbUpdateCategoriesOrder(newOrder);
+    ElMessage.success('排序已更新');
+  } catch (e) {
+    console.error('更新排序失败:', e);
+    ElMessage.error('更新排序失败');
+    await loadCategories();
   }
 }
 
@@ -1515,26 +1565,57 @@ onMounted(async () => {
           <span class="category-name">全部文档</span>
           <span class="category-count">{{ getCategoryDocCount(null) }}</span>
         </div>
-        <div
-          v-for="cat in categories"
-          :key="cat.id"
-          class="category-item"
-          :class="{ active: selectedCategory === cat.id }"
-          @click="selectedCategory = cat.id"
+        <draggable
+          v-model="categories"
+          item-key="id"
+          ghost-class="category-ghost"
+          animation="200"
+          :force-fallback="true"
+          :fallback-class="'category-fallback'"
+          @change="handleCategoryDragChange"
         >
-          <el-icon><FolderOpened /></el-icon>
-          <span class="category-name">{{ cat.name }}</span>
-          <span class="category-count">{{ getCategoryDocCount(cat.id) }}</span>
-          <el-dropdown trigger="click" @command="(cmd: string) => handleCategoryAction(cmd, cat)">
-            <el-icon class="category-more" @click.stop><MoreFilled /></el-icon>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="rename">重命名</el-dropdown-item>
-                <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </div>
+          <template #item="{ element: cat }">
+            <div
+              class="category-item"
+              :class="{ active: selectedCategory === cat.id }"
+              @click="selectedCategory = cat.id"
+            >
+              <el-icon class="drag-handle"><Rank /></el-icon>
+              <el-icon class="folder-filled" :style="{ '--folder-color': cat.color }"><FolderOpened /></el-icon>
+              <span class="category-name">{{ cat.name }}</span>
+              <span class="category-count">{{ getCategoryDocCount(cat.id) }}</span>
+              <el-dropdown trigger="click" @command="(cmd: string) => handleCategoryAction(cmd, cat)">
+                <el-icon class="category-more" @click.stop><MoreFilled /></el-icon>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="rename">重命名</el-dropdown-item>
+                    <el-dropdown-item divided>
+                      <el-dropdown trigger="hover" placement="right-start" @command="(color: string) => handleCategoryColor(cat.id, color)">
+                        <span class="color-menu-trigger">设置颜色 <el-icon style="margin-left: 4px"><ArrowRight /></el-icon></span>
+                        <template #dropdown>
+                          <el-dropdown-menu>
+                            <div class="color-palette">
+                              <span
+                                v-for="colorOpt in CATEGORY_COLORS"
+                                :key="colorOpt.value"
+                                class="color-dot"
+                                :style="{ backgroundColor: colorOpt.value }"
+                                :class="{ active: cat.color === colorOpt.value }"
+                                :title="colorOpt.name"
+                                @click.stop="handleCategoryColor(cat.id, colorOpt.value)"
+                              ></span>
+                            </div>
+                          </el-dropdown-menu>
+                        </template>
+                      </el-dropdown>
+                    </el-dropdown-item>
+                    <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+          </template>
+        </draggable>
         <div class="add-category" @click="handleAddCategory">
           <el-icon><Plus /></el-icon>
           <span>新建分类</span>
@@ -1646,7 +1727,10 @@ onMounted(async () => {
                   :command="cat.id"
                   :disabled="doc.category_id === cat.id"
                 >
-                  {{ cat.name }}
+                  <span class="category-dropdown-item">
+                    <span class="category-color-dot" :style="{ backgroundColor: cat.color }"></span>
+                    {{ cat.name }}
+                  </span>
                 </el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -2058,8 +2142,8 @@ onMounted(async () => {
                 v-if="['uploading', 'processing', 'embedding'].includes(task.status)"
                 type="circle"
                 :percentage="task.progress"
-                :width="36"
-                :stroke-width="3"
+                :width="50"
+                :stroke-width="4"
               />
               <!-- 完成图标 -->
               <el-icon v-else-if="task.status === 'completed'" class="status-icon success">
@@ -2278,6 +2362,87 @@ onMounted(async () => {
   color: var(--el-color-primary);
   border-color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
+}
+
+/* 颜色选择面板 */
+.color-menu-trigger {
+  display: flex;
+  align-items: center;
+}
+
+.color-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px;
+  width: 136px;
+}
+
+.color-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: all 0.2s;
+}
+
+.color-dot:hover {
+  transform: scale(1.1);
+}
+
+.color-dot.active {
+  border-color: var(--el-color-primary);
+  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.3);
+}
+
+/* 拖拽手柄 */
+.drag-handle {
+  cursor: grab;
+  color: var(--el-text-color-placeholder);
+  opacity: 0;
+  transition: opacity 0.2s;
+  margin-right: 4px;
+}
+
+.category-item:hover .drag-handle {
+  opacity: 1;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+/* vuedraggable 拖拽中的幽灵效果 */
+.category-ghost {
+  opacity: 0.5;
+  background: var(--el-color-primary-light-9);
+  border: 2px dashed var(--el-color-primary);
+}
+
+/* 实心文件夹图标 */
+.folder-filled {
+  color: var(--folder-color, #409EFF);
+}
+
+.folder-filled svg,
+.folder-filled svg path {
+  fill: var(--folder-color, #409EFF) !important;
+  stroke: none !important;
+}
+
+/* 分类下拉菜单项 */
+.category-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.category-color-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 /* 文档列表区（中间区域） */

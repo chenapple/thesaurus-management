@@ -3183,6 +3183,8 @@ pub struct KbCategory {
     pub id: i64,
     pub name: String,
     pub parent_id: Option<i64>,
+    pub sort_order: i64,
+    pub color: String,
     pub created_at: String,
 }
 
@@ -3366,6 +3368,17 @@ pub fn init_knowledge_base_tables(conn: &Connection) -> Result<()> {
         println!("[DB Migration] Added image_path column to kb_chunks table");
     }
 
+    // 数据库迁移：为 kb_categories 表添加 sort_order 和 color 字段
+    let has_sort_order_column: bool = conn
+        .prepare("SELECT sort_order FROM kb_categories LIMIT 1")
+        .is_ok();
+
+    if !has_sort_order_column {
+        conn.execute("ALTER TABLE kb_categories ADD COLUMN sort_order INTEGER DEFAULT 0", [])?;
+        conn.execute("ALTER TABLE kb_categories ADD COLUMN color TEXT DEFAULT '#409EFF'", [])?;
+        println!("[DB Migration] Added sort_order and color columns to kb_categories table");
+    }
+
     Ok(())
 }
 
@@ -3374,9 +3387,18 @@ pub fn init_knowledge_base_tables(conn: &Connection) -> Result<()> {
 // 创建知识库分类
 pub fn kb_create_category(name: String, parent_id: Option<i64>) -> Result<i64> {
     let conn = get_db().lock();
+    // 获取当前最大的 sort_order
+    let max_order: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), -1) FROM kb_categories",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(-1);
+
     conn.execute(
-        "INSERT INTO kb_categories (name, parent_id) VALUES (?1, ?2)",
-        rusqlite::params![name, parent_id],
+        "INSERT INTO kb_categories (name, parent_id, sort_order, color) VALUES (?1, ?2, ?3, '#409EFF')",
+        rusqlite::params![name, parent_id, max_order + 1],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -3385,7 +3407,7 @@ pub fn kb_create_category(name: String, parent_id: Option<i64>) -> Result<i64> {
 pub fn kb_get_categories() -> Result<Vec<KbCategory>> {
     let conn = get_db().lock();
     let mut stmt = conn.prepare(
-        "SELECT id, name, parent_id, created_at FROM kb_categories ORDER BY name"
+        "SELECT id, name, parent_id, COALESCE(sort_order, 0), COALESCE(color, '#409EFF'), created_at FROM kb_categories ORDER BY sort_order ASC, id ASC"
     )?;
 
     let categories = stmt.query_map([], |row| {
@@ -3393,7 +3415,9 @@ pub fn kb_get_categories() -> Result<Vec<KbCategory>> {
             id: row.get(0)?,
             name: row.get(1)?,
             parent_id: row.get(2)?,
-            created_at: row.get(3)?,
+            sort_order: row.get(3)?,
+            color: row.get(4)?,
+            created_at: row.get(5)?,
         })
     })?
     .filter_map(|r| r.ok())
@@ -3413,6 +3437,25 @@ pub fn kb_delete_category(id: i64) -> Result<()> {
 pub fn kb_update_category(id: i64, name: String) -> Result<()> {
     let conn = get_db().lock();
     conn.execute("UPDATE kb_categories SET name = ?1 WHERE id = ?2", rusqlite::params![name, id])?;
+    Ok(())
+}
+
+// 更新知识库分类颜色
+pub fn kb_update_category_color(id: i64, color: String) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("UPDATE kb_categories SET color = ?1 WHERE id = ?2", rusqlite::params![color, id])?;
+    Ok(())
+}
+
+// 批量更新知识库分类排序
+pub fn kb_update_categories_order(ids: Vec<i64>) -> Result<()> {
+    let conn = get_db().lock();
+    for (index, id) in ids.iter().enumerate() {
+        conn.execute(
+            "UPDATE kb_categories SET sort_order = ?1 WHERE id = ?2",
+            rusqlite::params![index as i64, id],
+        )?;
+    }
     Ok(())
 }
 

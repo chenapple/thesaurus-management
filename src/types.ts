@@ -373,6 +373,8 @@ export interface KbCategory {
   id: number;
   name: string;
   parent_id: number | null;
+  sort_order: number;
+  color: string;
   created_at: string;
 }
 

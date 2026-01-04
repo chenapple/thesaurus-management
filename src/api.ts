@@ -709,6 +709,20 @@ export async function kbUpdateCategory(id: number, name: string): Promise<void> 
 }
 
 /**
+ * 更新知识库分类颜色
+ */
+export async function kbUpdateCategoryColor(id: number, color: string): Promise<void> {
+  return await invoke("kb_update_category_color", { id, color });
+}
+
+/**
+ * 批量更新知识库分类排序
+ */
+export async function kbUpdateCategoriesOrder(ids: number[]): Promise<void> {
+  return await invoke("kb_update_categories_order", { ids });
+}
+
+/**
  * 添加文档
  */
 export async function kbAddDocument(

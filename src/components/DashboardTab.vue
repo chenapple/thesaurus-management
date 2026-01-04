@@ -850,7 +850,8 @@ function formatDateTime(dateStr: string | null): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 150px;
+  flex: 1;
+  min-width: 0;
 }
 
 .change-value {
