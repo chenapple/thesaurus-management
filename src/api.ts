@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { BackupInfo, Category, KeywordData, KeywordMonitoring, MonitoringSparkline, MonitoringStats, Product, RankingHistory, RankingResult, RankingSnapshot, Root, TrafficLevelStats, WorkflowStatus } from "./types";
+import type { BackupInfo, Category, KeywordData, KeywordMonitoring, MonitoringSparkline, MonitoringStats, Product, RankingHistory, RankingResult, RankingSnapshot, Root, ScAnalysis, TrafficLevelStats, WorkflowStatus } from "./types";
 
 // ==================== 产品管理 ====================
 
@@ -967,4 +967,293 @@ export async function kbAddMessage(
  */
 export async function kbGetMessages(conversationId: number): Promise<KbMessage[]> {
   return await invoke("kb_get_messages", { conversationId });
+}
+
+// ==================== 智能文案 ====================
+
+import type { ScProject } from "./types";
+
+/**
+ * 创建智能文案项目
+ */
+export async function scCreateProject(
+  name: string,
+  scenarioType: 'new' | 'optimize',
+  marketplace: string,
+  myAsin?: string,
+  productId?: number
+): Promise<number> {
+  return await invoke("sc_create_project", {
+    name,
+    scenarioType,
+    marketplace,
+    myAsin: myAsin || null,
+    productId: productId || null,
+  });
+}
+
+/**
+ * 获取智能文案项目列表
+ */
+export async function scGetProjects(scenarioType?: 'new' | 'optimize'): Promise<ScProject[]> {
+  return await invoke("sc_get_projects", {
+    scenarioType: scenarioType || null,
+  });
+}
+
+/**
+ * 获取单个智能文案项目
+ */
+export async function scGetProject(id: number): Promise<ScProject | null> {
+  return await invoke("sc_get_project", { id });
+}
+
+/**
+ * 更新智能文案项目基本信息
+ */
+export async function scUpdateProject(
+  id: number,
+  name: string,
+  marketplace: string,
+  myAsin?: string
+): Promise<void> {
+  return await invoke("sc_update_project", {
+    id,
+    name,
+    marketplace,
+    myAsin: myAsin || null,
+  });
+}
+
+/**
+ * 更新智能文案项目状态
+ */
+export async function scUpdateProjectStatus(
+  id: number,
+  status: 'draft' | 'collecting' | 'analyzing' | 'completed'
+): Promise<void> {
+  return await invoke("sc_update_project_status", { id, status });
+}
+
+/**
+ * 更新项目的"我的产品信息"
+ */
+export async function scUpdateMyProductInfo(
+  projectId: number,
+  info: import("./types").MyProductInfo | null
+): Promise<void> {
+  return await invoke("sc_update_my_product_info", {
+    id: projectId,
+    myProductInfo: info ? JSON.stringify(info) : null,
+  });
+}
+
+/**
+ * 更新用户的 Listing 信息（老品优化时使用）
+ */
+export async function scUpdateMyListing(
+  projectId: number,
+  myTitle: string | null,
+  myBullets: string[] | null,
+  myDescription: string | null
+): Promise<void> {
+  return await invoke("sc_update_my_listing", {
+    id: projectId,
+    myTitle,
+    myBullets: myBullets ? JSON.stringify(myBullets) : null,
+    myDescription,
+  });
+}
+
+/**
+ * 删除智能文案项目
+ */
+export async function scDeleteProject(id: number): Promise<void> {
+  return await invoke("sc_delete_project", { id });
+}
+
+// ==================== 竞品管理 ====================
+
+import type { ScCompetitor } from "./types";
+
+/**
+ * 添加竞品（仅 ASIN）
+ */
+export async function scAddCompetitor(
+  projectId: number,
+  asin: string,
+  competitorType: 'top' | 'direct' | 'rising' = 'direct'
+): Promise<number> {
+  return await invoke("sc_add_competitor", {
+    projectId,
+    asin,
+    competitorType,
+  });
+}
+
+/**
+ * 获取项目的竞品列表
+ */
+export async function scGetCompetitors(projectId: number): Promise<ScCompetitor[]> {
+  return await invoke("sc_get_competitors", { projectId });
+}
+
+/**
+ * 更新竞品信息（爬取后）
+ */
+export async function scUpdateCompetitorInfo(
+  id: number,
+  info: {
+    title?: string;
+    price?: string;
+    rating?: string;
+    reviewCount?: number;
+    bsrRank?: string;
+    bullets?: string;
+    description?: string;
+  }
+): Promise<void> {
+  return await invoke("sc_update_competitor_info", {
+    id,
+    title: info.title || null,
+    price: info.price || null,
+    rating: info.rating || null,
+    reviewCount: info.reviewCount || null,
+    bsrRank: info.bsrRank || null,
+    bullets: info.bullets || null,
+    description: info.description || null,
+  });
+}
+
+/**
+ * 删除竞品
+ */
+export async function scDeleteCompetitor(id: number): Promise<void> {
+  return await invoke("sc_delete_competitor", { id });
+}
+
+/**
+ * 更新竞品类型
+ */
+export async function scUpdateCompetitorType(
+  id: number,
+  competitorType: 'top' | 'direct' | 'rising'
+): Promise<void> {
+  return await invoke("sc_update_competitor_type", { id, competitorType });
+}
+
+// Listing 爬取结果
+export interface ListingResult {
+  asin: string;
+  country: string;
+  title: string | null;
+  price: string | null;
+  rating: string | null;
+  review_count: number | null;
+  bsr_rank: string | null;
+  bullets: string[];
+  description: string | null;
+  fetched_at: string;
+  error: string | null;
+}
+
+/**
+ * 爬取竞品 Listing 信息
+ */
+export async function scFetchCompetitorListing(
+  id: number,
+  asin: string,
+  country: string
+): Promise<ListingResult> {
+  return await invoke("sc_fetch_competitor_listing", { id, asin, country });
+}
+
+/**
+ * 批量爬取竞品 Listing 信息（复用同一个浏览器，效率更高）
+ */
+export async function scFetchCompetitorsBatch(
+  items: Array<[number, string, string]>  // [id, asin, country]
+): Promise<Array<[number, ListingResult]>> {
+  return await invoke("sc_fetch_competitors_batch", { items });
+}
+
+// ==================== 评论管理 ====================
+
+import type { ScReview, ScReviewSummary, ReviewResult } from "./types";
+
+/**
+ * 爬取竞品评论
+ */
+export async function scFetchCompetitorReviews(
+  id: number,
+  asin: string,
+  country: string
+): Promise<ReviewResult> {
+  return await invoke("sc_fetch_competitor_reviews", { id, asin, country });
+}
+
+/**
+ * 获取竞品的评论列表
+ */
+export async function scGetCompetitorReviews(competitorId: number): Promise<ScReview[]> {
+  return await invoke("sc_get_competitor_reviews", { competitorId });
+}
+
+/**
+ * 获取评论统计摘要
+ */
+export async function scGetReviewsSummary(competitorId: number): Promise<ScReviewSummary> {
+  return await invoke("sc_get_reviews_summary", { competitorId });
+}
+
+// ==================== AI 分析 ====================
+
+/**
+ * 保存分析结果
+ */
+export async function scSaveAnalysis(
+  projectId: number,
+  analysisType: 'review_insights' | 'listing_analysis' | 'optimization',
+  resultJson: string,
+  modelProvider?: string,
+  modelName?: string
+): Promise<number> {
+  return await invoke("sc_save_analysis", {
+    projectId,
+    analysisType,
+    resultJson,
+    modelProvider: modelProvider || null,
+    modelName: modelName || null,
+  });
+}
+
+/**
+ * 获取指定类型的分析结果
+ */
+export async function scGetAnalysis(
+  projectId: number,
+  analysisType: 'review_insights' | 'listing_analysis' | 'optimization'
+): Promise<ScAnalysis | null> {
+  return await invoke("sc_get_analysis", { projectId, analysisType });
+}
+
+/**
+ * 获取项目的所有分析结果
+ */
+export async function scGetAllAnalysis(projectId: number): Promise<ScAnalysis[]> {
+  return await invoke("sc_get_all_analysis", { projectId });
+}
+
+/**
+ * 删除项目的所有分析结果
+ */
+export async function scDeleteAllAnalysis(projectId: number): Promise<void> {
+  return await invoke("sc_delete_all_analysis", { projectId });
+}
+
+/**
+ * 获取项目关联的关键词数据（Top N 高搜索量）
+ */
+export async function scGetProjectKeywords(projectId: number, limit: number = 100): Promise<KeywordData[]> {
+  return await invoke("sc_get_project_keywords", { projectId, limit });
 }

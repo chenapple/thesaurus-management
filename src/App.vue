@@ -30,6 +30,7 @@ const QuickAddMonitoringDialog = defineAsyncComponent(() => import("./components
 const KnowledgeBaseTab = defineAsyncComponent(() => import("./components/KnowledgeBaseTab.vue"));
 const SetupWizardDialog = defineAsyncComponent(() => import("./components/SetupWizardDialog.vue"));
 const DashboardTab = defineAsyncComponent(() => import("./components/DashboardTab.vue"));
+const SmartCopyTab = defineAsyncComponent(() => import("./components/SmartCopyTab.vue"));
 
 // ==================== 产品相关状态 ====================
 const products = ref<Product[]>([]);
@@ -209,8 +210,8 @@ const updateDownloading = ref(false);
 const updateProgress = ref(0);
 const updateTotal = ref(0);
 
-// 视图模式: 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'knowledge'
-const viewMode = ref<'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'knowledge'>('dashboard');
+// 视图模式: 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge'
+const viewMode = ref<'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge'>('dashboard');
 const wordCloudRef = ref<InstanceType<typeof WordCloud> | null>(null);
 const allRootsForCloud = ref<Root[]>([]);
 const loadingCloud = ref(false);
@@ -559,7 +560,7 @@ async function loadAllRootsForCloud() {
 }
 
 // 切换视图模式
-function switchViewMode(mode: 'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'knowledge') {
+function switchViewMode(mode: 'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge') {
   viewMode.value = mode;
   if (mode === 'wordcloud' && allRootsForCloud.value.length === 0) {
     loadAllRootsForCloud();
@@ -1961,6 +1962,13 @@ onUnmounted(() => {
           排名监控
         </el-button>
         <el-button
+          :type="viewMode === 'smartcopy' ? 'primary' : 'default'"
+          @click="switchViewMode('smartcopy')"
+        >
+          <el-icon><EditPen /></el-icon>
+          智能文案
+        </el-button>
+        <el-button
           :type="viewMode === 'knowledge' ? 'primary' : 'default'"
           @click="switchViewMode('knowledge')"
         >
@@ -1986,7 +1994,7 @@ onUnmounted(() => {
     <!-- 主体区域 -->
     <div class="app-body">
       <!-- 侧边栏 - 产品列表（仪表板和知识库视图时隐藏） -->
-    <aside v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard'" class="sidebar" :style="{ width: sidebarWidth + 'px' }">
+    <aside v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy'" class="sidebar" :style="{ width: sidebarWidth + 'px' }">
       <div class="sidebar-header">
         <span class="sidebar-title">产品列表</span>
         <el-button type="primary" size="small" circle @click="openAddProductDialog">
@@ -2051,9 +2059,9 @@ onUnmounted(() => {
       </div>
     </aside>
 
-    <!-- 拖动调整手柄（仪表板和知识库视图时隐藏） -->
+    <!-- 拖动调整手柄（仪表板、知识库、智能文案视图时隐藏） -->
     <div
-      v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard'"
+      v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy'"
       class="resize-handle"
       :class="{ resizing: isResizing }"
       @mousedown="startResize"
@@ -2061,8 +2069,8 @@ onUnmounted(() => {
 
     <!-- 主内容区 -->
     <main class="main-content">
-      <!-- 顶部工具栏（仪表板和知识库视图时隐藏） -->
-      <header v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard'" class="header">
+      <!-- 顶部工具栏（仪表板、知识库、智能文案视图时隐藏） -->
+      <header v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy'" class="header">
         <div class="header-left">
           <h1 class="title">{{ selectedProduct?.name || '请选择产品' }}</h1>
           <div class="header-stats" v-if="selectedProduct">
@@ -2550,6 +2558,12 @@ onUnmounted(() => {
       <KeywordMonitoringTab
         v-if="selectedProduct && viewMode === 'monitoring'"
         :product-id="selectedProduct.id"
+      />
+
+      <!-- 智能文案视图 -->
+      <SmartCopyTab
+        v-if="viewMode === 'smartcopy'"
+        class="smart-copy-view"
       />
 
       <!-- 知识库视图 -->
@@ -3330,6 +3344,15 @@ body,
 .knowledge-base-view {
   flex: 1;
   overflow: hidden;
+  min-height: 0;
+  margin: 0 16px;
+  background: var(--el-bg-color);
+  border-radius: 8px;
+}
+
+.smart-copy-view {
+  flex: 1;
+  overflow-y: auto;
   min-height: 0;
   margin: 0 16px;
   background: var(--el-bg-color);

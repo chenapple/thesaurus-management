@@ -1070,12 +1070,43 @@ async def search_country(p, country: str, keywords_dict: dict, max_pages: int, h
         except:
             pass
 
-        # 设置邮编
-        address_success, address_text = await set_delivery_address(page, country, config['zipcode'], max_retries=5)
-        if address_success:
-            print(f"[DEBUG] {country}: 邮编设置成功: {address_text}", file=sys.stderr)
-        else:
-            print(f"[DEBUG] {country}: 邮编设置可能未成功: {address_text}", file=sys.stderr)
+        # 设置邮编 - 必须成功才能继续
+        address_success = False
+        address_text = ""
+        max_address_attempts = 3  # 最多尝试3轮（每轮内部还有5次重试）
+
+        for addr_attempt in range(max_address_attempts):
+            address_success, address_text = await set_delivery_address(page, country, config['zipcode'], max_retries=5)
+            if address_success:
+                print(f"[DEBUG] {country}: 邮编设置成功: {address_text}", file=sys.stderr)
+                break
+            else:
+                print(f"[DEBUG] {country}: 邮编设置失败 (第{addr_attempt + 1}轮)，刷新页面重试...", file=sys.stderr)
+                if addr_attempt < max_address_attempts - 1:
+                    await page.reload(wait_until="domcontentloaded", timeout=30000)
+                    await page.wait_for_timeout(2000)
+                    # 处理Cookie弹窗（刷新后可能再次出现）
+                    try:
+                        cookie_btn = page.locator('#sp-cc-accept')
+                        if await cookie_btn.is_visible(timeout=2000):
+                            await cookie_btn.click()
+                            await page.wait_for_timeout(1000)
+                    except:
+                        pass
+
+        if not address_success:
+            print(f"[DEBUG] {country}: 邮编设置多次失败，跳过该国家的检测", file=sys.stderr)
+            # 返回所有目标的错误结果
+            for kw_lower, kw_data in keywords_dict.items():
+                for monitoring_id, asin in kw_data['targets']:
+                    country_results.append((monitoring_id, {
+                        "keyword": kw_data['original_keyword'],
+                        "target_asin": asin,
+                        "country": country,
+                        "error": f"邮编设置失败，无法检测 {country} 站"
+                    }))
+            await browser.close()
+            return country_results
 
         # 处理这个国家的所有唯一关键词
         kw_idx = 0

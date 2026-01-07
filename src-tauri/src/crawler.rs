@@ -377,6 +377,400 @@ async fn call_python_crawler_batch(
     .map_err(|e| format!("任务执行失败: {}", e))?
 }
 
+// ==================== Listing 爬虫 ====================
+
+// Listing 爬取结果
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ListingResult {
+    pub asin: String,
+    pub country: String,
+    pub title: Option<String>,
+    pub price: Option<String>,
+    pub rating: Option<String>,
+    pub review_count: Option<i64>,
+    pub bsr_rank: Option<String>,
+    pub image_url: Option<String>,
+    pub bullets: Vec<String>,
+    pub description: Option<String>,
+    pub fetched_at: String,
+    pub error: Option<String>,
+}
+
+// 获取 Listing 爬虫脚本路径
+fn get_listing_script_path() -> Result<std::path::PathBuf, String> {
+    let possible_paths = vec![
+        std::env::current_dir()
+            .map(|p| p.join("scripts").join("amazon_listing_crawler.py"))
+            .ok(),
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .map(|p| p.join("scripts").join("amazon_listing_crawler.py")),
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .map(|p| p.join("Resources").join("scripts").join("amazon_listing_crawler.py")),
+        Some(std::path::PathBuf::from("src-tauri/scripts/amazon_listing_crawler.py")),
+    ];
+
+    for path in possible_paths.into_iter().flatten() {
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    Err("找不到 Python 爬虫脚本 amazon_listing_crawler.py".to_string())
+}
+
+// 爬取单个 ASIN 的 Listing 信息
+pub async fn fetch_listing_info(asin: String, country: String) -> ListingResult {
+    tokio::task::spawn_blocking(move || {
+        match call_listing_crawler(&asin, &country) {
+            Ok(result) => result,
+            Err(e) => ListingResult {
+                asin,
+                country,
+                title: None,
+                price: None,
+                rating: None,
+                review_count: None,
+                bsr_rank: None,
+                image_url: None,
+                bullets: Vec::new(),
+                description: None,
+                fetched_at: chrono::Utc::now().to_rfc3339(),
+                error: Some(e),
+            },
+        }
+    })
+    .await
+    .unwrap_or_else(|e| ListingResult {
+        asin: String::new(),
+        country: String::new(),
+        title: None,
+        price: None,
+        rating: None,
+        review_count: None,
+        bsr_rank: None,
+        image_url: None,
+        bullets: Vec::new(),
+        description: None,
+        fetched_at: chrono::Utc::now().to_rfc3339(),
+        error: Some(format!("任务执行失败: {}", e)),
+    })
+}
+
+// 调用 Python Listing 爬虫
+fn call_listing_crawler(asin: &str, country: &str) -> Result<ListingResult, String> {
+    let python_cmd = check_python()?;
+    check_dependencies(&python_cmd)?;
+    let script_path = get_listing_script_path()?;
+
+    let mut cmd = Command::new(&python_cmd);
+    cmd.arg(&script_path)
+        .arg(asin)
+        .arg(country)
+        .arg("false"); // 有头模式，更稳定
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = cmd.output()
+        .map_err(|e| format!("执行 Python 脚本失败: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Python 脚本执行错误: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    serde_json::from_str(&stdout).map_err(|e| {
+        format!(
+            "解析 Python 输出失败: {}. 输出: {}",
+            e,
+            stdout.chars().take(500).collect::<String>()
+        )
+    })
+}
+
+// 批量爬取进度消息
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+enum ListingBatchMessage {
+    #[serde(rename = "progress")]
+    Progress {
+        competitor_id: i64,
+        result: ListingResult,
+    },
+    #[serde(rename = "complete")]
+    Complete {
+        total: i64,
+    },
+}
+
+// 批量爬取 Listing 信息
+pub async fn fetch_listings_batch(
+    items: Vec<(i64, String, String)>, // (competitor_id, asin, country)
+    progress_callback: impl Fn(i64, i64, String) + Send + 'static,
+) -> Vec<(i64, ListingResult)> {
+    let total = items.len() as i64;
+
+    if total == 0 {
+        return Vec::new();
+    }
+
+    match call_listing_crawler_batch(items.clone(), total, progress_callback).await {
+        Ok(results) => results,
+        Err(e) => {
+            eprintln!("[ListingBatch] 批量爬取失败: {}", e);
+            items.into_iter().map(|(id, asin, country)| {
+                (id, ListingResult {
+                    asin,
+                    country,
+                    title: None,
+                    price: None,
+                    rating: None,
+                    review_count: None,
+                    bsr_rank: None,
+                    image_url: None,
+                    bullets: Vec::new(),
+                    description: None,
+                    fetched_at: chrono::Utc::now().to_rfc3339(),
+                    error: Some(e.clone()),
+                })
+            }).collect()
+        }
+    }
+}
+
+// 调用 Python 脚本批量爬取 Listing
+async fn call_listing_crawler_batch(
+    items: Vec<(i64, String, String)>,
+    total: i64,
+    progress_callback: impl Fn(i64, i64, String) + Send + 'static,
+) -> Result<Vec<(i64, ListingResult)>, String> {
+    let python_cmd = check_python()?;
+    check_dependencies(&python_cmd)?;
+    let script_path = get_listing_script_path()?;
+
+    let input_data: Vec<(i64, &str, &str)> = items.iter()
+        .map(|(id, asin, country)| (*id, asin.as_str(), country.as_str()))
+        .collect();
+    let input_json = serde_json::to_string(&input_data)
+        .map_err(|e| format!("序列化输入数据失败: {}", e))?;
+
+    tokio::task::spawn_blocking(move || {
+        let mut cmd = Command::new(&python_cmd);
+        cmd.arg(&script_path)
+            .arg("--batch")
+            .arg("false")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        let mut child = cmd.spawn()
+            .map_err(|e| format!("启动 Python 脚本失败: {}", e))?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(input_json.as_bytes())
+                .map_err(|e| format!("写入 stdin 失败: {}", e))?;
+        }
+
+        let stdout = child.stdout.take()
+            .ok_or_else(|| "无法获取 stdout".to_string())?;
+        let reader = BufReader::new(stdout);
+
+        let mut results: Vec<(i64, ListingResult)> = Vec::new();
+        let mut completed_count = 0i64;
+
+        for line in reader.lines() {
+            let line = line.map_err(|e| format!("读取输出失败: {}", e))?;
+            let line = line.trim();
+
+            if line.is_empty() {
+                continue;
+            }
+
+            match serde_json::from_str::<ListingBatchMessage>(line) {
+                Ok(ListingBatchMessage::Progress { competitor_id, result }) => {
+                    completed_count += 1;
+                    let title_preview = result.title.as_ref()
+                        .map(|t| t.chars().take(30).collect::<String>())
+                        .unwrap_or_else(|| result.asin.clone());
+                    progress_callback(completed_count, total, format!("已获取: {}", title_preview));
+                    results.push((competitor_id, result));
+                }
+                Ok(ListingBatchMessage::Complete { total: _ }) => {
+                    break;
+                }
+                Err(_) => {
+                    eprintln!("[ListingBatch] 忽略非 JSON 输出: {}", line);
+                }
+            }
+        }
+
+        let status = child.wait()
+            .map_err(|e| format!("等待进程结束失败: {}", e))?;
+
+        if !status.success() {
+            eprintln!("[ListingBatch] Python 脚本非正常退出: {:?}", status);
+        }
+
+        Ok(results)
+    })
+    .await
+    .map_err(|e| format!("任务执行失败: {}", e))?
+}
+
+// ==================== 评论爬虫 ====================
+
+// 单条评论数据
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ReviewData {
+    pub star_rating: i32,
+    pub review_text: String,
+    pub review_title: Option<String>,
+    pub review_date: Option<String>,
+    pub helpful_votes: i32,
+}
+
+// 评论爬取结果
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ReviewResult {
+    pub asin: String,
+    pub country: String,
+    pub reviews: Vec<ReviewData>,
+    pub summary: ReviewSummary,
+    pub fetched_at: String,
+    pub error: Option<String>,
+}
+
+// 评论统计摘要
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ReviewSummary {
+    pub total: i64,
+    pub by_star: std::collections::HashMap<String, i64>,
+}
+
+// 获取评论爬虫脚本路径
+fn get_review_script_path() -> Result<std::path::PathBuf, String> {
+    let possible_paths = vec![
+        std::env::current_dir()
+            .map(|p| p.join("scripts").join("amazon_review_crawler.py"))
+            .ok(),
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .map(|p| p.join("scripts").join("amazon_review_crawler.py")),
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .map(|p| p.join("Resources").join("scripts").join("amazon_review_crawler.py")),
+        Some(std::path::PathBuf::from("src-tauri/scripts/amazon_review_crawler.py")),
+    ];
+
+    for path in possible_paths.into_iter().flatten() {
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    Err("找不到 Python 爬虫脚本 amazon_review_crawler.py".to_string())
+}
+
+// Python 输出结构（用于解析）
+#[derive(Debug, Deserialize)]
+struct PythonReviewOutput {
+    #[serde(rename = "type")]
+    msg_type: String,
+    result: Option<ReviewResult>,
+}
+
+// 爬取单个 ASIN 的评论
+pub async fn fetch_reviews(asin: String, country: String) -> ReviewResult {
+    tokio::task::spawn_blocking(move || {
+        match call_review_crawler(&asin, &country) {
+            Ok(result) => result,
+            Err(e) => ReviewResult {
+                asin,
+                country,
+                reviews: Vec::new(),
+                summary: ReviewSummary {
+                    total: 0,
+                    by_star: std::collections::HashMap::new(),
+                },
+                fetched_at: chrono::Utc::now().to_rfc3339(),
+                error: Some(e),
+            },
+        }
+    })
+    .await
+    .unwrap_or_else(|e| ReviewResult {
+        asin: String::new(),
+        country: String::new(),
+        reviews: Vec::new(),
+        summary: ReviewSummary {
+            total: 0,
+            by_star: std::collections::HashMap::new(),
+        },
+        fetched_at: chrono::Utc::now().to_rfc3339(),
+        error: Some(format!("任务执行失败: {}", e)),
+    })
+}
+
+// 调用 Python 评论爬虫
+fn call_review_crawler(asin: &str, country: &str) -> Result<ReviewResult, String> {
+    let python_cmd = check_python()?;
+    check_dependencies(&python_cmd)?;
+    let script_path = get_review_script_path()?;
+
+    let mut cmd = Command::new(&python_cmd);
+    cmd.arg(&script_path)
+        .arg(asin)
+        .arg(country)
+        .arg("new"); // headless=new 模式
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = cmd.output()
+        .map_err(|e| format!("执行 Python 脚本失败: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Python 脚本执行错误: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // 解析输出（可能包含多行，我们只需要最后一行 complete 消息）
+    for line in stdout.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Ok(parsed) = serde_json::from_str::<PythonReviewOutput>(line) {
+            if parsed.msg_type == "complete" {
+                if let Some(result) = parsed.result {
+                    return Ok(result);
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "无法解析 Python 输出. 输出: {}",
+        stdout.chars().take(500).collect::<String>()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

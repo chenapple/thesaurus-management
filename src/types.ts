@@ -460,6 +460,212 @@ export interface PdfPageImage {
   base64_data: string;
 }
 
+// ==================== 智能文案 ====================
+
+// 我的产品信息（新品打造时填写）
+export interface MyProductInfo {
+  brand_name: string;           // 品牌名称（必填）
+  product_name: string;         // 产品名称（必填）
+  key_features: string[];       // 核心卖点（必填，1-5条）
+  differentiators?: string;     // 差异化特点（选填）
+  specifications?: string;      // 规格参数（选填）
+  target_audience?: string;     // 目标人群（选填）
+  package_contents?: string;    // 包装配件（选填）
+  additional_notes?: string;    // 补充说明（选填）
+}
+
+// 智能文案项目
+export interface ScProject {
+  id: number;
+  name: string;
+  scenario_type: 'new' | 'optimize';  // new: 新品打造, optimize: 老品优化
+  marketplace: string;                 // US, UK, DE, FR, IT, ES, JP, etc.
+  my_asin: string | null;             // 仅优化场景需要
+  product_id: number | null;          // 关联的产品ID（用于获取关键词数据）
+  my_product_info: string | null;     // 我的产品信息（JSON）
+  // 用户的 Listing 信息（老品优化时使用）
+  my_title: string | null;
+  my_bullets: string | null;          // JSON 数组
+  my_description: string | null;
+  my_listing_fetched_at: string | null;
+  status: 'draft' | 'collecting' | 'analyzing' | 'completed';
+  created_at: string;
+  updated_at: string;
+  competitor_count: number;           // 竞品数量
+}
+
+// 竞品信息
+export interface ScCompetitor {
+  id: number;
+  project_id: number;
+  asin: string;
+  competitor_type: 'top' | 'direct' | 'rising';  // 头部/直接/新锐竞品
+  title: string | null;
+  price: string | null;
+  rating: string | null;
+  review_count: number | null;
+  bsr_rank: string | null;
+  image_url: string | null;
+  bullets: string | null;         // JSON array
+  description: string | null;
+  fetched_at: string | null;
+}
+
+// 竞品类型选项
+export const COMPETITOR_TYPE_OPTIONS = [
+  { value: 'top', label: '头部竞品', color: '#f56c6c', description: 'BSR排名最高，市场标杆' },
+  { value: 'direct', label: '直接竞品', color: '#409eff', description: '价格、功能相近的对手' },
+  { value: 'rising', label: '新锐竞品', color: '#67c23a', description: '近期上升快，可能有创新打法' },
+] as const;
+
+// 竞品评论
+export interface ScReview {
+  id: number;
+  competitor_id: number;
+  star_rating: number;
+  review_text: string | null;
+  review_title: string | null;
+  review_date: string | null;
+  helpful_votes: number;
+}
+
+// 评论统计摘要
+export interface ScReviewSummary {
+  total: number;
+  star_1: number;
+  star_2: number;
+  star_3: number;
+  star_4: number;
+  star_5: number;
+}
+
+// 评论爬取结果（从爬虫返回）
+export interface ReviewResult {
+  asin: string;
+  country: string;
+  reviews: Array<{
+    star_rating: number;
+    review_text: string;
+    review_title: string | null;
+    review_date: string | null;
+    helpful_votes: number;
+  }>;
+  summary: {
+    total: number;
+    by_star: Record<string, number>;
+  };
+  fetched_at: string;
+  error: string | null;
+}
+
+// 竞品问答
+export interface ScQA {
+  id: number;
+  competitor_id: number;
+  question: string;
+  answer: string | null;
+  votes: number | null;
+  asked_date: string | null;
+}
+
+// AI 分析结果（数据库存储格式）
+export interface ScAnalysis {
+  id: number;
+  project_id: number;
+  analysis_type: 'review_insights' | 'listing_analysis' | 'optimization';
+  result_json: string;             // JSON 格式的分析结果
+  model_provider: string | null;   // 使用的 AI 服务商
+  model_name: string | null;       // 使用的模型
+  created_at: string;
+}
+
+// 评论洞察结果
+export interface ReviewInsights {
+  usage_scenarios: Array<{
+    scenario: string;
+    source_count: number;
+    example_review: string;
+  }>;
+  praise_points: Array<{
+    point: string;
+    frequency: number;
+    example_review: string;
+  }>;
+  pain_points: Array<{
+    point: string;
+    frequency: number;
+    star_distribution: string;
+    example_review: string;
+  }>;
+  summary: string;
+}
+
+// 文案分析结果
+export interface ListingAnalysis {
+  title_analysis: {
+    common_structure: string;
+    high_frequency_words: string[];
+    competitors: Array<{
+      asin: string;
+      title: string;
+      structure_breakdown: Record<string, string>;
+    }>;
+  };
+  bullet_analysis: {
+    common_themes: string[];
+    best_practices: string[];
+  };
+  keyword_coverage: {
+    covered: string[];
+    missing: string[];
+  };
+}
+
+// A+ 内容建议
+export interface AplusSuggestions {
+  main_image: {
+    key_points: string[];  // 主图核心卖点文案
+  };
+  secondary_images: Array<{
+    index: number;
+    theme: string;           // 图片主题
+    copy_suggestion: string; // 文案建议
+  }>;
+  module_recommendations: Array<{
+    module_type: string;     // 模块类型标识
+    module_name: string;     // 模块名称
+    content_points: string[]; // 内容要点
+  }>;
+}
+
+// 优化建议结果
+export interface OptimizationResult {
+  title_suggestions: Array<{
+    version: number;
+    content: string;
+    reasons: Array<{
+      word: string;
+      reason: string;
+      source: string;
+    }>;
+  }>;
+  bullet_suggestions: Array<{
+    index: number;
+    focus: string;
+    content: string;
+    embedded_keywords?: string[];  // 埋入的关键词
+    reason: string;
+    source: string;
+  }>;
+  backend_keywords: Array<{
+    keyword: string;
+    reason: string;
+    search_volume: number | null;
+  }>;
+  keyword_distribution_summary?: string;  // 关键词分布总结
+  aplus_suggestions?: AplusSuggestions;   // A+ 内容建议
+}
+
 // AI 服务提供商
 export type AIProvider = 'deepseek' | 'openai' | 'gemini' | 'qwen';
 

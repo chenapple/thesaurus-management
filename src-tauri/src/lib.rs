@@ -7,6 +7,7 @@ mod knowledge_base;
 
 use db::{BackupInfo, Category, KeywordData, KeywordMonitoring, MonitoringSparkline, MonitoringStats, Product, RankingHistory, RankingSnapshot, RootWithCategories, TrafficLevelStats, UncategorizedKeyword, WorkflowStatus};
 use db::{KbCategory, KbDocument, KbChunk, KbSearchResult, KbConversation, KbMessage};
+use db::ScProject;
 use scheduler::{SchedulerSettings, SchedulerStatus, SCHEDULER};
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
@@ -1098,6 +1099,284 @@ fn kb_vector_search(query_embedding: Vec<f32>, limit: i64, min_score: Option<f64
         .map_err(|e| format!("向量搜索失败: {}", e))
 }
 
+// ==================== 智能文案 ====================
+
+#[tauri::command]
+fn sc_create_project(name: String, scenario_type: String, marketplace: String, my_asin: Option<String>, product_id: Option<i64>) -> Result<i64, String> {
+    db::sc_create_project(&name, &scenario_type, &marketplace, my_asin.as_deref(), product_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sc_get_projects(scenario_type: Option<String>) -> Result<Vec<ScProject>, String> {
+    db::sc_get_projects(scenario_type.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sc_get_project(id: i64) -> Result<Option<ScProject>, String> {
+    db::sc_get_project(id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sc_update_project(id: i64, name: String, my_asin: Option<String>) -> Result<(), String> {
+    db::sc_update_project(id, &name, my_asin.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sc_update_project_status(id: i64, status: String) -> Result<(), String> {
+    db::sc_update_project_status(id, &status)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sc_update_my_product_info(id: i64, my_product_info: Option<String>) -> Result<(), String> {
+    db::sc_update_my_product_info(id, my_product_info.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sc_update_my_listing(
+    id: i64,
+    my_title: Option<String>,
+    my_bullets: Option<String>,
+    my_description: Option<String>,
+) -> Result<(), String> {
+    db::sc_update_my_listing(id, my_title.as_deref(), my_bullets.as_deref(), my_description.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sc_delete_project(id: i64) -> Result<(), String> {
+    db::sc_delete_project(id)
+        .map_err(|e| e.to_string())
+}
+
+// ==================== 竞品管理 ====================
+
+#[tauri::command]
+fn sc_add_competitor(project_id: i64, asin: String, competitor_type: String) -> Result<i64, String> {
+    db::sc_add_competitor(project_id, &asin, &competitor_type)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sc_get_competitors(project_id: i64) -> Result<Vec<db::ScCompetitor>, String> {
+    db::sc_get_competitors(project_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sc_update_competitor_info(
+    id: i64,
+    title: Option<String>,
+    price: Option<String>,
+    rating: Option<String>,
+    review_count: Option<i64>,
+    bsr_rank: Option<String>,
+    image_url: Option<String>,
+    bullets: Option<String>,
+    description: Option<String>,
+) -> Result<(), String> {
+    db::sc_update_competitor_info(
+        id,
+        title.as_deref(),
+        price.as_deref(),
+        rating.as_deref(),
+        review_count,
+        bsr_rank.as_deref(),
+        image_url.as_deref(),
+        bullets.as_deref(),
+        description.as_deref(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sc_delete_competitor(id: i64) -> Result<(), String> {
+    db::sc_delete_competitor(id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn sc_update_competitor_type(id: i64, competitor_type: String) -> Result<(), String> {
+    db::sc_update_competitor_type(id, &competitor_type)
+        .map_err(|e| e.to_string())
+}
+
+// 爬取竞品 Listing 信息
+#[tauri::command]
+async fn sc_fetch_competitor_listing(id: i64, asin: String, country: String) -> Result<crawler::ListingResult, String> {
+    eprintln!("[sc_fetch_competitor_listing] 开始爬取: id={}, asin={}, country={}", id, asin, country);
+    let result = crawler::fetch_listing_info(asin, country).await;
+    eprintln!("[sc_fetch_competitor_listing] 爬取结果: title={:?}, price={:?}, error={:?}",
+        result.title, result.price, result.error);
+
+    // 如果成功获取数据，更新数据库
+    if result.error.is_none() {
+        let bullets_json = serde_json::to_string(&result.bullets).unwrap_or_else(|_| "[]".to_string());
+        eprintln!("[sc_fetch_competitor_listing] 更新数据库: id={}, title={:?}", id, result.title);
+        match db::sc_update_competitor_info(
+            id,
+            result.title.as_deref(),
+            result.price.as_deref(),
+            result.rating.as_deref(),
+            result.review_count,
+            result.bsr_rank.as_deref(),
+            result.image_url.as_deref(),
+            Some(&bullets_json),
+            result.description.as_deref(),
+        ) {
+            Ok(_) => eprintln!("[sc_fetch_competitor_listing] 数据库更新成功"),
+            Err(e) => eprintln!("[sc_fetch_competitor_listing] 数据库更新失败: {:?}", e),
+        }
+    }
+
+    Ok(result)
+}
+
+// 批量爬取竞品 Listing 信息（复用同一个浏览器）
+#[tauri::command]
+async fn sc_fetch_competitors_batch(
+    items: Vec<(i64, String, String)>,  // [(id, asin, country), ...]
+    app: tauri::AppHandle,
+) -> Result<Vec<(i64, crawler::ListingResult)>, String> {
+    eprintln!("[sc_fetch_competitors_batch] 开始批量爬取: {} 个竞品", items.len());
+
+    let app_clone = app.clone();
+    let results = crawler::fetch_listings_batch(
+        items,
+        move |current, total, asin| {
+            eprintln!("[sc_fetch_competitors_batch] 进度: {}/{} - {}", current, total, asin);
+            // 发送进度事件到前端
+            let _ = app_clone.emit("sc-batch-progress", serde_json::json!({
+                "current": current,
+                "total": total,
+                "asin": asin
+            }));
+        }
+    ).await;
+
+    // 更新数据库
+    for (id, result) in &results {
+        if result.error.is_none() {
+            let bullets_json = serde_json::to_string(&result.bullets).unwrap_or_else(|_| "[]".to_string());
+            if let Err(e) = db::sc_update_competitor_info(
+                *id,
+                result.title.as_deref(),
+                result.price.as_deref(),
+                result.rating.as_deref(),
+                result.review_count,
+                result.bsr_rank.as_deref(),
+                result.image_url.as_deref(),
+                Some(&bullets_json),
+                result.description.as_deref(),
+            ) {
+                eprintln!("[sc_fetch_competitors_batch] 更新数据库失败 id={}: {:?}", id, e);
+            }
+        }
+    }
+
+    eprintln!("[sc_fetch_competitors_batch] 批量爬取完成: {} 个结果", results.len());
+    Ok(results)
+}
+
+// ==================== 评论爬取 ====================
+
+// 爬取竞品评论
+#[tauri::command]
+async fn sc_fetch_competitor_reviews(id: i64, asin: String, country: String) -> Result<crawler::ReviewResult, String> {
+    eprintln!("[sc_fetch_competitor_reviews] 开始爬取: id={}, asin={}, country={}", id, asin, country);
+    let result = crawler::fetch_reviews(asin, country).await;
+    eprintln!("[sc_fetch_competitor_reviews] 爬取结果: total={}, error={:?}",
+        result.summary.total, result.error);
+
+    // 如果成功获取数据，保存到数据库
+    if result.error.is_none() && !result.reviews.is_empty() {
+        let reviews: Vec<db::ReviewInput> = result.reviews.iter().map(|r| {
+            db::ReviewInput {
+                star_rating: r.star_rating,
+                review_text: r.review_text.clone(),
+                review_title: r.review_title.clone(),
+                review_date: r.review_date.clone(),
+                helpful_votes: r.helpful_votes,
+            }
+        }).collect();
+
+        match db::sc_add_reviews_batch(id, &reviews) {
+            Ok(count) => eprintln!("[sc_fetch_competitor_reviews] 保存 {} 条评论", count),
+            Err(e) => eprintln!("[sc_fetch_competitor_reviews] 保存评论失败: {:?}", e),
+        }
+    }
+
+    Ok(result)
+}
+
+// 获取竞品的评论列表
+#[tauri::command]
+fn sc_get_competitor_reviews(competitor_id: i64) -> Result<Vec<db::ScReview>, String> {
+    db::sc_get_reviews(competitor_id)
+        .map_err(|e| e.to_string())
+}
+
+// 获取评论统计摘要
+#[tauri::command]
+fn sc_get_reviews_summary(competitor_id: i64) -> Result<db::ScReviewSummary, String> {
+    db::sc_get_reviews_summary(competitor_id)
+        .map_err(|e| e.to_string())
+}
+
+// ==================== AI 分析 ====================
+
+// 保存分析结果
+#[tauri::command]
+fn sc_save_analysis(
+    project_id: i64,
+    analysis_type: String,
+    result_json: String,
+    model_provider: Option<String>,
+    model_name: Option<String>,
+) -> Result<i64, String> {
+    db::sc_save_analysis(
+        project_id,
+        &analysis_type,
+        &result_json,
+        model_provider.as_deref(),
+        model_name.as_deref(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+// 获取指定类型的分析结果
+#[tauri::command]
+fn sc_get_analysis(project_id: i64, analysis_type: String) -> Result<Option<db::ScAnalysis>, String> {
+    db::sc_get_analysis(project_id, &analysis_type)
+        .map_err(|e| e.to_string())
+}
+
+// 获取项目的所有分析结果
+#[tauri::command]
+fn sc_get_all_analysis(project_id: i64) -> Result<Vec<db::ScAnalysis>, String> {
+    db::sc_get_all_analysis(project_id)
+        .map_err(|e| e.to_string())
+}
+
+// 删除项目的所有分析结果
+#[tauri::command]
+fn sc_delete_all_analysis(project_id: i64) -> Result<(), String> {
+    db::sc_delete_all_analysis(project_id)
+        .map_err(|e| e.to_string())
+}
+
+// 获取项目关联的关键词数据
+#[tauri::command]
+fn sc_get_project_keywords(project_id: i64, limit: i64) -> Result<Vec<db::KeywordData>, String> {
+    db::sc_get_project_keywords(project_id, limit)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1287,6 +1566,33 @@ pub fn run() {
             kb_get_chunks_without_embedding,
             kb_get_document_embedding_stats,
             kb_vector_search,
+            // 智能文案
+            sc_create_project,
+            sc_get_projects,
+            sc_get_project,
+            sc_update_project,
+            sc_update_project_status,
+            sc_update_my_product_info,
+            sc_update_my_listing,
+            sc_delete_project,
+            // 竞品管理
+            sc_add_competitor,
+            sc_get_competitors,
+            sc_update_competitor_info,
+            sc_delete_competitor,
+            sc_update_competitor_type,
+            sc_fetch_competitor_listing,
+            sc_fetch_competitors_batch,
+            // 评论管理
+            sc_fetch_competitor_reviews,
+            sc_get_competitor_reviews,
+            sc_get_reviews_summary,
+            // AI 分析
+            sc_save_analysis,
+            sc_get_analysis,
+            sc_get_all_analysis,
+            sc_delete_all_analysis,
+            sc_get_project_keywords,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

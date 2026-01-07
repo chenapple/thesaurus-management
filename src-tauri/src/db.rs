@@ -367,6 +367,9 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
     // 初始化知识库表
     init_knowledge_base_tables(&conn)?;
 
+    // 初始化智能文案表
+    init_smart_copy_tables(&conn)?;
+
     DB.set(Mutex::new(conn))
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
@@ -4008,4 +4011,709 @@ pub fn kb_get_messages(conversation_id: i64) -> Result<Vec<KbMessage>> {
     .collect();
 
     Ok(messages)
+}
+
+// ==================== 智能文案模块 ====================
+
+// 初始化智能文案表
+pub fn init_smart_copy_tables(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        -- 智能文案项目表
+        CREATE TABLE IF NOT EXISTS sc_projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            scenario_type TEXT NOT NULL CHECK(scenario_type IN ('new', 'optimize')),
+            marketplace TEXT NOT NULL DEFAULT 'US',
+            my_asin TEXT,
+            status TEXT DEFAULT 'draft' CHECK(status IN ('draft', 'fetching', 'analyzing', 'completed', 'failed')),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- 竞品表
+        CREATE TABLE IF NOT EXISTS sc_competitors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            asin TEXT NOT NULL,
+            competitor_type TEXT DEFAULT 'direct' CHECK(competitor_type IN ('top', 'direct', 'rising')),
+            title TEXT,
+            price TEXT,
+            rating TEXT,
+            review_count INTEGER,
+            bsr_rank TEXT,
+            image_url TEXT,
+            bullets TEXT,
+            description TEXT,
+            fetched_at DATETIME,
+            FOREIGN KEY (project_id) REFERENCES sc_projects(id) ON DELETE CASCADE
+        );
+
+        -- 迁移：给 sc_competitors 添加 image_url 字段（如果不存在）
+        -- SQLite 不支持 IF NOT EXISTS 对列，用 PRAGMA 检查会复杂，这里用简单方式
+
+        -- 竞品评论表
+        CREATE TABLE IF NOT EXISTS sc_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            competitor_id INTEGER NOT NULL,
+            star_rating INTEGER NOT NULL,
+            review_text TEXT,
+            review_date TEXT,
+            helpful_votes INTEGER DEFAULT 0,
+            FOREIGN KEY (competitor_id) REFERENCES sc_competitors(id) ON DELETE CASCADE
+        );
+
+        -- 竞品 Q&A 表
+        CREATE TABLE IF NOT EXISTS sc_qa (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            competitor_id INTEGER NOT NULL,
+            question TEXT NOT NULL,
+            answer TEXT,
+            votes INTEGER DEFAULT 0,
+            FOREIGN KEY (competitor_id) REFERENCES sc_competitors(id) ON DELETE CASCADE
+        );
+
+        -- AI 分析结果表
+        CREATE TABLE IF NOT EXISTS sc_analysis_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            analysis_type TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (project_id) REFERENCES sc_projects(id) ON DELETE CASCADE
+        );
+
+        -- 索引
+        CREATE INDEX IF NOT EXISTS idx_sc_competitors_project ON sc_competitors(project_id);
+        CREATE INDEX IF NOT EXISTS idx_sc_reviews_competitor ON sc_reviews(competitor_id);
+        CREATE INDEX IF NOT EXISTS idx_sc_qa_competitor ON sc_qa(competitor_id);
+        CREATE INDEX IF NOT EXISTS idx_sc_analysis_project ON sc_analysis_results(project_id);
+        "
+    )?;
+
+    // 迁移：给 sc_competitors 添加 image_url 字段（如果不存在）
+    let _ = conn.execute("ALTER TABLE sc_competitors ADD COLUMN image_url TEXT", []);
+
+    // 迁移：给 sc_projects 添加 product_id 字段（关联关键词数据）
+    let _ = conn.execute("ALTER TABLE sc_projects ADD COLUMN product_id INTEGER REFERENCES products(id)", []);
+
+    // 迁移：给 sc_analysis_results 添加 model 相关字段
+    let _ = conn.execute("ALTER TABLE sc_analysis_results ADD COLUMN model_provider TEXT", []);
+    let _ = conn.execute("ALTER TABLE sc_analysis_results ADD COLUMN model_name TEXT", []);
+
+    // 迁移：给 sc_projects 添加 my_product_info 字段（存储用户产品信息 JSON）
+    let _ = conn.execute("ALTER TABLE sc_projects ADD COLUMN my_product_info TEXT", []);
+
+    // 迁移：给 sc_projects 添加用户 Listing 信息字段（老品优化时使用）
+    let _ = conn.execute("ALTER TABLE sc_projects ADD COLUMN my_title TEXT", []);
+    let _ = conn.execute("ALTER TABLE sc_projects ADD COLUMN my_bullets TEXT", []);
+    let _ = conn.execute("ALTER TABLE sc_projects ADD COLUMN my_description TEXT", []);
+    let _ = conn.execute("ALTER TABLE sc_projects ADD COLUMN my_listing_fetched_at DATETIME", []);
+
+    Ok(())
+}
+
+// 项目相关结构体
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ScProject {
+    pub id: i64,
+    pub name: String,
+    pub scenario_type: String,
+    pub marketplace: String,
+    pub my_asin: Option<String>,
+    pub product_id: Option<i64>,  // 关联的产品ID（用于获取关键词数据）
+    pub my_product_info: Option<String>,  // 我的产品信息（JSON）
+    // 用户的 Listing 信息（老品优化时使用）
+    pub my_title: Option<String>,
+    pub my_bullets: Option<String>,  // JSON 数组
+    pub my_description: Option<String>,
+    pub my_listing_fetched_at: Option<String>,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub competitor_count: i64,
+}
+
+// 创建项目
+pub fn sc_create_project(
+    name: &str,
+    scenario_type: &str,
+    marketplace: &str,
+    my_asin: Option<&str>,
+    product_id: Option<i64>,
+) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT INTO sc_projects (name, scenario_type, marketplace, my_asin, product_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![name, scenario_type, marketplace, my_asin, product_id],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+// 获取项目列表
+pub fn sc_get_projects(scenario_type: Option<&str>) -> Result<Vec<ScProject>> {
+    let conn = get_db().lock();
+
+    let base_sql = "
+        SELECT p.id, p.name, p.scenario_type, p.marketplace, p.my_asin, p.product_id, p.my_product_info,
+               p.my_title, p.my_bullets, p.my_description, p.my_listing_fetched_at,
+               p.status, p.created_at, p.updated_at,
+               (SELECT COUNT(*) FROM sc_competitors WHERE project_id = p.id) as competitor_count
+        FROM sc_projects p
+    ";
+
+    let sql = match scenario_type {
+        Some(_) => format!("{} WHERE p.scenario_type = ?1 ORDER BY p.updated_at DESC", base_sql),
+        None => format!("{} ORDER BY p.updated_at DESC", base_sql),
+    };
+
+    let mut stmt = conn.prepare(&sql)?;
+
+    let projects: Vec<ScProject> = if let Some(st) = scenario_type {
+        let rows = stmt.query_map(rusqlite::params![st], |row| {
+            Ok(ScProject {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                scenario_type: row.get(2)?,
+                marketplace: row.get(3)?,
+                my_asin: row.get(4)?,
+                product_id: row.get(5)?,
+                my_product_info: row.get(6)?,
+                my_title: row.get(7)?,
+                my_bullets: row.get(8)?,
+                my_description: row.get(9)?,
+                my_listing_fetched_at: row.get(10)?,
+                status: row.get(11)?,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
+                competitor_count: row.get(14)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>>>()?
+    } else {
+        let rows = stmt.query_map([], |row| {
+            Ok(ScProject {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                scenario_type: row.get(2)?,
+                marketplace: row.get(3)?,
+                my_asin: row.get(4)?,
+                product_id: row.get(5)?,
+                my_product_info: row.get(6)?,
+                my_title: row.get(7)?,
+                my_bullets: row.get(8)?,
+                my_description: row.get(9)?,
+                my_listing_fetched_at: row.get(10)?,
+                status: row.get(11)?,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
+                competitor_count: row.get(14)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>>>()?
+    };
+
+    Ok(projects)
+}
+
+// 获取单个项目
+pub fn sc_get_project(id: i64) -> Result<Option<ScProject>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.name, p.scenario_type, p.marketplace, p.my_asin, p.product_id, p.my_product_info,
+                p.my_title, p.my_bullets, p.my_description, p.my_listing_fetched_at,
+                p.status, p.created_at, p.updated_at,
+                (SELECT COUNT(*) FROM sc_competitors WHERE project_id = p.id) as competitor_count
+         FROM sc_projects p
+         WHERE p.id = ?1"
+    )?;
+
+    let mut rows = stmt.query(rusqlite::params![id])?;
+
+    if let Some(row) = rows.next()? {
+        Ok(Some(ScProject {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            scenario_type: row.get(2)?,
+            marketplace: row.get(3)?,
+            my_asin: row.get(4)?,
+            product_id: row.get(5)?,
+            my_product_info: row.get(6)?,
+            my_title: row.get(7)?,
+            my_bullets: row.get(8)?,
+            my_description: row.get(9)?,
+            my_listing_fetched_at: row.get(10)?,
+            status: row.get(11)?,
+            created_at: row.get(12)?,
+            updated_at: row.get(13)?,
+            competitor_count: row.get(14)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+// 更新项目
+pub fn sc_update_project(id: i64, name: &str, my_asin: Option<&str>) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE sc_projects SET name = ?1, my_asin = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?3",
+        rusqlite::params![name, my_asin, id],
+    )?;
+    Ok(())
+}
+
+// 更新项目状态
+pub fn sc_update_project_status(id: i64, status: &str) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE sc_projects SET status = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+        rusqlite::params![status, id],
+    )?;
+    Ok(())
+}
+
+// 更新我的产品信息
+pub fn sc_update_my_product_info(id: i64, my_product_info: Option<&str>) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE sc_projects SET my_product_info = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+        rusqlite::params![my_product_info, id],
+    )?;
+    Ok(())
+}
+
+// 更新用户的 Listing 信息（老品优化时使用）
+pub fn sc_update_my_listing(
+    id: i64,
+    my_title: Option<&str>,
+    my_bullets: Option<&str>,
+    my_description: Option<&str>,
+) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE sc_projects SET my_title = ?1, my_bullets = ?2, my_description = ?3,
+         my_listing_fetched_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?4",
+        rusqlite::params![my_title, my_bullets, my_description, id],
+    )?;
+    Ok(())
+}
+
+// 删除项目
+pub fn sc_delete_project(id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("DELETE FROM sc_projects WHERE id = ?1", rusqlite::params![id])?;
+    Ok(())
+}
+
+// ==================== 竞品管理 ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScCompetitor {
+    pub id: i64,
+    pub project_id: i64,
+    pub asin: String,
+    pub competitor_type: String,  // top, direct, rising
+    pub title: Option<String>,
+    pub price: Option<String>,
+    pub rating: Option<String>,
+    pub review_count: Option<i64>,
+    pub bsr_rank: Option<String>,
+    pub image_url: Option<String>,
+    pub bullets: Option<String>,  // JSON array
+    pub description: Option<String>,
+    pub fetched_at: Option<String>,
+}
+
+// 添加竞品（仅 ASIN）
+pub fn sc_add_competitor(project_id: i64, asin: &str, competitor_type: &str) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT INTO sc_competitors (project_id, asin, competitor_type) VALUES (?1, ?2, ?3)",
+        rusqlite::params![project_id, asin, competitor_type],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+// 获取项目的竞品列表
+pub fn sc_get_competitors(project_id: i64) -> Result<Vec<ScCompetitor>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, asin, competitor_type, title, price, rating, review_count,
+                bsr_rank, image_url, bullets, description, fetched_at
+         FROM sc_competitors
+         WHERE project_id = ?1
+         ORDER BY id ASC"
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![project_id], |row| {
+        Ok(ScCompetitor {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            asin: row.get(2)?,
+            competitor_type: row.get(3)?,
+            title: row.get(4)?,
+            price: row.get(5)?,
+            rating: row.get(6)?,
+            review_count: row.get(7)?,
+            bsr_rank: row.get(8)?,
+            image_url: row.get(9)?,
+            bullets: row.get(10)?,
+            description: row.get(11)?,
+            fetched_at: row.get(12)?,
+        })
+    })?;
+
+    rows.collect::<Result<Vec<_>>>()
+}
+
+// 更新竞品信息（爬取后）
+pub fn sc_update_competitor_info(
+    id: i64,
+    title: Option<&str>,
+    price: Option<&str>,
+    rating: Option<&str>,
+    review_count: Option<i64>,
+    bsr_rank: Option<&str>,
+    image_url: Option<&str>,
+    bullets: Option<&str>,
+    description: Option<&str>,
+) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE sc_competitors SET
+            title = ?1, price = ?2, rating = ?3, review_count = ?4,
+            bsr_rank = ?5, image_url = ?6, bullets = ?7, description = ?8, fetched_at = CURRENT_TIMESTAMP
+         WHERE id = ?9",
+        rusqlite::params![title, price, rating, review_count, bsr_rank, image_url, bullets, description, id],
+    )?;
+    Ok(())
+}
+
+// 删除竞品
+pub fn sc_delete_competitor(id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("DELETE FROM sc_competitors WHERE id = ?1", rusqlite::params![id])?;
+    Ok(())
+}
+
+// 更新竞品类型
+pub fn sc_update_competitor_type(id: i64, competitor_type: &str) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE sc_competitors SET competitor_type = ?1 WHERE id = ?2",
+        rusqlite::params![competitor_type, id],
+    )?;
+    Ok(())
+}
+
+// ==================== 评论管理 ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScReview {
+    pub id: i64,
+    pub competitor_id: i64,
+    pub star_rating: i32,
+    pub review_text: Option<String>,
+    pub review_title: Option<String>,
+    pub review_date: Option<String>,
+    pub helpful_votes: i32,
+}
+
+// 评论输入数据（用于批量添加）
+#[derive(Debug, Clone)]
+pub struct ReviewInput {
+    pub star_rating: i32,
+    pub review_text: String,
+    pub review_title: Option<String>,
+    pub review_date: Option<String>,
+    pub helpful_votes: i32,
+}
+
+// 批量添加评论
+pub fn sc_add_reviews_batch(competitor_id: i64, reviews: &[ReviewInput]) -> Result<i64> {
+    let conn = get_db().lock();
+
+    // 先删除该竞品的旧评论
+    conn.execute(
+        "DELETE FROM sc_reviews WHERE competitor_id = ?1",
+        rusqlite::params![competitor_id],
+    )?;
+
+    // 批量插入新评论
+    let mut stmt = conn.prepare(
+        "INSERT INTO sc_reviews (competitor_id, star_rating, review_text, review_date, helpful_votes)
+         VALUES (?1, ?2, ?3, ?4, ?5)"
+    )?;
+
+    let mut count = 0i64;
+    for review in reviews {
+        // 合并 title 和 text（如果有 title 的话）
+        let full_text = if let Some(ref title) = review.review_title {
+            if title.is_empty() {
+                review.review_text.clone()
+            } else {
+                format!("{}\n\n{}", title, review.review_text)
+            }
+        } else {
+            review.review_text.clone()
+        };
+
+        stmt.execute(rusqlite::params![
+            competitor_id,
+            review.star_rating,
+            full_text,
+            review.review_date,
+            review.helpful_votes,
+        ])?;
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+// 获取竞品的评论列表
+pub fn sc_get_reviews(competitor_id: i64) -> Result<Vec<ScReview>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, competitor_id, star_rating, review_text, review_date, helpful_votes
+         FROM sc_reviews
+         WHERE competitor_id = ?1
+         ORDER BY helpful_votes DESC, id ASC"
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![competitor_id], |row| {
+        Ok(ScReview {
+            id: row.get(0)?,
+            competitor_id: row.get(1)?,
+            star_rating: row.get(2)?,
+            review_text: row.get(3)?,
+            review_title: None, // 已合并到 review_text
+            review_date: row.get(4)?,
+            helpful_votes: row.get(5)?,
+        })
+    })?;
+
+    let mut reviews = Vec::new();
+    for row in rows {
+        reviews.push(row?);
+    }
+    Ok(reviews)
+}
+
+// 获取评论统计摘要
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScReviewSummary {
+    pub total: i64,
+    pub star_1: i64,
+    pub star_2: i64,
+    pub star_3: i64,
+    pub star_4: i64,
+    pub star_5: i64,
+}
+
+pub fn sc_get_reviews_summary(competitor_id: i64) -> Result<ScReviewSummary> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT
+            COUNT(*) as total,
+            SUM(CASE WHEN star_rating = 1 THEN 1 ELSE 0 END) as star_1,
+            SUM(CASE WHEN star_rating = 2 THEN 1 ELSE 0 END) as star_2,
+            SUM(CASE WHEN star_rating = 3 THEN 1 ELSE 0 END) as star_3,
+            SUM(CASE WHEN star_rating = 4 THEN 1 ELSE 0 END) as star_4,
+            SUM(CASE WHEN star_rating = 5 THEN 1 ELSE 0 END) as star_5
+         FROM sc_reviews
+         WHERE competitor_id = ?1"
+    )?;
+
+    let summary = stmt.query_row(rusqlite::params![competitor_id], |row| {
+        Ok(ScReviewSummary {
+            total: row.get(0)?,
+            star_1: row.get(1)?,
+            star_2: row.get(2)?,
+            star_3: row.get(3)?,
+            star_4: row.get(4)?,
+            star_5: row.get(5)?,
+        })
+    })?;
+
+    Ok(summary)
+}
+
+// 删除竞品的所有评论
+pub fn sc_delete_reviews(competitor_id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "DELETE FROM sc_reviews WHERE competitor_id = ?1",
+        rusqlite::params![competitor_id],
+    )?;
+    Ok(())
+}
+
+// ==================== AI 分析结果 ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScAnalysis {
+    pub id: i64,
+    pub project_id: i64,
+    pub analysis_type: String,  // 'review_insights' | 'listing_analysis' | 'optimization'
+    pub result_json: String,
+    pub model_provider: Option<String>,
+    pub model_name: Option<String>,
+    pub created_at: String,
+}
+
+// 保存或更新分析结果（如果同类型已存在则覆盖）
+pub fn sc_save_analysis(
+    project_id: i64,
+    analysis_type: &str,
+    result_json: &str,
+    model_provider: Option<&str>,
+    model_name: Option<&str>,
+) -> Result<i64> {
+    let conn = get_db().lock();
+
+    // 先删除同类型的旧结果
+    conn.execute(
+        "DELETE FROM sc_analysis_results WHERE project_id = ?1 AND analysis_type = ?2",
+        rusqlite::params![project_id, analysis_type],
+    )?;
+
+    // 插入新结果
+    conn.execute(
+        "INSERT INTO sc_analysis_results (project_id, analysis_type, result_json, model_provider, model_name)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![project_id, analysis_type, result_json, model_provider, model_name],
+    )?;
+
+    Ok(conn.last_insert_rowid())
+}
+
+// 获取指定类型的分析结果
+pub fn sc_get_analysis(project_id: i64, analysis_type: &str) -> Result<Option<ScAnalysis>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, analysis_type, result_json, model_provider, model_name, created_at
+         FROM sc_analysis_results
+         WHERE project_id = ?1 AND analysis_type = ?2
+         ORDER BY created_at DESC
+         LIMIT 1"
+    )?;
+
+    let mut rows = stmt.query(rusqlite::params![project_id, analysis_type])?;
+
+    if let Some(row) = rows.next()? {
+        Ok(Some(ScAnalysis {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            analysis_type: row.get(2)?,
+            result_json: row.get(3)?,
+            model_provider: row.get(4)?,
+            model_name: row.get(5)?,
+            created_at: row.get(6)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+// 获取项目的所有分析结果
+pub fn sc_get_all_analysis(project_id: i64) -> Result<Vec<ScAnalysis>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, analysis_type, result_json, model_provider, model_name, created_at
+         FROM sc_analysis_results
+         WHERE project_id = ?1
+         ORDER BY created_at DESC"
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![project_id], |row| {
+        Ok(ScAnalysis {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            analysis_type: row.get(2)?,
+            result_json: row.get(3)?,
+            model_provider: row.get(4)?,
+            model_name: row.get(5)?,
+            created_at: row.get(6)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+// 删除项目的所有分析结果
+pub fn sc_delete_all_analysis(project_id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "DELETE FROM sc_analysis_results WHERE project_id = ?1",
+        rusqlite::params![project_id],
+    )?;
+    Ok(())
+}
+
+// 获取项目关联的关键词数据（Top N 高搜索量）
+pub fn sc_get_project_keywords(project_id: i64, limit: i64) -> Result<Vec<KeywordData>> {
+    let conn = get_db().lock();
+
+    // 先获取项目关联的 product_id
+    let product_id: Option<i64> = conn.query_row(
+        "SELECT product_id FROM sc_projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |row| row.get(0),
+    )?;
+
+    let product_id = match product_id {
+        Some(id) => id,
+        None => return Ok(vec![]),  // 未关联产品，返回空
+    };
+
+    // 获取关键词数据，按搜索量排序
+    let mut stmt = conn.prepare(
+        "SELECT id, product_id, keyword, translation, relevance_score, relevance_level,
+                traffic_total, avg_keyword_rank, avg_search_volume, cpc_bid, bid_range,
+                click_rate, conversion_competition, competition_level, natural_position_flow,
+                top3_click_share, avg_conversion_share, asin_count,
+                traffic_level, negative_word, orderliness, phrase_tag,
+                primary_category, secondary_category, search_intent, traffic_share, asin_data
+         FROM keyword_data
+         WHERE product_id = ?1
+         ORDER BY avg_search_volume DESC NULLS LAST
+         LIMIT ?2"
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![product_id, limit], |row| {
+        Ok(KeywordData {
+            id: row.get(0)?,
+            product_id: row.get(1)?,
+            keyword: row.get(2)?,
+            translation: row.get(3)?,
+            relevance_score: row.get(4)?,
+            relevance_level: row.get(5)?,
+            traffic_total: row.get(6)?,
+            avg_keyword_rank: row.get(7)?,
+            avg_search_volume: row.get(8)?,
+            cpc_bid: row.get(9)?,
+            bid_range: row.get(10)?,
+            click_rate: row.get(11)?,
+            conversion_competition: row.get(12)?,
+            competition_level: row.get(13)?,
+            natural_position_flow: row.get(14)?,
+            top3_click_share: row.get(15)?,
+            avg_conversion_share: row.get(16)?,
+            asin_count: row.get(17)?,
+            traffic_level: row.get(18)?,
+            negative_word: row.get(19)?,
+            orderliness: row.get(20)?,
+            phrase_tag: row.get(21)?,
+            primary_category: row.get(22)?,
+            secondary_category: row.get(23)?,
+            search_intent: row.get(24)?,
+            traffic_share: row.get(25)?,
+            asin_data: row.get(26)?,
+        })
+    })?;
+
+    rows.collect()
 }
