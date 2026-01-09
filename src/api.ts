@@ -1257,3 +1257,119 @@ export async function scDeleteAllAnalysis(projectId: number): Promise<void> {
 export async function scGetProjectKeywords(projectId: number, limit: number = 100): Promise<KeywordData[]> {
   return await invoke("sc_get_project_keywords", { projectId, limit });
 }
+
+// ==================== 智能广告（Smart Ads）====================
+
+import type { AdProject, AdSearchTerm, AdAnalysisRecord } from "./types";
+
+/**
+ * 创建广告项目
+ */
+export async function adCreateProject(
+  productId: number | null,
+  name: string,
+  marketplace: string,
+  targetAcos: number
+): Promise<number> {
+  return await invoke("ad_create_project", {
+    productId,
+    name,
+    marketplace,
+    targetAcos,
+  });
+}
+
+/**
+ * 获取所有广告项目
+ */
+export async function adGetProjects(): Promise<AdProject[]> {
+  return await invoke("ad_get_projects");
+}
+
+/**
+ * 获取单个广告项目
+ */
+export async function adGetProject(id: number): Promise<AdProject | null> {
+  return await invoke("ad_get_project", { id });
+}
+
+/**
+ * 更新广告项目
+ */
+export async function adUpdateProject(
+  id: number,
+  name: string,
+  marketplace: string,
+  targetAcos: number
+): Promise<void> {
+  return await invoke("ad_update_project", { id, name, marketplace, targetAcos });
+}
+
+/**
+ * 删除广告项目
+ */
+export async function adDeleteProject(id: number): Promise<void> {
+  return await invoke("ad_delete_project", { id });
+}
+
+/**
+ * 导入搜索词数据
+ */
+export async function adImportSearchTerms(
+  projectId: number,
+  searchTerms: AdSearchTerm[]
+): Promise<number> {
+  return await invoke("ad_import_search_terms", { projectId, searchTerms });
+}
+
+/**
+ * 获取搜索词数据
+ */
+export async function adGetSearchTerms(projectId: number): Promise<AdSearchTerm[]> {
+  return await invoke("ad_get_search_terms", { projectId });
+}
+
+/**
+ * 获取搜索词统计（总花费, 总销售, 平均ACOS, 数量，按国家分组）
+ */
+export async function adGetSearchTermsStats(
+  projectId: number
+): Promise<import("./types").SearchTermsStatsResult> {
+  return await invoke("ad_get_search_terms_stats", { projectId });
+}
+
+/**
+ * 保存分析结果
+ */
+export async function adSaveAnalysis(
+  projectId: number,
+  analysisType: string,
+  resultJson: string,
+  aiProvider: string,
+  aiModel: string
+): Promise<number> {
+  return await invoke("ad_save_analysis", {
+    projectId,
+    analysisType,
+    resultJson,
+    aiProvider,
+    aiModel,
+  });
+}
+
+/**
+ * 获取指定类型的分析结果
+ */
+export async function adGetAnalysis(
+  projectId: number,
+  analysisType: string
+): Promise<AdAnalysisRecord | null> {
+  return await invoke("ad_get_analysis", { projectId, analysisType });
+}
+
+/**
+ * 获取项目的所有分析结果
+ */
+export async function adGetAllAnalysis(projectId: number): Promise<AdAnalysisRecord[]> {
+  return await invoke("ad_get_all_analysis", { projectId });
+}

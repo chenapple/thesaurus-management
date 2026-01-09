@@ -4110,6 +4110,71 @@ pub fn init_smart_copy_tables(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE sc_projects ADD COLUMN my_description TEXT", []);
     let _ = conn.execute("ALTER TABLE sc_projects ADD COLUMN my_listing_fetched_at DATETIME", []);
 
+    // ==================== 智能广告（Smart Ads）表 ====================
+    conn.execute_batch(
+        "
+        -- 广告项目表
+        CREATE TABLE IF NOT EXISTS ad_projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER,
+            name TEXT NOT NULL,
+            marketplace TEXT DEFAULT 'US',
+            target_acos REAL DEFAULT 30.0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (product_id) REFERENCES products(id)
+        );
+
+        -- 搜索词数据表（从报表导入）
+        CREATE TABLE IF NOT EXISTS ad_search_terms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            portfolio_name TEXT,
+            campaign_name TEXT,
+            ad_group_name TEXT,
+            country TEXT,
+            targeting TEXT,
+            match_type TEXT,
+            customer_search_term TEXT,
+            impressions INTEGER DEFAULT 0,
+            clicks INTEGER DEFAULT 0,
+            ctr REAL DEFAULT 0,
+            spend REAL DEFAULT 0,
+            sales REAL DEFAULT 0,
+            orders INTEGER DEFAULT 0,
+            acos REAL DEFAULT 0,
+            roas REAL DEFAULT 0,
+            conversion_rate REAL DEFAULT 0,
+            cpc REAL DEFAULT 0,
+            report_date TEXT,
+            imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (project_id) REFERENCES ad_projects(id) ON DELETE CASCADE
+        );
+
+        -- 广告分析结果表
+        CREATE TABLE IF NOT EXISTS ad_analysis_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            analysis_type TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            ai_provider TEXT,
+            ai_model TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (project_id) REFERENCES ad_projects(id) ON DELETE CASCADE
+        );
+
+        -- 索引
+        CREATE INDEX IF NOT EXISTS idx_ad_search_terms_project ON ad_search_terms(project_id);
+        CREATE INDEX IF NOT EXISTS idx_ad_search_terms_acos ON ad_search_terms(acos);
+        CREATE INDEX IF NOT EXISTS idx_ad_search_terms_spend ON ad_search_terms(spend);
+        CREATE INDEX IF NOT EXISTS idx_ad_analysis_project ON ad_analysis_results(project_id);
+        "
+    )?;
+
+    // 迁移：给 ad_search_terms 添加 portfolio_name 和 country 字段（用于现有数据库）
+    let _ = conn.execute("ALTER TABLE ad_search_terms ADD COLUMN portfolio_name TEXT", []);
+    let _ = conn.execute("ALTER TABLE ad_search_terms ADD COLUMN country TEXT", []);
+
     Ok(())
 }
 
@@ -4712,6 +4777,393 @@ pub fn sc_get_project_keywords(project_id: i64, limit: i64) -> Result<Vec<Keywor
             search_intent: row.get(24)?,
             traffic_share: row.get(25)?,
             asin_data: row.get(26)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+// ==================== 智能广告（Smart Ads）====================
+
+// 广告项目结构体
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AdProject {
+    pub id: i64,
+    pub product_id: Option<i64>,
+    pub name: String,
+    pub marketplace: String,
+    pub target_acos: f64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub search_term_count: i64,
+}
+
+// 搜索词数据结构体
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AdSearchTerm {
+    pub id: i64,
+    pub project_id: i64,
+    pub portfolio_name: Option<String>,  // 广告组合名称
+    pub campaign_name: Option<String>,   // 广告活动名称
+    pub ad_group_name: Option<String>,   // 广告组名称
+    pub country: Option<String>,         // 国家/地区
+    pub targeting: Option<String>,       // 投放词
+    pub match_type: Option<String>,      // 匹配类型
+    pub customer_search_term: Option<String>,  // 客户搜索词
+    pub impressions: i64,
+    pub clicks: i64,
+    pub ctr: f64,
+    pub spend: f64,
+    pub sales: f64,
+    pub orders: i64,
+    pub acos: f64,
+    pub roas: f64,
+    pub conversion_rate: f64,
+    pub cpc: f64,
+    pub report_date: Option<String>,
+    pub imported_at: Option<String>,
+}
+
+// 广告分析结果结构体
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AdAnalysisResult {
+    pub id: i64,
+    pub project_id: i64,
+    pub analysis_type: String,
+    pub result_json: String,
+    pub ai_provider: Option<String>,
+    pub ai_model: Option<String>,
+    pub created_at: String,
+}
+
+// 按国家分组的统计数据
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CountryStats {
+    pub country: String,
+    pub total_spend: f64,
+    pub total_sales: f64,
+    pub avg_acos: f64,
+    pub term_count: i64,
+}
+
+// 搜索词统计结果（包含总计和按国家分组）
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SearchTermsStatsResult {
+    pub total_spend: f64,
+    pub total_sales: f64,
+    pub avg_acos: f64,
+    pub count: i64,
+    pub by_country: Vec<CountryStats>,
+}
+
+// 创建广告项目
+pub fn ad_create_project(
+    product_id: Option<i64>,
+    name: &str,
+    marketplace: &str,
+    target_acos: f64,
+) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT INTO ad_projects (product_id, name, marketplace, target_acos) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![product_id, name, marketplace, target_acos],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+// 获取广告项目列表
+pub fn ad_get_projects() -> Result<Vec<AdProject>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.product_id, p.name, p.marketplace, p.target_acos, p.created_at, p.updated_at,
+                (SELECT COUNT(*) FROM ad_search_terms WHERE project_id = p.id) as search_term_count
+         FROM ad_projects p
+         ORDER BY p.updated_at DESC"
+    )?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok(AdProject {
+            id: row.get(0)?,
+            product_id: row.get(1)?,
+            name: row.get(2)?,
+            marketplace: row.get(3)?,
+            target_acos: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
+            search_term_count: row.get(7)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+// 获取单个广告项目
+pub fn ad_get_project(id: i64) -> Result<Option<AdProject>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.product_id, p.name, p.marketplace, p.target_acos, p.created_at, p.updated_at,
+                (SELECT COUNT(*) FROM ad_search_terms WHERE project_id = p.id) as search_term_count
+         FROM ad_projects p
+         WHERE p.id = ?1"
+    )?;
+
+    let mut rows = stmt.query_map([id], |row| {
+        Ok(AdProject {
+            id: row.get(0)?,
+            product_id: row.get(1)?,
+            name: row.get(2)?,
+            marketplace: row.get(3)?,
+            target_acos: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
+            search_term_count: row.get(7)?,
+        })
+    })?;
+
+    match rows.next() {
+        Some(Ok(project)) => Ok(Some(project)),
+        Some(Err(e)) => Err(e.into()),
+        None => Ok(None),
+    }
+}
+
+// 更新广告项目
+pub fn ad_update_project(id: i64, name: &str, marketplace: &str, target_acos: f64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE ad_projects SET name = ?1, marketplace = ?2, target_acos = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?4",
+        rusqlite::params![name, marketplace, target_acos, id],
+    )?;
+    Ok(())
+}
+
+// 删除广告项目
+pub fn ad_delete_project(id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("DELETE FROM ad_projects WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+// 导入搜索词数据（批量）
+pub fn ad_import_search_terms(project_id: i64, search_terms: Vec<AdSearchTerm>) -> Result<i64> {
+    let conn = get_db().lock();
+
+    // 先删除该项目的旧数据
+    conn.execute("DELETE FROM ad_search_terms WHERE project_id = ?1", [project_id])?;
+
+    let mut count = 0i64;
+    for term in search_terms {
+        conn.execute(
+            "INSERT INTO ad_search_terms (
+                project_id, portfolio_name, campaign_name, ad_group_name, country, targeting, match_type,
+                customer_search_term, impressions, clicks, ctr, spend, sales,
+                orders, acos, roas, conversion_rate, cpc, report_date
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+            rusqlite::params![
+                project_id,
+                term.portfolio_name,
+                term.campaign_name,
+                term.ad_group_name,
+                term.country,
+                term.targeting,
+                term.match_type,
+                term.customer_search_term,
+                term.impressions,
+                term.clicks,
+                term.ctr,
+                term.spend,
+                term.sales,
+                term.orders,
+                term.acos,
+                term.roas,
+                term.conversion_rate,
+                term.cpc,
+                term.report_date
+            ],
+        )?;
+        count += 1;
+    }
+
+    // 更新项目的 updated_at
+    conn.execute(
+        "UPDATE ad_projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+        [project_id],
+    )?;
+
+    Ok(count)
+}
+
+// 获取搜索词数据
+pub fn ad_get_search_terms(project_id: i64) -> Result<Vec<AdSearchTerm>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, portfolio_name, campaign_name, ad_group_name, country, targeting, match_type,
+                customer_search_term, impressions, clicks, ctr, spend, sales,
+                orders, acos, roas, conversion_rate, cpc, report_date, imported_at
+         FROM ad_search_terms
+         WHERE project_id = ?1
+         ORDER BY spend DESC"
+    )?;
+
+    let rows = stmt.query_map([project_id], |row| {
+        Ok(AdSearchTerm {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            portfolio_name: row.get(2)?,
+            campaign_name: row.get(3)?,
+            ad_group_name: row.get(4)?,
+            country: row.get(5)?,
+            targeting: row.get(6)?,
+            match_type: row.get(7)?,
+            customer_search_term: row.get(8)?,
+            impressions: row.get(9)?,
+            clicks: row.get(10)?,
+            ctr: row.get(11)?,
+            spend: row.get(12)?,
+            sales: row.get(13)?,
+            orders: row.get(14)?,
+            acos: row.get(15)?,
+            roas: row.get(16)?,
+            conversion_rate: row.get(17)?,
+            cpc: row.get(18)?,
+            report_date: row.get(19)?,
+            imported_at: row.get(20)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+// 获取搜索词统计（包含按国家分组）
+pub fn ad_get_search_terms_stats(project_id: i64) -> Result<SearchTermsStatsResult> {
+    let conn = get_db().lock();
+
+    // 获取总计
+    let mut total_stmt = conn.prepare(
+        "SELECT COALESCE(SUM(spend), 0), COALESCE(SUM(sales), 0),
+                CASE WHEN SUM(sales) > 0 THEN SUM(spend) / SUM(sales) * 100 ELSE 0 END,
+                COUNT(*)
+         FROM ad_search_terms WHERE project_id = ?1"
+    )?;
+
+    let (total_spend, total_sales, avg_acos, count) = total_stmt.query_row([project_id], |row| {
+        Ok((
+            row.get::<_, f64>(0)?,
+            row.get::<_, f64>(1)?,
+            row.get::<_, f64>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    })?;
+
+    // 按国家分组统计
+    let mut country_stmt = conn.prepare(
+        "SELECT COALESCE(country, 'Unknown') as country,
+                COALESCE(SUM(spend), 0) as total_spend,
+                COALESCE(SUM(sales), 0) as total_sales,
+                CASE WHEN SUM(sales) > 0 THEN SUM(spend) / SUM(sales) * 100 ELSE 0 END as avg_acos,
+                COUNT(*) as term_count
+         FROM ad_search_terms
+         WHERE project_id = ?1
+         GROUP BY country
+         ORDER BY total_spend DESC"
+    )?;
+
+    let by_country: Vec<CountryStats> = country_stmt
+        .query_map([project_id], |row| {
+            Ok(CountryStats {
+                country: row.get(0)?,
+                total_spend: row.get(1)?,
+                total_sales: row.get(2)?,
+                avg_acos: row.get(3)?,
+                term_count: row.get(4)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(SearchTermsStatsResult {
+        total_spend,
+        total_sales,
+        avg_acos,
+        count,
+        by_country,
+    })
+}
+
+// 保存分析结果
+pub fn ad_save_analysis(
+    project_id: i64,
+    analysis_type: &str,
+    result_json: &str,
+    ai_provider: &str,
+    ai_model: &str,
+) -> Result<i64> {
+    let conn = get_db().lock();
+
+    // 删除同类型的旧结果
+    conn.execute(
+        "DELETE FROM ad_analysis_results WHERE project_id = ?1 AND analysis_type = ?2",
+        rusqlite::params![project_id, analysis_type],
+    )?;
+
+    conn.execute(
+        "INSERT INTO ad_analysis_results (project_id, analysis_type, result_json, ai_provider, ai_model)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![project_id, analysis_type, result_json, ai_provider, ai_model],
+    )?;
+
+    Ok(conn.last_insert_rowid())
+}
+
+// 获取分析结果
+pub fn ad_get_analysis(project_id: i64, analysis_type: &str) -> Result<Option<AdAnalysisResult>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, analysis_type, result_json, ai_provider, ai_model, created_at
+         FROM ad_analysis_results
+         WHERE project_id = ?1 AND analysis_type = ?2
+         ORDER BY created_at DESC
+         LIMIT 1"
+    )?;
+
+    let mut rows = stmt.query_map(rusqlite::params![project_id, analysis_type], |row| {
+        Ok(AdAnalysisResult {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            analysis_type: row.get(2)?,
+            result_json: row.get(3)?,
+            ai_provider: row.get(4)?,
+            ai_model: row.get(5)?,
+            created_at: row.get(6)?,
+        })
+    })?;
+
+    match rows.next() {
+        Some(Ok(result)) => Ok(Some(result)),
+        Some(Err(e)) => Err(e.into()),
+        None => Ok(None),
+    }
+}
+
+// 获取所有分析结果
+pub fn ad_get_all_analysis(project_id: i64) -> Result<Vec<AdAnalysisResult>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, analysis_type, result_json, ai_provider, ai_model, created_at
+         FROM ad_analysis_results
+         WHERE project_id = ?1
+         ORDER BY created_at DESC"
+    )?;
+
+    let rows = stmt.query_map([project_id], |row| {
+        Ok(AdAnalysisResult {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            analysis_type: row.get(2)?,
+            result_json: row.get(3)?,
+            ai_provider: row.get(4)?,
+            ai_model: row.get(5)?,
+            created_at: row.get(6)?,
         })
     })?;
 

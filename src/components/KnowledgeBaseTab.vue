@@ -581,7 +581,7 @@ async function processUploadTask(task: UploadTask) {
   const imageTypes = ['xlsx', 'xls', 'pptx', 'docx'];
   if (imageTypes.includes(ext)) {
     task.message = '识别图片内容...';
-    const imageChunks = await processDocumentImages(docId, filePath);
+    const imageChunks = await processDocumentImages(docId, filePath, task.id);
     if (imageChunks > 0) {
       chunkCount += imageChunks;
       await api.kbUpdateDocumentStatus(docId, 'completed', chunkCount);
@@ -625,6 +625,11 @@ async function generateDocumentEmbeddingsForTask(documentId: number, task: Uploa
       return 0;
     }
 
+    // 检查是否被取消
+    if (uploadAbortController.value.get(task.id)) {
+      return 0;
+    }
+
     const embeddings = await getTextEmbeddingsBatchParallel(
       chunks.map(c => ({ id: c.id, content: c.content })),
       (current, total) => {
@@ -637,6 +642,11 @@ async function generateDocumentEmbeddingsForTask(documentId: number, task: Uploa
 
     let savedCount = 0;
     for (const [chunkId, embedding] of embeddings) {
+      // 每保存一个就检查是否被取消
+      if (uploadAbortController.value.get(task.id)) {
+        task.message = `已取消（已保存 ${savedCount} 个向量）`;
+        return savedCount;
+      }
       await api.kbUpdateChunkEmbedding(chunkId, embedding);
       savedCount++;
     }
@@ -662,10 +672,17 @@ function cancelUploadTask(taskId: string) {
 // 取消所有上传任务
 function cancelAllUploads() {
   for (const task of uploadQueue.value) {
-    if (task.status === 'pending' || task.status === 'uploading') {
+    if (task.status === 'pending') {
+      // pending 任务直接标记为已取消
+      uploadAbortController.value.set(task.id, true);
+      task.status = 'cancelled';
+      task.message = '已取消';
+    } else if (task.status === 'uploading' || task.status === 'processing' || task.status === 'embedding') {
+      // 正在处理的任务设置取消标志，会在下一个检查点中断
       uploadAbortController.value.set(task.id, true);
     }
   }
+  ElMessage.info('已发送取消请求');
 }
 
 // 关闭上传对话框
@@ -720,7 +737,7 @@ function getTaskStatusLabel(status: UploadTask['status']): string {
 /**
  * 处理文档中的图片：提取图片 -> AI 识别（通义千问/Gemini） -> 存储为 chunk
  */
-async function processDocumentImages(documentId: number, filePath: string): Promise<number> {
+async function processDocumentImages(documentId: number, filePath: string, taskId?: string): Promise<number> {
   try {
     // 检查是否有图片识别服务可用（通义千问或 Gemini）
     const hasQwenKey = await checkApiKeyConfigured('qwen');
@@ -740,6 +757,12 @@ async function processDocumentImages(documentId: number, filePath: string): Prom
 
     let processedCount = 0;
     for (let i = 0; i < images.length; i++) {
+      // 检查是否被取消
+      if (taskId && uploadAbortController.value.get(taskId)) {
+        console.log('图片处理被取消');
+        return processedCount;
+      }
+
       const image = images[i];
 
       // 跳过 EMF/WMF 等 Gemini 不支持的格式
@@ -1919,22 +1942,24 @@ onMounted(async () => {
         />
         <div class="input-actions">
           <!-- 对话模式切换 -->
-          <div class="chat-mode-selector">
-            <el-segmented
-              v-model="chatMode"
-              :options="[
-                { value: 'strict', label: '严格模式' },
-                { value: 'analysis', label: '分析模式' },
-                { value: 'direct', label: '对话模式' },
+          <div class="custom-mode-selector">
+            <div
+              v-for="mode in [
+                { value: 'strict', label: '严格模式', desc: '仅基于知识库内容回答' },
+                { value: 'analysis', label: '分析模式', desc: '知识库 + AI 分析建议' },
+                { value: 'direct', label: '对话模式', desc: '不检索知识库，直接对话' }
               ]"
-              size="small"
-            />
-            <el-tooltip
-              :content="chatMode === 'strict' ? '仅基于知识库内容回答' : chatMode === 'analysis' ? '知识库 + AI 分析建议' : '不检索知识库，直接对话'"
-              placement="top"
+              :key="mode.value"
+              class="mode-item"
+              :class="{ active: chatMode === mode.value }"
+              @click="chatMode = mode.value as ChatMode"
             >
-              <el-icon class="mode-help-icon"><QuestionFilled /></el-icon>
-            </el-tooltip>
+              <el-tooltip :content="mode.desc" placement="top" :show-after="500">
+                <div class="mode-content">
+                  <span>{{ mode.label }}</span>
+                </div>
+              </el-tooltip>
+            </div>
           </div>
           <el-button
             v-if="!isGenerating"
@@ -2960,25 +2985,49 @@ onMounted(async () => {
   background: var(--el-bg-color-page);
 }
 
-.chat-mode-selector {
+
+.custom-mode-selector {
+  display: flex;
+  align-items: center;
+  background: var(--el-fill-color);
+  padding: 4px;
+  border-radius: 8px;
+  gap: 4px;
+}
+
+.mode-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--el-text-color-regular);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  font-size: 13px;
+  user-select: none;
+}
+
+.mode-item:hover:not(.active) {
+  background: var(--el-fill-color-darker);
+  color: var(--el-text-color-primary);
+}
+
+.mode-item.active {
+  background: var(--el-color-primary);
+  color: white;
+  box-shadow: 0 2px 4px rgba(64, 158, 255, 0.3);
+  font-weight: 500;
+}
+
+.mode-content {
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
-.chat-mode-selector .el-segmented {
-  --el-segmented-item-selected-bg-color: var(--el-color-primary);
-  --el-segmented-item-selected-color: #fff;
-}
-
-.mode-help-icon {
-  color: var(--el-text-color-secondary);
-  cursor: help;
+.mode-content .el-icon {
   font-size: 14px;
-}
-
-.mode-help-icon:hover {
-  color: var(--el-color-primary);
 }
 
 .no-api-key-alert {

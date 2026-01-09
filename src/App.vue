@@ -31,6 +31,7 @@ const KnowledgeBaseTab = defineAsyncComponent(() => import("./components/Knowled
 const SetupWizardDialog = defineAsyncComponent(() => import("./components/SetupWizardDialog.vue"));
 const DashboardTab = defineAsyncComponent(() => import("./components/DashboardTab.vue"));
 const SmartCopyTab = defineAsyncComponent(() => import("./components/SmartCopyTab.vue"));
+const AdOptimizerTab = defineAsyncComponent(() => import("./components/AdOptimizerTab.vue"));
 
 // ==================== 产品相关状态 ====================
 const products = ref<Product[]>([]);
@@ -171,6 +172,10 @@ const showShortcutsDialog = ref(false);
 // API Key 设置弹窗
 const showApiKeyDialog = ref(false);
 
+// 帮助弹窗
+const showHelpDialog = ref(false);
+const activeHelpTab = ref('dashboard');
+
 // 首次启动配置向导
 const showSetupWizard = ref(false);
 
@@ -210,8 +215,8 @@ const updateDownloading = ref(false);
 const updateProgress = ref(0);
 const updateTotal = ref(0);
 
-// 视图模式: 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge'
-const viewMode = ref<'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge'>('dashboard');
+// 视图模式: 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge' | 'ads'
+const viewMode = ref<'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge' | 'ads'>('dashboard');
 const wordCloudRef = ref<InstanceType<typeof WordCloud> | null>(null);
 const allRootsForCloud = ref<Root[]>([]);
 const loadingCloud = ref(false);
@@ -560,7 +565,7 @@ async function loadAllRootsForCloud() {
 }
 
 // 切换视图模式
-function switchViewMode(mode: 'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge') {
+function switchViewMode(mode: 'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge' | 'ads') {
   viewMode.value = mode;
   if (mode === 'wordcloud' && allRootsForCloud.value.length === 0) {
     loadAllRootsForCloud();
@@ -1969,6 +1974,13 @@ onUnmounted(() => {
           智能文案
         </el-button>
         <el-button
+          :type="viewMode === 'ads' ? 'primary' : 'default'"
+          @click="switchViewMode('ads')"
+        >
+          <el-icon><Promotion /></el-icon>
+          智能广告
+        </el-button>
+        <el-button
           :type="viewMode === 'knowledge' ? 'primary' : 'default'"
           @click="switchViewMode('knowledge')"
         >
@@ -1989,12 +2001,16 @@ onUnmounted(() => {
           </el-dropdown-menu>
         </template>
       </el-dropdown>
+      <el-button class="nav-help-btn" @click="showHelpDialog = true">
+        <el-icon><QuestionFilled /></el-icon>
+        帮助
+      </el-button>
     </nav>
 
     <!-- 主体区域 -->
     <div class="app-body">
       <!-- 侧边栏 - 产品列表（仪表板和知识库视图时隐藏） -->
-    <aside v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy'" class="sidebar" :style="{ width: sidebarWidth + 'px' }">
+    <aside v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'ads'" class="sidebar" :style="{ width: sidebarWidth + 'px' }">
       <div class="sidebar-header">
         <span class="sidebar-title">产品列表</span>
         <el-button type="primary" size="small" circle @click="openAddProductDialog">
@@ -2061,7 +2077,7 @@ onUnmounted(() => {
 
     <!-- 拖动调整手柄（仪表板、知识库、智能文案视图时隐藏） -->
     <div
-      v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy'"
+      v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'ads'"
       class="resize-handle"
       :class="{ resizing: isResizing }"
       @mousedown="startResize"
@@ -2070,7 +2086,7 @@ onUnmounted(() => {
     <!-- 主内容区 -->
     <main class="main-content">
       <!-- 顶部工具栏（仪表板、知识库、智能文案视图时隐藏） -->
-      <header v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy'" class="header">
+      <header v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'ads'" class="header">
         <div class="header-left">
           <h1 class="title">{{ selectedProduct?.name || '请选择产品' }}</h1>
           <div class="header-stats" v-if="selectedProduct">
@@ -2560,17 +2576,29 @@ onUnmounted(() => {
         :product-id="selectedProduct.id"
       />
 
-      <!-- 智能文案视图 -->
-      <SmartCopyTab
-        v-if="viewMode === 'smartcopy'"
-        class="smart-copy-view"
-      />
+      <!-- 智能文案视图 - 使用 keep-alive 保持状态 -->
+      <keep-alive>
+        <SmartCopyTab
+          v-if="viewMode === 'smartcopy'"
+          class="smart-copy-view"
+        />
+      </keep-alive>
 
-      <!-- 知识库视图 -->
-      <KnowledgeBaseTab
-        v-if="viewMode === 'knowledge'"
-        class="knowledge-base-view"
-      />
+      <!-- 知识库视图 - 使用 keep-alive 保持状态 -->
+      <keep-alive>
+        <KnowledgeBaseTab
+          v-if="viewMode === 'knowledge'"
+          class="knowledge-base-view"
+        />
+      </keep-alive>
+
+      <!-- 智能广告视图 - 使用 keep-alive 保持状态 -->
+      <keep-alive>
+        <AdOptimizerTab
+          v-if="viewMode === 'ads'"
+          class="ad-optimizer-view"
+        />
+      </keep-alive>
 
       <!-- 仪表板视图 -->
       <DashboardTab
@@ -2788,6 +2816,779 @@ onUnmounted(() => {
       @update:visible="(v) => !v && checkApiKeyStatus()"
     />
 
+    <!-- 帮助弹窗 -->
+    <el-dialog
+      v-model="showHelpDialog"
+      title="使用帮助"
+      width="700px"
+      class="help-dialog"
+    >
+      <el-tabs v-model="activeHelpTab">
+        <el-tab-pane label="首页" name="dashboard">
+          <div class="help-content">
+            <h4>功能说明</h4>
+            <p>首页是数据总览面板，展示所有产品的关键指标汇总。</p>
+            <ul>
+              <li><strong>关键词统计：</strong>显示各产品的关键词总数、已分类数量等</li>
+              <li><strong>监控概览：</strong>显示正在监控的关键词数量和排名变化趋势</li>
+              <li><strong>排名变化榜：</strong>展示排名上升/下降最多的关键词</li>
+              <li><strong>待办提醒：</strong>提示需要关注的事项，如未分类关键词等</li>
+            </ul>
+            <h4>使用建议</h4>
+            <ul>
+              <li>每天打开首页快速了解整体数据变化</li>
+              <li>关注排名变化榜，及时发现异常波动</li>
+            </ul>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="关键词" name="keywords">
+          <div class="help-content">
+            <h4>功能说明</h4>
+            <p>管理和分析亚马逊关键词数据，支持导入第三方工具数据、AI智能分类、流量分级等功能，帮助运营建立完整的关键词词库。</p>
+            <ul>
+              <li><strong>数据导入：</strong>支持导入西柚找词（推荐）、卖家精灵、H10等工具导出的关键词数据</li>
+              <li><strong>多维度展示：</strong>关键词视图、词根视图、词云视图三种查看方式</li>
+              <li><strong>智能分类：</strong>AI自动分析关键词并进行一级分类（品类词、功能词、场景词等）</li>
+              <li><strong>流量分级：</strong>根据搜索量自动划分大词、中词、小词</li>
+            </ul>
+
+            <h4>核心功能详解</h4>
+            <p style="color: var(--el-text-color-secondary); margin-bottom: 12px;">点击展开查看各功能的详细说明：</p>
+
+            <el-collapse class="agent-prompts-collapse">
+              <el-collapse-item name="dataImport">
+                <template #title>
+                  <span class="agent-title">数据导入</span>
+                  <span class="agent-subtitle">支持多种数据源</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>支持的数据格式</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>西柚找词（推荐）：</strong>ASIN 反查报告，数据全面、字段丰富</li>
+                      <li><strong>卖家精灵：</strong>反查 ASIN 报告、关键词挖掘报告</li>
+                      <li><strong>Helium 10：</strong>Cerebro、Magnet 导出文件</li>
+                      <li><strong>通用格式：</strong>包含关键词列的 Excel/CSV 文件</li>
+                    </ul>
+                  </div>
+                  <h5>导入方式</h5>
+                  <ul>
+                    <li>点击"导入"按钮选择文件</li>
+                    <li>直接拖拽文件到表格区域</li>
+                    <li>支持批量导入多个文件</li>
+                  </ul>
+                  <h5>字段映射</h5>
+                  <ul>
+                    <li>关键词、翻译、相关性得分、相关性档位</li>
+                    <li>流量总和、周平均排名、周平均搜索量</li>
+                    <li>CPC建议竞价、点击转化率、竞争度等</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="viewModes">
+                <template #title>
+                  <span class="agent-title">视图模式</span>
+                  <span class="agent-subtitle">不同角度分析关键词</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>关键词视图</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li>展示所有导入的原始关键词数据</li>
+                      <li>支持按流量级别、相关性、分类等筛选</li>
+                      <li>可自定义显示的列（点击列配置按钮）</li>
+                      <li>支持多选批量添加到排名监控</li>
+                    </ul>
+                  </div>
+                  <h5>词根视图</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li>将关键词拆分为词根，按词根聚合展示</li>
+                      <li>显示每个词根包含的关键词数量</li>
+                      <li>支持词根分类和词组打标</li>
+                      <li>帮助发现核心词根和长尾扩展方向</li>
+                    </ul>
+                  </div>
+                  <h5>词云视图</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li>以词云形式可视化展示词根</li>
+                      <li>词根大小反映包含关键词数量</li>
+                      <li>颜色可区分不同分类</li>
+                      <li>直观发现高频词根</li>
+                    </ul>
+                  </div>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="trafficLevel">
+                <template #title>
+                  <span class="agent-title">流量分级</span>
+                  <span class="agent-subtitle">划分大词、中词、小词</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>分级依据</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li>根据"流量总和"或"周平均搜索量"字段</li>
+                      <li>可自定义大词、中词的阈值</li>
+                      <li>默认：大词 > 10000，中词 1000-10000，小词 < 1000</li>
+                    </ul>
+                  </div>
+                  <h5>使用场景</h5>
+                  <ul>
+                    <li><strong>大词：</strong>搜索量大、竞争激烈，适合品牌词和核心词布局</li>
+                    <li><strong>中词：</strong>流量适中、竞争相对较小，性价比较高</li>
+                    <li><strong>小词：</strong>精准长尾词，转化率通常较高</li>
+                  </ul>
+                  <h5>设置方式</h5>
+                  <ul>
+                    <li>点击工具栏"流量设置"按钮</li>
+                    <li>选择用于分级的字段</li>
+                    <li>设置大词和中词的最小阈值</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="aiClassification">
+                <template #title>
+                  <span class="agent-title">AI 智能分类</span>
+                  <span class="agent-subtitle">自动分析关键词属性</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>一级分类</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>品类词：</strong>产品类目相关词，如"蓝牙耳机"、"运动鞋"</li>
+                      <li><strong>功能词：</strong>描述产品功能特性，如"降噪"、"防水"</li>
+                      <li><strong>场景词：</strong>使用场景相关，如"户外"、"办公室"</li>
+                      <li><strong>属性词：</strong>颜色、材质、尺寸等，如"黑色"、"皮质"</li>
+                      <li><strong>品牌词：</strong>品牌名称相关词</li>
+                      <li><strong>人群词：</strong>目标人群相关，如"女士"、"儿童"</li>
+                      <li><strong>受众词：</strong>特定受众群体，如"程序员"、"学生"</li>
+                    </ul>
+                  </div>
+                  <h5>词组打标</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li>分析词根组成的词组模式</li>
+                      <li>识别常见搭配和修饰关系</li>
+                      <li>帮助理解关键词结构</li>
+                    </ul>
+                  </div>
+                  <h5>使用方式</h5>
+                  <ul>
+                    <li>需要先配置 AI 服务 API Key（DeepSeek 推荐）</li>
+                    <li>在词根视图点击"AI分析"按钮</li>
+                    <li>支持批量分析和单个词根分析</li>
+                    <li>分析结果可导出</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="filterAndSearch">
+                <template #title>
+                  <span class="agent-title">筛选与搜索</span>
+                  <span class="agent-subtitle">快速定位目标关键词</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>筛选维度</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>流量级别：</strong>大词 / 中词 / 小词</li>
+                      <li><strong>相关性：</strong>强相关 / 高相关 / 中相关 / 弱相关</li>
+                      <li><strong>一级分类：</strong>品类词 / 功能词 / 场景词 等</li>
+                      <li><strong>有序性：</strong>有序 / 无序（词根视图）</li>
+                    </ul>
+                  </div>
+                  <h5>搜索功能</h5>
+                  <ul>
+                    <li>支持关键词模糊搜索</li>
+                    <li>支持中文翻译搜索</li>
+                    <li>回车或点击搜索按钮执行</li>
+                  </ul>
+                  <h5>排序功能</h5>
+                  <ul>
+                    <li>点击表头可按该列排序</li>
+                    <li>支持升序/降序切换</li>
+                    <li>常用排序：流量、搜索量、相关性得分</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="batchOperations">
+                <template #title>
+                  <span class="agent-title">批量操作</span>
+                  <span class="agent-subtitle">高效管理关键词</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>关键词视图</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>批量添加监控：</strong>选中关键词后添加到排名监控</li>
+                      <li><strong>批量导出：</strong>导出筛选后的关键词数据</li>
+                      <li><strong>复制关键词：</strong>复制选中的关键词到剪贴板</li>
+                    </ul>
+                  </div>
+                  <h5>词根视图</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>批量分类：</strong>为选中词根批量设置分类</li>
+                      <li><strong>AI批量分析：</strong>批量进行智能分类分析</li>
+                      <li><strong>词组打标：</strong>批量分析词组结构</li>
+                    </ul>
+                  </div>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
+
+            <h4>数据字段说明</h4>
+            <ul>
+              <li><strong>关键词：</strong>原始关键词文本</li>
+              <li><strong>翻译：</strong>关键词的中文翻译</li>
+              <li><strong>相关性得分/档位：</strong>与目标ASIN的相关程度</li>
+              <li><strong>流量总和：</strong>关键词带来的总流量估算</li>
+              <li><strong>周平均排名：</strong>产品在该关键词下的平均排名</li>
+              <li><strong>周平均搜索量：</strong>关键词的周搜索量</li>
+              <li><strong>CPC建议竞价：</strong>广告建议出价</li>
+              <li><strong>点击转化率：</strong>点击后的转化比例</li>
+              <li><strong>竞争度：</strong>关键词的竞争激烈程度</li>
+            </ul>
+
+            <h4>使用流程</h4>
+            <ol>
+              <li>创建产品，选择对应的亚马逊站点</li>
+              <li>导入关键词数据（卖家精灵/H10导出文件）</li>
+              <li>设置流量分级阈值，自动划分大中小词</li>
+              <li>切换到词根视图，运行 AI 分析进行智能分类</li>
+              <li>使用筛选功能定位目标关键词</li>
+              <li>将重点关键词添加到排名监控</li>
+              <li>定期导出更新的关键词数据</li>
+            </ol>
+
+            <h4>注意事项</h4>
+            <ul>
+              <li>导入前确保数据格式正确，必须包含"关键词"列</li>
+              <li>AI分类需要配置API Key，推荐使用DeepSeek（成本低、效果好）</li>
+              <li>大量关键词分析时需要一定时间，请耐心等待</li>
+              <li>流量数据来自第三方工具，仅供参考</li>
+              <li>建议定期更新关键词数据，保持词库时效性</li>
+            </ul>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="排名监控" name="monitoring">
+          <div class="help-content">
+            <h4>功能说明</h4>
+            <p>实时监控关键词在亚马逊搜索结果中的自然排名和广告排名变化，帮助运营及时发现排名波动并追踪优化效果。</p>
+            <ul>
+              <li><strong>双维度监控：</strong>同时监控自然排名和广告位排名，区分 SP 广告和自然搜索结果</li>
+              <li><strong>多国家支持：</strong>支持美国、英国、德国、法国、意大利、西班牙等主要站点</li>
+              <li><strong>多视图模式：</strong>列表视图、按产品分组、按关键词分组三种查看方式</li>
+              <li><strong>趋势可视化：</strong>迷你图展示近7天排名趋势，点击查看详细历史曲线</li>
+            </ul>
+
+            <h4>核心功能详解</h4>
+            <p style="color: var(--el-text-color-secondary); margin-bottom: 12px;">点击展开查看各功能的详细说明：</p>
+
+            <el-collapse class="agent-prompts-collapse">
+              <el-collapse-item name="rankingDisplay">
+                <template #title>
+                  <span class="agent-title">排名显示规则</span>
+                  <span class="agent-subtitle">理解排名数据的含义</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>自然排名</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>显示格式：</strong>"第X页第Y名"，如"第1页第5名"</li>
+                      <li><strong>Top 10 高亮：</strong>第1页前10名显示为绿色，表示优秀排名</li>
+                      <li><strong>无排名：</strong>显示"前N页无排名"，N为设置的最大检测页数</li>
+                      <li><strong>注意：</strong>自然排名不包含 SP 广告位，只统计自然搜索结果</li>
+                    </ul>
+                  </div>
+                  <h5>广告排名</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>显示格式：</strong>同样为"第X页第Y名"</li>
+                      <li><strong>含义：</strong>产品在该关键词下的 Sponsored 广告位置</li>
+                      <li><strong>无排名：</strong>表示该关键词下没有投放广告或广告未展示</li>
+                    </ul>
+                  </div>
+                  <h5>趋势图</h5>
+                  <ul>
+                    <li>绿色线条：自然排名趋势（越低越好）</li>
+                    <li>蓝色线条：广告排名趋势（越低越好）</li>
+                    <li>点击趋势图可查看详细的历史排名曲线和数据</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="viewModes">
+                <template #title>
+                  <span class="agent-title">视图模式</span>
+                  <span class="agent-subtitle">不同场景使用不同视图</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>列表视图（默认）</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li>所有监控项平铺展示，支持排序和筛选</li>
+                      <li>适合快速查看所有关键词的排名情况</li>
+                      <li>支持多选批量操作</li>
+                    </ul>
+                  </div>
+                  <h5>按产品分组</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li>按 ASIN + 站点 分组，展示每个产品的所有监控关键词</li>
+                      <li>显示产品图片、价格、评分等信息</li>
+                      <li>显示组内平均排名，支持批量检测整组</li>
+                    </ul>
+                  </div>
+                  <h5>按关键词分组</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li>按关键词 + 站点 分组，展示同一关键词下的多个产品</li>
+                      <li>适合分析同一关键词下自己和竞品的排名对比</li>
+                      <li>显示组内最佳排名</li>
+                    </ul>
+                  </div>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="keywordTags">
+                <template #title>
+                  <span class="agent-title">关键词标签</span>
+                  <span class="agent-subtitle">分类管理监控关键词</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>标签类型</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>核心词：</strong>最重要的主推关键词，需要重点关注排名</li>
+                      <li><strong>长尾词：</strong>精准长尾词，通常转化率较高</li>
+                      <li><strong>竞品词：</strong>竞品品牌词或型号词</li>
+                      <li><strong>品牌词：</strong>自己的品牌词</li>
+                      <li><strong>待优化：</strong>需要优化但目前排名不理想的词</li>
+                      <li><strong>测试中：</strong>正在测试效果的词</li>
+                    </ul>
+                  </div>
+                  <h5>使用方式</h5>
+                  <ul>
+                    <li>在关键词列表中，悬停时显示标签小圆点</li>
+                    <li>点击 "+" 号或标签区域打开标签编辑器</li>
+                    <li>支持多选，一个关键词可以有多个标签</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="optimizationEvents">
+                <template #title>
+                  <span class="agent-title">优化事件记录</span>
+                  <span class="agent-subtitle">追踪操作与排名变化的关联</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>事件类型</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>Listing 优化：</strong>标题、五点、描述、图片、A+内容等修改</li>
+                      <li><strong>价格调整：</strong>调价、优惠券、促销活动</li>
+                      <li><strong>库存变化：</strong>补货、断货、FBA 入库</li>
+                      <li><strong>广告调整：</strong>竞价、预算、投放词修改</li>
+                      <li><strong>其他操作：</strong>差评处理、QA 更新、品牌旗舰店等</li>
+                    </ul>
+                  </div>
+                  <h5>使用价值</h5>
+                  <ul>
+                    <li>在排名历史图表中显示事件标记，直观看到操作对排名的影响</li>
+                    <li>支持日历视图和列表视图两种浏览方式</li>
+                    <li>可关联到特定 ASIN 和关键词</li>
+                    <li>帮助复盘优化效果，积累运营经验</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="detectionSettings">
+                <template #title>
+                  <span class="agent-title">检测设置</span>
+                  <span class="agent-subtitle">自定义检测行为</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>检测页数</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li>默认检测前 5 页（约 240 个结果）</li>
+                      <li>可在设置中调整最大检测页数（1-10页）</li>
+                      <li>页数越多检测越慢，建议根据实际需要设置</li>
+                    </ul>
+                  </div>
+                  <h5>自动检测</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li>支持定时自动检测（每天/每周指定时间）</li>
+                      <li>在"监控设置"中配置自动检测时间</li>
+                      <li>建议固定时间检测，便于对比分析</li>
+                    </ul>
+                  </div>
+                  <h5>检测优先级</h5>
+                  <ul>
+                    <li>支持设置关键词优先级（高/中/低）</li>
+                    <li>自动检测时可设置只检测高优先级关键词</li>
+                    <li>按产品分组时，组内按优先级排序显示</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
+
+            <h4>统计指标说明</h4>
+            <ul>
+              <li><strong>监控总数：</strong>添加的监控关键词总数</li>
+              <li><strong>活跃监控：</strong>状态为"活跃"的监控数量（暂停的不计入）</li>
+              <li><strong>Top 10：</strong>自然排名在第1页前10名的数量</li>
+              <li><strong>Top 30：</strong>自然排名在前30名的数量（约前2页）</li>
+              <li><strong>有广告位：</strong>有 Sponsored 广告排名的数量</li>
+            </ul>
+
+            <h4>使用流程</h4>
+            <ol>
+              <li>点击"添加监控"，输入关键词和 ASIN（或从词库批量添加）</li>
+              <li>选择站点并设置优先级</li>
+              <li>首次添加后点击"检测全部"获取初始排名</li>
+              <li>后续可手动检测或配置自动检测</li>
+              <li>点击趋势图查看历史排名曲线</li>
+              <li>进行优化操作时记录"优化事件"</li>
+              <li>观察排名变化，分析优化效果</li>
+            </ol>
+
+            <h4>注意事项</h4>
+            <ul>
+              <li>首次检测需要安装依赖（Python + Playwright），按提示安装即可</li>
+              <li>排名数据通过模拟浏览器抓取，检测较多关键词时需要一定时间</li>
+              <li>不同地区/账号看到的排名可能略有差异，以趋势变化为参考</li>
+              <li>建议每天固定时间检测，便于横向对比分析</li>
+              <li>SP 广告位和自然位分开统计，互不影响</li>
+              <li>检测失败时检查网络连接，或尝试减少检测页数</li>
+            </ul>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="智能文案" name="smartcopy">
+          <div class="help-content">
+            <h4>功能说明</h4>
+            <p>基于AI分析竞品数据，生成符合 A9、COSMO、Rufus 算法的优质 Listing 文案建议。</p>
+            <ul>
+              <li><strong>新品打造：</strong>从零开始创建 Listing，支持填写产品信息获得针对性建议</li>
+              <li><strong>老品优化：</strong>基于现有文案生成优化建议，保留品牌调性</li>
+              <li><strong>竞品分析：</strong>抓取竞品标题、五点、评论等信息</li>
+              <li><strong>双显示模式：</strong>画布模式（并行）、经典模式（顺序）</li>
+            </ul>
+
+            <h4>AI 分析流程</h4>
+            <p style="color: var(--el-text-color-secondary); margin-bottom: 12px;">点击展开查看各步骤的详细分析逻辑：</p>
+
+            <el-collapse class="agent-prompts-collapse">
+              <el-collapse-item name="reviewInsights">
+                <template #title>
+                  <span class="agent-title">步骤 1: 评论洞察分析</span>
+                  <span class="agent-subtitle">提取用户真实反馈</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>分析内容</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>使用场景（5-10条）：</strong>买家实际使用产品的场景，如"户外露营时使用"</li>
+                      <li><strong>爽点/卖点（5-10条）：</strong>买家喜欢的产品优点，用买家的语言描述</li>
+                      <li><strong>痛点/问题（5-10条）：</strong>差评(1-3星)中的高频问题和抱怨</li>
+                    </ul>
+                  </div>
+                  <h5>输出内容</h5>
+                  <ul>
+                    <li>每条洞察标注出现频次和示例评论原文</li>
+                    <li>综合洞察总结（100字以内）</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="listingAnalysis">
+                <template #title>
+                  <span class="agent-title">步骤 2: 竞品文案分析</span>
+                  <span class="agent-subtitle">分析文案结构和关键词</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>分析内容</h5>
+                  <div class="prompt-block">
+                    <p><strong>标题结构分析：</strong></p>
+                    <ul>
+                      <li>品牌词、核心词、属性词、场景词的排列方式</li>
+                      <li>高频词汇统计</li>
+                    </ul>
+                    <p><strong>五点描述分析：</strong></p>
+                    <ul>
+                      <li>共同主题提取</li>
+                      <li>最佳实践总结</li>
+                    </ul>
+                    <p><strong>关键词使用分析：</strong></p>
+                    <ul>
+                      <li>竞品普遍使用的关键词</li>
+                      <li>关键词使用模式</li>
+                    </ul>
+                  </div>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="optimization">
+                <template #title>
+                  <span class="agent-title">步骤 3: 优化建议生成</span>
+                  <span class="agent-subtitle">生成完整 Listing 文案</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>遵循的算法原则</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>A9 算法：</strong>在标题前部放置核心关键词，确保完全匹配</li>
+                      <li><strong>COSMO 算法：</strong>覆盖多种使用场景，匹配用户搜索意图</li>
+                      <li><strong>Rufus 算法：</strong>预设性解答买家常见问题，消除购买顾虑</li>
+                    </ul>
+                  </div>
+                  <h5>生成内容</h5>
+                  <ul>
+                    <li><strong>标题建议：</strong>多个版本，说明关键词选择理由和数据来源</li>
+                    <li><strong>五点描述：</strong>5条，每条标注重点主题、埋入的关键词、写作理由</li>
+                    <li><strong>后台关键词：</strong>选择前台未使用的长尾关键词</li>
+                    <li><strong>商品描述：</strong>2个版本，包含品牌故事、核心卖点、使用场景</li>
+                    <li><strong>A+内容建议：</strong>主图文案、辅图主题、模块推荐</li>
+                  </ul>
+                  <h5>五点主题参考</h5>
+                  <div class="prompt-block">
+                    <ol>
+                      <li>核心卖点/主要功能</li>
+                      <li>解决用户痛点（针对评论中的负面反馈）</li>
+                      <li>使用场景覆盖（匹配 COSMO 场景算法）</li>
+                      <li>规格参数/品质保障</li>
+                      <li>售后服务/包装配件</li>
+                    </ol>
+                  </div>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
+
+            <h4>使用流程</h4>
+            <ol>
+              <li>创建项目，选择场景（新品打造/老品优化）</li>
+              <li>添加 3-5 个主要竞品 ASIN</li>
+              <li>点击"批量获取"抓取竞品数据（Listing + 评论）</li>
+              <li>（可选）关联产品关键词，获得更精准的关键词建议</li>
+              <li>（新品打造）填写"我的产品信息"获得针对性文案</li>
+              <li>点击"开始分析"，AI 会逐步生成分析报告</li>
+              <li>参考建议优化自己的 Listing，支持导出 Excel</li>
+            </ol>
+
+            <h4>注意事项</h4>
+            <ul>
+              <li>需要先在设置中配置 AI 服务的 API Key</li>
+              <li>竞品数据抓取需要一定时间，请耐心等待</li>
+              <li>评论数据越多，洞察越准确</li>
+              <li>建议关联产品关键词，以便 AI 选择高搜索量词</li>
+            </ul>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="智能广告" name="ads">
+          <div class="help-content">
+            <h4>功能说明</h4>
+            <p>基于AI多智能体架构分析亚马逊广告搜索词报告，提供优化建议。</p>
+            <ul>
+              <li><strong>数据导入：</strong>支持导入亚马逊搜索词报告（Excel/CSV格式）</li>
+              <li><strong>多国家支持：</strong>自动识别国家并按国家分组分析，正确处理不同货币</li>
+              <li><strong>多智能体分析：</strong>4个AI专家并行分析，全面覆盖广告优化维度</li>
+              <li><strong>增量显示：</strong>每个国家分析完成后立即显示结果，失败不影响已完成的国家</li>
+            </ul>
+
+            <h4>AI 智能体介绍</h4>
+            <p style="color: var(--el-text-color-secondary); margin-bottom: 12px;">点击展开查看各智能体的详细分析逻辑：</p>
+
+            <el-collapse class="agent-prompts-collapse">
+              <el-collapse-item name="searchTermAnalyst">
+                <template #title>
+                  <span class="agent-title">1. 搜索词分析师</span>
+                  <span class="agent-subtitle">识别无效搜索词和高潜力词</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>分析维度</h5>
+                  <div class="prompt-block">
+                    <p><strong>无效搜索词识别：</strong></p>
+                    <ul>
+                      <li>高花费零转化（spend &gt; 平均值 且 orders = 0）</li>
+                      <li>极低转化率（conversion_rate &lt; 1% 且 clicks &gt; 10）</li>
+                      <li>不相关词（通过语义判断与投放词不相关）</li>
+                      <li>ACOS 极高（acos &gt; 200%）</li>
+                    </ul>
+                    <p><strong>高潜力词识别：</strong></p>
+                    <ul>
+                      <li>高转化低 ACOS（acos &lt; 目标 且 orders &gt;= 2）</li>
+                      <li>低展示高转化（需要加大投放）</li>
+                      <li>精准匹配候选词（已有好表现的广泛/词组匹配词）</li>
+                    </ul>
+                  </div>
+                  <h5>输出内容</h5>
+                  <ul>
+                    <li>否定词候选（最多15条）：搜索词、原因、风险级别、浪费花费、建议匹配类型、影响的广告活动</li>
+                    <li>高潜力词（最多10条）：搜索词、表现数据、建议操作、当前匹配类型</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="acosExpert">
+                <template #title>
+                  <span class="agent-title">2. ACOS 专家</span>
+                  <span class="agent-subtitle">分析广告效率，识别ACOS异常</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>ACOS 分布分析</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>优秀：</strong>ACOS &lt; 目标 × 0.7</li>
+                      <li><strong>良好：</strong>目标 × 0.7 ~ 目标</li>
+                      <li><strong>边缘：</strong>目标 ~ 目标 × 1.5</li>
+                      <li><strong>较差：</strong>目标 × 1.5 ~ 100%</li>
+                      <li><strong>极差：</strong>ACOS &gt; 100%</li>
+                      <li><strong>无销售：</strong>有花费但销售为0</li>
+                    </ul>
+                  </div>
+                  <h5>重点关注</h5>
+                  <ul>
+                    <li>超高 ACOS（&gt;100%）的搜索词</li>
+                    <li>高花费无销售的搜索词</li>
+                  </ul>
+                  <h5>输出内容</h5>
+                  <ul>
+                    <li>效率分析：盈利/亏损/持平/无销售关键词统计</li>
+                    <li>ACOS 分布统计：各区间的数量和花费</li>
+                    <li>优化优先级列表（最多15条）</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="bidStrategist">
+                <template #title>
+                  <span class="agent-title">3. 竞价策略师</span>
+                  <span class="agent-subtitle">提供竞价调整建议</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>竞价调整原则</h5>
+                  <div class="prompt-block">
+                    <p><strong>加价条件（+10%~30%）：</strong></p>
+                    <ul>
+                      <li>ACOS &lt; 目标 × 0.7 且转化率 &gt; 5% 且展示量偏低</li>
+                      <li>表现优秀但市场份额可能不足</li>
+                    </ul>
+                    <p><strong>降价条件（-10%~30%）：</strong></p>
+                    <ul>
+                      <li>ACOS &gt; 目标 × 1.3 且有转化</li>
+                      <li>需要保持曝光但控制成本</li>
+                    </ul>
+                    <p><strong>暂停条件：</strong></p>
+                    <ul>
+                      <li>ACOS &gt; 150%</li>
+                      <li>花费 &gt; $15 且零转化</li>
+                      <li>持续亏损无改善迹象</li>
+                    </ul>
+                    <p><strong>维持条件：</strong>ACOS 在目标 ± 30% 范围内</p>
+                  </div>
+                  <h5>输出内容</h5>
+                  <ul>
+                    <li>竞价调整建议（最多20条）：投放词、建议、调整幅度、原因、优先级</li>
+                    <li>汇总统计：加价/降价/暂停/维持数量，预计节省金额</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="suggestionIntegrator">
+                <template #title>
+                  <span class="agent-title">4. 建议整合器</span>
+                  <span class="agent-subtitle">生成最终优化报告</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>整合要求</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li>合并去重否定词建议，按风险级别和浪费花费排序</li>
+                      <li>整合竞价调整建议并按优先级排序</li>
+                      <li>提取关键词机会并评估潜力</li>
+                      <li>生成执行摘要和关键洞察</li>
+                    </ul>
+                  </div>
+                  <h5>最终输出</h5>
+                  <ul>
+                    <li>否定词建议（最多15条）：综合三位专家意见</li>
+                    <li>竞价调整（最多15条）：按优先级排序</li>
+                    <li>新词机会（最多10条）：按潜力评估排序</li>
+                    <li>优化摘要：总花费、预计节省、优化评分、关键洞察</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
+
+            <h4>优化评分规则（0-100分）</h4>
+            <p>评分基于以下维度计算：</p>
+            <ul>
+              <li>基础分：50 分</li>
+              <li>整体 ACOS 低于目标：+20 分</li>
+              <li>整体 ACOS 高于目标 50% 以上：-20 分</li>
+              <li>高风险否定词占比 &lt; 5%：+10 分</li>
+              <li>高风险否定词占比 &gt; 20%：-10 分</li>
+              <li>存在高潜力关键词机会：+10 分</li>
+              <li>大部分关键词 ACOS 在目标范围内：+10 分</li>
+            </ul>
+
+            <h4>使用流程</h4>
+            <ol>
+              <li>创建广告项目，设置目标 ACOS</li>
+              <li>导入亚马逊搜索词报告（支持多国家混合报告）</li>
+              <li>选择 AI 服务商和模型，点击"开始分析"</li>
+              <li>等待分析完成，查看各国家的优化建议</li>
+              <li>如有失败的国家，可点击"重试失败"按钮</li>
+            </ol>
+
+            <h4>注意事项</h4>
+            <ul>
+              <li>需要先在设置中配置 AI 服务的 API Key</li>
+              <li>建议选择 DeepSeek 或 Gemini，性价比较高</li>
+              <li>数据量大时分析时间较长，请耐心等待</li>
+              <li>分析过程中请勿关闭页面，否则需要重新开始</li>
+            </ul>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="知识库" name="knowledge">
+          <div class="help-content">
+            <h4>功能说明</h4>
+            <p>上传产品相关文档，构建专属知识库，支持AI对话问答。</p>
+            <ul>
+              <li><strong>文档管理：</strong>支持上传PDF、Word、TXT、Markdown等格式</li>
+              <li><strong>分类整理：</strong>创建分类文件夹，整理不同类型的文档</li>
+              <li><strong>智能问答：</strong>基于上传的文档内容，AI可以准确回答相关问题</li>
+              <li><strong>多种模式：</strong>支持知识库问答、联网搜索、自由对话三种模式</li>
+            </ul>
+            <h4>使用建议</h4>
+            <ul>
+              <li>上传产品说明书、竞品分析报告、市场调研等资料</li>
+              <li>文档越详细，AI回答越准确</li>
+              <li>可以直接拖拽文件到文档列表区域快速上传</li>
+            </ul>
+            <h4>注意事项</h4>
+            <ul>
+              <li>需要配置支持知识库的AI服务（如通义千问）</li>
+              <li>首次上传文档需要等待索引构建完成</li>
+            </ul>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+    </el-dialog>
+
     <!-- 首次启动配置向导 -->
     <SetupWizardDialog
       v-model:visible="showSetupWizard"
@@ -2955,7 +3756,114 @@ body,
 
 .global-settings-dropdown {
   position: absolute;
+  right: 80px;
+}
+
+.nav-help-btn {
+  position: absolute;
   right: 20px;
+}
+
+/* 帮助对话框 */
+.help-dialog .help-content {
+  line-height: 1.8;
+  color: var(--el-text-color-regular);
+}
+
+.help-dialog .help-content h4 {
+  margin: 16px 0 8px;
+  color: var(--el-text-color-primary);
+  font-size: 15px;
+}
+
+.help-dialog .help-content h4:first-child {
+  margin-top: 0;
+}
+
+.help-dialog .help-content p {
+  margin: 0 0 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.help-dialog .help-content ul,
+.help-dialog .help-content ol {
+  margin: 0 0 12px;
+  padding-left: 20px;
+}
+
+.help-dialog .help-content li {
+  margin-bottom: 6px;
+}
+
+.help-dialog .help-content strong {
+  color: var(--el-text-color-primary);
+}
+
+/* AI 智能体提示词折叠面板 */
+.agent-prompts-collapse {
+  margin-bottom: 16px;
+}
+
+.agent-prompts-collapse .agent-title {
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  margin-right: 8px;
+}
+
+.agent-prompts-collapse .agent-subtitle {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.agent-prompts-collapse .prompt-section {
+  padding: 0 8px;
+}
+
+.agent-prompts-collapse .prompt-section h5 {
+  margin: 12px 0 6px;
+  font-size: 13px;
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+
+.agent-prompts-collapse .prompt-section h5:first-child {
+  margin-top: 0;
+}
+
+.agent-prompts-collapse .prompt-block {
+  background: var(--el-fill-color-lighter);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.agent-prompts-collapse .prompt-block p {
+  margin: 8px 0 4px;
+  font-size: 13px;
+}
+
+.agent-prompts-collapse .prompt-block p:first-child {
+  margin-top: 0;
+}
+
+.agent-prompts-collapse .prompt-block ul {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+}
+
+.agent-prompts-collapse .prompt-block li {
+  font-size: 12px;
+  margin-bottom: 2px;
+  color: var(--el-text-color-regular);
+}
+
+.agent-prompts-collapse .prompt-section > ul {
+  padding-left: 18px;
+}
+
+.agent-prompts-collapse .prompt-section > ul li {
+  font-size: 12px;
+  margin-bottom: 4px;
 }
 
 /* 主体区域 */
@@ -3351,6 +4259,15 @@ body,
 }
 
 .smart-copy-view {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  margin: 0 16px;
+  background: var(--el-bg-color);
+  border-radius: 8px;
+}
+
+.ad-optimizer-view {
   flex: 1;
   overflow-y: auto;
   min-height: 0;

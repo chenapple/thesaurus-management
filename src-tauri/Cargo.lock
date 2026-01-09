@@ -4899,7 +4899,7 @@ dependencies = [
 
 [[package]]
 name = "thesaurus-management"
-version = "0.5.32"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "calamine",

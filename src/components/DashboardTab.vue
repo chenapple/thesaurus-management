@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue';
-import { TrendCharts, Document, Monitor, Folder, Top, Bottom } from '@element-plus/icons-vue';
+import { TrendCharts, Document, Monitor, Folder, Top, Bottom, Timer } from '@element-plus/icons-vue';
 import * as api from '../api';
 import type { MonitoringStats, TrafficLevelStats, OptimizationEvent, Product, SchedulerSettings, SchedulerStatus } from '../types';
 
@@ -309,16 +309,6 @@ function getEventTypeLabel(type: string): string {
   return labels[type] || type;
 }
 
-// 解析受影响关键词
-function parseAffectedKeywords(json?: string): string[] {
-  if (!json) return [];
-  try {
-    return JSON.parse(json);
-  } catch {
-    return [];
-  }
-}
-
 // 监听产品变化
 watch(() => props.selectedProduct, () => {
   loadDashboardData();
@@ -363,264 +353,237 @@ function formatDateTime(dateStr: string | null): string {
     </div>
 
     <!-- 有产品时的内容 -->
-    <div v-else class="dashboard-content">
-    <!-- 欢迎区域 -->
-    <div class="welcome-section">
-      <h2>数据概览</h2>
-      <span class="product-name" v-if="selectedProduct">
-        {{ selectedProduct.name }}
-      </span>
-    </div>
-
-    <!-- 指标卡片 -->
-    <div class="stat-cards">
-      <div class="stat-card" @click="emit('switchView', 'keywords')">
-        <div class="stat-icon keywords">
-          <el-icon :size="24"><Document /></el-icon>
+    <div v-else class="dashboard-content-new">
+      <!-- 顶部头部 -->
+      <div class="dashboard-header">
+        <div class="header-left">
+          <h2>Dashboard</h2>
+          <span class="product-badge" v-if="selectedProduct">{{ selectedProduct.name }}</span>
         </div>
-        <div class="stat-content">
-          <div class="stat-value">{{ stats.keywordCount.toLocaleString() }}</div>
-          <div class="stat-label">关键词</div>
+        <div class="header-right">
+          <span class="current-date">{{ new Date().toLocaleDateString('zh-CN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) }}</span>
         </div>
       </div>
 
-      <div class="stat-card" @click="emit('switchView', 'roots')">
-        <div class="stat-icon roots">
-          <el-icon :size="24"><TrendCharts /></el-icon>
-        </div>
-        <div class="stat-content">
-          <div class="stat-value">{{ stats.rootCount.toLocaleString() }}</div>
-          <div class="stat-label">词根</div>
-        </div>
-      </div>
-
-      <div class="stat-card" @click="emit('switchView', 'monitoring')">
-        <div class="stat-icon monitoring">
-          <el-icon :size="24"><Monitor /></el-icon>
-        </div>
-        <div class="stat-content">
-          <div class="stat-value">
-            {{ monitoringStats.active }} / {{ monitoringStats.total }}
-          </div>
-          <div class="stat-label">排名监控 (活跃/总数)</div>
-        </div>
-      </div>
-
-      <div class="stat-card" @click="emit('switchView', 'knowledge')">
-        <div class="stat-icon knowledge">
-          <el-icon :size="24"><Folder /></el-icon>
-        </div>
-        <div class="stat-content">
-          <div class="stat-value">{{ kbStats.documentCount }}</div>
-          <div class="stat-label">知识库文档</div>
-          <div class="stat-sub">{{ kbStats.conversationCount }} 个对话</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 排名变化概览 -->
-    <div class="section-title">排名监控概览</div>
-    <div class="ranking-overview">
-      <div class="ranking-card top10">
-        <div class="ranking-value">{{ monitoringStats.top10_organic }}</div>
-        <div class="ranking-label">Top 10</div>
-        <div class="ranking-desc">有机排名前10</div>
-      </div>
-      <div class="ranking-card top30">
-        <div class="ranking-value">{{ monitoringStats.top30_organic }}</div>
-        <div class="ranking-label">Top 30</div>
-        <div class="ranking-desc">有机排名前30</div>
-      </div>
-      <div class="ranking-card sponsored">
-        <div class="ranking-value">{{ monitoringStats.with_sponsored }}</div>
-        <div class="ranking-label">广告位</div>
-        <div class="ranking-desc">有广告排名</div>
-      </div>
-    </div>
-
-    <!-- 中间部分：排名变化榜 + 定时任务 -->
-    <div class="middle-section">
-      <!-- 排名变化榜 -->
-      <div class="ranking-changes-section">
-        <div class="section-title">排名变化榜 (近7天)</div>
-        <div class="ranking-changes-content" v-if="topRisers.length > 0 || topFallers.length > 0">
-          <div class="changes-column risers">
-            <div class="column-header">
-              <el-icon color="#67c23a"><Top /></el-icon>
-              上升 TOP 5
+      <!-- 第一排：关键指标卡片 -->
+      <div class="stats-grid">
+        <div class="modern-card stat-card hover-effect" @click="emit('switchView', 'keywords')">
+          <div class="stat-top">
+            <div class="icon-circle bg-blue-light">
+              <el-icon class="text-blue"><Document /></el-icon>
             </div>
-            <div class="changes-list">
-              <div
-                v-for="item in topRisers"
-                :key="item.monitoringId"
-                class="change-item"
-              >
-                <span class="keyword-name">{{ item.keyword }}</span>
-                <span class="change-value positive">+{{ item.change }}</span>
+            <span class="stat-title">总关键词</span>
+          </div>
+          <div class="stat-main">
+            <span class="stat-number">{{ stats.keywordCount.toLocaleString() }}</span>
+          </div>
+        </div>
+
+        <div class="modern-card stat-card hover-effect" @click="emit('switchView', 'roots')">
+          <div class="stat-top">
+            <div class="icon-circle bg-purple-light">
+              <el-icon class="text-purple"><TrendCharts /></el-icon>
+            </div>
+            <span class="stat-title">词根数量</span>
+          </div>
+          <div class="stat-main">
+            <span class="stat-number">{{ stats.rootCount.toLocaleString() }}</span>
+          </div>
+        </div>
+
+        <div class="modern-card stat-card hover-effect" @click="emit('switchView', 'monitoring')">
+          <div class="stat-top">
+            <div class="icon-circle bg-green-light">
+              <el-icon class="text-green"><Monitor /></el-icon>
+            </div>
+            <span class="stat-title">监控中</span>
+          </div>
+          <div class="stat-main">
+            <span class="stat-number">{{ monitoringStats.active }} <span class="stat-total">/ {{ monitoringStats.total }}</span></span>
+          </div>
+        </div>
+
+        <div class="modern-card stat-card hover-effect" @click="emit('switchView', 'knowledge')">
+          <div class="stat-top">
+            <div class="icon-circle bg-orange-light">
+              <el-icon class="text-orange"><Folder /></el-icon>
+            </div>
+            <span class="stat-title">知识库</span>
+          </div>
+          <div class="stat-main">
+            <span class="stat-number">{{ kbStats.documentCount }}</span>
+            <span class="stat-sub-text">{{ kbStats.conversationCount }} 个对话</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 第二排：排名概览 (大卡片) -->
+      <div class="modern-card ranking-overview-card">
+        <div class="card-header">
+          <h3>排名分布概览</h3>
+        </div>
+        <div class="ranking-bars-container">
+          <!-- Top 10 -->
+          <div class="ranking-bar-group">
+            <div class="bar-info">
+              <span class="bar-label">Top 10 排名</span>
+              <span class="bar-value text-green">{{ monitoringStats.top10_organic }}</span>
+            </div>
+            <div class="progress-bg">
+              <div class="progress-fill fill-green" :style="{ width: getPercentage(monitoringStats.top10_organic, monitoringStats.active) + '%' }"></div>
+            </div>
+          </div>
+          
+          <!-- Top 30 -->
+          <div class="ranking-bar-group">
+            <div class="bar-info">
+              <span class="bar-label">Top 30 排名</span>
+              <span class="bar-value text-blue">{{ monitoringStats.top30_organic }}</span>
+            </div>
+            <div class="progress-bg">
+              <div class="progress-fill fill-blue" :style="{ width: getPercentage(monitoringStats.top30_organic, monitoringStats.active) + '%' }"></div>
+            </div>
+          </div>
+
+          <!-- Advertising -->
+          <div class="ranking-bar-group">
+            <div class="bar-info">
+              <span class="bar-label">广告位占领</span>
+              <span class="bar-value text-indigo">{{ monitoringStats.with_sponsored }}</span>
+            </div>
+            <div class="progress-bg">
+              <div class="progress-fill fill-indigo" :style="{ width: getPercentage(monitoringStats.with_sponsored, monitoringStats.active) + '%' }"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 第三排：两栏布局 (排名变化 + 定时器) -->
+      <div class="grid-section">
+        <!-- 左侧：排名变化 -->
+        <div class="modern-card movers-card">
+          <div class="card-header border-bottom">
+            <h3>近期排名波动 (7天)</h3>
+          </div>
+          <div class="movers-content">
+            <div class="movers-column">
+              <div class="column-title text-green"><el-icon><Top /></el-icon> 上升 Top 5</div>
+              <div class="movers-list">
+                <div v-for="item in topRisers" :key="item.monitoringId" class="mover-item">
+                  <span class="mover-name" :title="item.keyword">{{ item.keyword }}</span>
+                  <span class="mover-badge badge-green">+{{ item.change }}</span>
+                </div>
+                <div v-if="topRisers.length === 0" class="empty-text">暂无上升</div>
               </div>
-              <div v-if="topRisers.length === 0" class="no-data">暂无上升</div>
             </div>
-          </div>
-          <div class="changes-column fallers">
-            <div class="column-header">
-              <el-icon color="#f56c6c"><Bottom /></el-icon>
-              下降 TOP 5
-            </div>
-            <div class="changes-list">
-              <div
-                v-for="item in topFallers"
-                :key="item.monitoringId"
-                class="change-item"
-              >
-                <span class="keyword-name">{{ item.keyword }}</span>
-                <span class="change-value negative">{{ item.change }}</span>
-              </div>
-              <div v-if="topFallers.length === 0" class="no-data">暂无下降</div>
-            </div>
-          </div>
-        </div>
-        <div class="empty-state" v-else>
-          <p>暂无排名变化数据</p>
-          <el-button size="small" @click="emit('switchView', 'monitoring')">
-            添加监控
-          </el-button>
-        </div>
-      </div>
-
-      <!-- 定时任务状态 -->
-      <div class="scheduler-section">
-        <div class="section-title">定时检测</div>
-        <div class="scheduler-content" v-if="schedulerSettings">
-          <div class="scheduler-status">
-            <span class="status-label">状态</span>
-            <span class="status-value" :class="{ active: schedulerSettings.enabled && schedulerStatus?.is_running }">
-              <span class="status-dot"></span>
-              {{ schedulerSettings.enabled ? (schedulerStatus?.is_running ? '运行中' : '已启用') : '已停止' }}
-            </span>
-          </div>
-          <div class="scheduler-info" v-if="schedulerStatus?.last_check_time">
-            <span class="info-label">上次检测</span>
-            <span class="info-value">{{ formatDateTime(schedulerStatus.last_check_time) }}</span>
-          </div>
-          <div class="scheduler-windows" v-if="schedulerSettings.enabled">
-            <span class="windows-label">检测窗口</span>
-            <span class="windows-value">
-              {{ schedulerSettings.morning_start }}:00-{{ schedulerSettings.morning_end }}:00,
-              {{ schedulerSettings.evening_start }}:00-{{ schedulerSettings.evening_end }}:00
-            </span>
-          </div>
-          <!-- 大倒计时显示 -->
-          <div class="countdown-highlight" v-if="countdownText && schedulerSettings.enabled && !isInWindow">
-            <div class="countdown-label">下次检测窗口</div>
-            <div class="countdown-window">{{ nextWindowLabel }}</div>
-            <div class="countdown-timer">
-              <span class="countdown-num">{{ countdownHours }}</span>
-              <span class="countdown-unit">时</span>
-              <span class="countdown-num">{{ countdownMinutes }}</span>
-              <span class="countdown-unit">分</span>
-              <span class="countdown-num">{{ countdownSeconds }}</span>
-              <span class="countdown-unit">秒</span>
-            </div>
-          </div>
-          <!-- 检测窗口进行中状态 -->
-          <div class="countdown-highlight in-progress" v-else-if="isInWindow && schedulerSettings.enabled">
-            <div class="countdown-label">检测窗口进行中</div>
-            <div class="in-progress-indicator">
-              <span class="pulse-dot"></span>
-              <span class="progress-text" v-if="schedulerStatus?.current_task">{{ schedulerStatus.current_task }}</span>
-              <span class="progress-text idle" v-else>等待下次检测周期</span>
-            </div>
-          </div>
-        </div>
-        <div class="empty-state" v-else>
-          <p>加载中...</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- 下半部分：两栏布局 -->
-    <div class="bottom-section">
-      <!-- 流量级别分布 -->
-      <div class="traffic-section">
-        <div class="section-title">流量级别分布</div>
-        <div class="traffic-chart" v-if="getTotalTraffic() > 0">
-          <div class="traffic-item">
-            <div class="traffic-bar">
-              <div
-                class="traffic-fill big"
-                :style="{ width: getPercentage(trafficStats.big_count, getTotalTraffic()) + '%' }"
-              ></div>
-            </div>
-            <div class="traffic-info">
-              <span class="traffic-label">大词</span>
-              <span class="traffic-value">{{ trafficStats.big_count }} ({{ getPercentage(trafficStats.big_count, getTotalTraffic()) }}%)</span>
-            </div>
-          </div>
-          <div class="traffic-item">
-            <div class="traffic-bar">
-              <div
-                class="traffic-fill medium"
-                :style="{ width: getPercentage(trafficStats.medium_count, getTotalTraffic()) + '%' }"
-              ></div>
-            </div>
-            <div class="traffic-info">
-              <span class="traffic-label">中词</span>
-              <span class="traffic-value">{{ trafficStats.medium_count }} ({{ getPercentage(trafficStats.medium_count, getTotalTraffic()) }}%)</span>
-            </div>
-          </div>
-          <div class="traffic-item">
-            <div class="traffic-bar">
-              <div
-                class="traffic-fill small"
-                :style="{ width: getPercentage(trafficStats.small_count, getTotalTraffic()) + '%' }"
-              ></div>
-            </div>
-            <div class="traffic-info">
-              <span class="traffic-label">小词</span>
-              <span class="traffic-value">{{ trafficStats.small_count }} ({{ getPercentage(trafficStats.small_count, getTotalTraffic()) }}%)</span>
-            </div>
-          </div>
-        </div>
-        <div class="empty-state" v-else>
-          <p>暂无流量数据</p>
-          <el-button size="small" @click="emit('switchView', 'keywords')">
-            导入关键词
-          </el-button>
-        </div>
-      </div>
-
-      <!-- 最近优化事件 -->
-      <div class="events-section">
-        <div class="section-title">最近优化事件</div>
-        <div class="events-list" v-if="recentEvents.length > 0">
-          <div
-            class="event-item"
-            v-for="event in recentEvents"
-            :key="event.id"
-          >
-            <div class="event-date">{{ formatDate(event.event_date) }}</div>
-            <div class="event-content">
-              <div class="event-title">{{ event.title }}</div>
-              <div class="event-meta">
-                <el-tag size="small" type="info">{{ getEventTypeLabel(event.event_type) }}</el-tag>
-                <span
-                  v-if="parseAffectedKeywords(event.affected_keywords).length > 0"
-                  class="affected-count"
-                >
-                  影响 {{ parseAffectedKeywords(event.affected_keywords).length }} 个关键词
-                </span>
+            <div class="divider-vertical"></div>
+            <div class="movers-column">
+              <div class="column-title text-red"><el-icon><Bottom /></el-icon> 下降 Top 5</div>
+              <div class="movers-list">
+                <div v-for="item in topFallers" :key="item.monitoringId" class="mover-item">
+                  <span class="mover-name" :title="item.keyword">{{ item.keyword }}</span>
+                  <span class="mover-badge badge-red">{{ item.change }}</span>
+                </div>
+                <div v-if="topFallers.length === 0" class="empty-text">暂无下降</div>
               </div>
             </div>
           </div>
         </div>
-        <div class="empty-state" v-else>
-          <p>暂无优化事件</p>
-          <el-button size="small" @click="emit('switchView', 'monitoring')">
-            记录事件
-          </el-button>
+
+        <!-- 右侧：Next Scan 定时器 -->
+        <div class="modern-card scheduler-card">
+          <div class="card-header">
+            <h3>自动检测</h3>
+            <div class="status-indicator" v-if="schedulerSettings">
+               <span class="status-dot" :class="{ 'is-active': schedulerSettings.enabled }"></span>
+               {{ schedulerSettings.enabled ? '已开启' : '已关闭' }}
+            </div>
+          </div>
+          
+          <div class="timer-display-area">
+             <template v-if="schedulerSettings && schedulerSettings.enabled">
+                <div class="digital-clock" v-if="!isInWindow">
+                   <div class="time-unit">{{ countdownHours }}</div>
+                   <div class="colon">:</div>
+                   <div class="time-unit">{{ countdownMinutes }}</div>
+                   <div class="colon">:</div>
+                   <div class="time-unit">{{ countdownSeconds }}</div>
+                </div>
+                <div class="scanning-animation" v-else>
+                   <div class="pulse-ring"></div>
+                   <div class="scanning-text">正在扫描窗口期...</div>
+                </div>
+                <div class="next-window-label" v-if="!isInWindow">
+                  距离下次扫描 ({{ nextWindowLabel }})
+                </div>
+             </template>
+             <div v-else class="scheduler-disabled">
+                <el-icon :size="40" class="text-gray"><Timer /></el-icon>
+                <p>自动检测未开启</p>
+             </div>
+          </div>
+          
+           <div class="scheduler-footer" v-if="schedulerStatus?.last_check_time">
+            上次扫描: {{ formatDateTime(schedulerStatus.last_check_time) }}
+          </div>
         </div>
       </div>
-    </div>
+
+      <!-- 第四排：流量与事件 -->
+      <div class="grid-section">
+         <!-- 流量分布 -->
+         <div class="modern-card traffic-card">
+           <div class="card-header">
+             <h3>流量级别分布</h3>
+           </div>
+           <div class="traffic-content">
+             <div class="traffic-bars-visual">
+                <div class="traffic-segment big" :style="{ flex: trafficStats.big_count || 1 }" v-if="getTotalTraffic() > 0"></div>
+                <div class="traffic-segment medium" :style="{ flex: trafficStats.medium_count || 1 }" v-if="getTotalTraffic() > 0"></div>
+                <div class="traffic-segment small" :style="{ flex: trafficStats.small_count || 1 }" v-if="getTotalTraffic() > 0"></div>
+                <div class="traffic-placeholder" v-if="getTotalTraffic() === 0">暂无数据</div>
+             </div>
+             <div class="traffic-legend">
+               <div class="legend-item">
+                 <span class="dot bg-red"></span>
+                 <span class="legend-name">大词</span>
+                 <span class="legend-val">{{ trafficStats.big_count }}</span>
+               </div>
+               <div class="legend-item">
+                 <span class="dot bg-orange"></span>
+                 <span class="legend-name">中词</span>
+                 <span class="legend-val">{{ trafficStats.medium_count }}</span>
+               </div>
+               <div class="legend-item">
+                 <span class="dot bg-gray"></span>
+                 <span class="legend-name">小词</span>
+                 <span class="legend-val">{{ trafficStats.small_count }}</span>
+               </div>
+             </div>
+           </div>
+         </div>
+
+         <!-- 最近事件 -->
+         <div class="modern-card events-card">
+           <div class="card-header border-bottom">
+             <h3>优化日志</h3>
+             <el-button link type="primary" size="small" @click="emit('switchView', 'monitoring')">查看全部</el-button>
+           </div>
+           <div class="events-timeline">
+             <div v-for="(event, index) in recentEvents" :key="event.id" class="timeline-item">
+               <div class="timeline-line" v-if="index !== recentEvents.length - 1"></div>
+               <div class="timeline-dot"></div>
+               <div class="timeline-content">
+                 <div class="timeline-time">{{ formatDate(event.event_date) }}</div>
+                 <div class="timeline-title">{{ event.title }}</div>
+                 <div class="timeline-tag">{{ getEventTypeLabel(event.event_type) }}</div>
+               </div>
+             </div>
+             <div v-if="recentEvents.length === 0" class="empty-text">暂无记录</div>
+           </div>
+         </div>
+      </div>
+
     </div>
   </div>
 </template>
@@ -628,543 +591,506 @@ function formatDateTime(dateStr: string | null): string {
 <style scoped>
 .dashboard-container {
   padding: 24px;
+  background-color: var(--el-bg-color-page);
+  min-height: 100%;
+  box-sizing: border-box;
 }
 
-/* 未选择产品状态 */
-.no-product-state {
+/* Header */
+.dashboard-header {
   display: flex;
+  justify-content: space-between;
   align-items: center;
-  justify-content: center;
-  min-height: 400px;
-}
-
-/* 欢迎区域 */
-.welcome-section {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
   margin-bottom: 24px;
 }
 
-.welcome-section h2 {
+.header-left h2 {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
   margin: 0;
-  font-size: 24px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
+  display: inline-block;
+  margin-right: 12px;
 }
 
-.product-name {
-  font-size: 14px;
-  color: var(--el-text-color-secondary);
-  background: var(--el-fill-color-light);
+.product-badge {
+  display: inline-block;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
   padding: 4px 12px;
-  border-radius: 4px;
+  border-radius: 16px;
+  font-size: 13px;
+  font-weight: 500;
+  vertical-align: middle;
 }
 
-/* 指标卡片 */
-.stat-cards {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin-bottom: 32px;
+.current-date {
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
 }
 
-.stat-card {
+/* Card Utility */
+.modern-card {
   background: var(--el-bg-color);
+  border-radius: 16px;
+  box-shadow: var(--el-box-shadow-light);
+  padding: 24px;
+  transition: transform 0.2s, box-shadow 0.2s;
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  padding: 20px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
+}
+
+.modern-card.hover-effect:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--el-box-shadow);
   cursor: pointer;
-  transition: all 0.2s;
 }
 
-.stat-card:hover {
-  border-color: var(--el-color-primary);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
-}
-
-.stat-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+.card-header {
   display: flex;
+  justify-content: space-between;
   align-items: center;
-  justify-content: center;
-  color: white;
+  margin-bottom: 20px;
 }
 
-.stat-icon.keywords {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-}
-
-.stat-icon.roots {
-  background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-}
-
-.stat-icon.monitoring {
-  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-}
-
-.stat-icon.knowledge {
-  background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-}
-
-.stat-content {
-  flex: 1;
-}
-
-.stat-value {
-  font-size: 24px;
+.card-header h3 {
+  margin: 0;
+  font-size: 16px;
   font-weight: 600;
   color: var(--el-text-color-primary);
-  line-height: 1.2;
 }
 
-.stat-label {
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
-  margin-top: 4px;
-}
-
-.stat-sub {
-  font-size: 12px;
-  color: var(--el-text-color-placeholder);
-  margin-top: 2px;
-}
-
-/* 区域标题 */
-.section-title {
-  font-size: 16px;
-  font-weight: 500;
-  color: var(--el-text-color-primary);
+.border-bottom {
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  padding-bottom: 16px;
   margin-bottom: 16px;
 }
 
-/* 排名概览 */
-.ranking-overview {
+/* Stats Grid */
+.stats-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  margin-bottom: 32px;
-}
-
-.ranking-card {
-  background: var(--el-bg-color);
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  padding: 20px;
-  text-align: center;
-}
-
-.ranking-value {
-  font-size: 32px;
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-
-.ranking-card.top10 .ranking-value {
-  color: #67c23a;
-}
-
-.ranking-card.top30 .ranking-value {
-  color: #e6a23c;
-}
-
-.ranking-card.sponsored .ranking-value {
-  color: #409eff;
-}
-
-.ranking-label {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--el-text-color-primary);
-}
-
-.ranking-desc {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin-top: 4px;
-}
-
-/* 中间部分两栏 */
-.middle-section {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: repeat(4, 1fr);
   gap: 24px;
   margin-bottom: 24px;
 }
 
-/* 排名变化榜 */
-.ranking-changes-section,
-.scheduler-section {
-  background: var(--el-bg-color);
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  padding: 20px;
-}
-
-.ranking-changes-content {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-}
-
-.changes-column {
+.stat-top {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.icon-circle {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+}
+
+.bg-blue-light { background: var(--el-color-primary-light-9); }
+.text-blue { color: var(--el-color-primary); }
+
+.bg-purple-light { background: #f9f0ff; }
+.text-purple { color: #722ed1; }
+
+.bg-green-light { background: var(--el-color-success-light-9); }
+.text-green { color: var(--el-color-success); }
+
+.bg-orange-light { background: var(--el-color-warning-light-9); }
+.text-orange { color: var(--el-color-warning); }
+
+.stat-title {
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.stat-main {
+  display: flex;
+  align-items: baseline;
   gap: 8px;
 }
 
-.column-header {
+.stat-number {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+  line-height: 1;
+}
+
+.stat-total {
+  font-size: 14px;
+  color: var(--el-text-color-placeholder);
+  font-weight: 400;
+}
+
+.stat-sub-text {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+/* Ranking Overview (Big Card) */
+.ranking-overview-card {
+  margin-bottom: 24px;
+  padding-bottom: 32px;
+}
+
+.ranking-bars-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 48px;
+}
+
+.ranking-bar-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bar-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+}
+
+.bar-label {
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+}
+
+.bar-value {
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.text-indigo { color: #6200ea; }
+.fill-indigo { background: linear-gradient(90deg, #b388ff 0%, #6200ea 100%); }
+
+.fill-green { background: linear-gradient(90deg, #95de64 0%, #52c41a 100%); }
+.fill-blue { background: linear-gradient(90deg, #69c0ff 0%, #1890ff 100%); }
+
+.progress-bg {
+  height: 8px;
+  background: var(--el-fill-color-light);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Grid Section (2 columns) */
+.grid-section {
+  display: grid;
+  grid-template-columns: 2fr 1.5fr;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+/* Top Movers */
+.movers-content {
+  display: grid;
+  grid-template-columns: 1fr 1px 1fr;
+  gap: 24px;
+}
+
+.divider-vertical {
+  background: var(--el-border-color-lighter);
+  height: 100%;
+}
+
+.column-title {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  font-weight: 500;
-  color: var(--el-text-color-regular);
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  font-weight: 600;
+  margin-bottom: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-.changes-list {
+.text-red { color: var(--el-color-danger); }
+
+.movers-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
 }
 
-.change-item {
+.mover-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 8px 12px;
   background: var(--el-fill-color-lighter);
-  border-radius: 4px;
+  border-radius: 8px;
+  transition: background 0.2s;
 }
 
-.keyword-name {
+.mover-item:hover {
+  background: var(--el-fill-color-light);
+}
+
+.mover-name {
   font-size: 13px;
   color: var(--el-text-color-primary);
+  font-weight: 500;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  min-width: 0;
+  max-width: 150px;
 }
 
-.change-value {
-  font-size: 13px;
+.mover-badge {
+  font-size: 12px;
   font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
 }
 
-.change-value.positive {
-  color: #67c23a;
-}
+.badge-green { background: var(--el-color-success-light-9); color: var(--el-color-success); }
+.badge-red { background: var(--el-color-danger-light-9); color: var(--el-color-danger); }
 
-.change-value.negative {
-  color: #f56c6c;
-}
-
-.no-data {
-  font-size: 13px;
-  color: var(--el-text-color-placeholder);
-  text-align: center;
-  padding: 20px;
-}
-
-/* 定时任务状态 */
-.scheduler-content {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.scheduler-status,
-.scheduler-info,
-.scheduler-windows {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 13px;
-}
-
-.status-label,
-.info-label,
-.windows-label {
-  color: var(--el-text-color-secondary);
-}
-
-.status-value {
+/* Scheduler / Digital Clock */
+.status-indicator {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--el-text-color-regular);
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .status-dot {
   width: 8px;
   height: 8px;
+  background: var(--el-border-color);
   border-radius: 50%;
-  background: #909399;
+}
+.status-dot.is-active {
+  background: var(--el-color-success);
+  box-shadow: 0 0 0 2px var(--el-color-success-light-7);
 }
 
-.status-value.active .status-dot {
-  background: #67c23a;
-  box-shadow: 0 0 8px rgba(103, 194, 58, 0.6);
+.timer-display-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 0;
+  min-height: 180px;
 }
 
-.info-value {
+.digital-clock {
+  display: flex;
+  align-items: baseline;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
   color: var(--el-text-color-primary);
+  margin-bottom: 8px;
 }
 
-.info-value.countdown {
-  color: var(--el-color-primary);
-  font-weight: 500;
+.time-unit {
+  font-size: 56px;
+  font-weight: 800; /* Extra Bold for impact */
+  letter-spacing: -1px;
+  line-height: 1;
+  color: var(--el-text-color-primary);
+  display: inline-block;
 }
 
-.windows-value {
+.colon {
+  font-size: 48px;
+  font-weight: 300;
+  color: var(--el-text-color-placeholder);
+  margin: 0 8px;
+  transform: translateY(-6px);
+}
+
+.next-window-label {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  margin-top: 8px;
+}
+
+.scanning-animation {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.pulse-ring {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: var(--el-color-success);
+  opacity: 0.2;
+  animation: pulse-ring 2s infinite;
+  margin-bottom: 16px;
+}
+
+.scanning-text {
+  color: var(--el-color-success);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.8); opacity: 0.5; }
+  100% { transform: scale(1.5); opacity: 0; }
+}
+
+.scheduler-disabled {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: var(--el-text-color-placeholder);
+  gap: 12px;
+}
+
+.scheduler-footer {
+  text-align: center;
   font-size: 12px;
   color: var(--el-text-color-placeholder);
 }
 
-/* 倒计时突出显示 */
-.countdown-highlight {
-  margin-top: 16px;
-  padding: 16px;
-  background: var(--el-color-primary-light-9);
-  border-radius: 8px;
-  text-align: center;
+/* Traffic */
+.traffic-bars-visual {
+  display: flex;
+  height: 24px;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 24px;
+  background: var(--el-fill-color-light);
 }
 
-.countdown-label {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin-bottom: 4px;
+.traffic-segment {
+  height: 100%;
 }
 
-.countdown-window {
-  font-size: 14px;
-  color: var(--el-color-primary);
-  margin-bottom: 12px;
-}
+.traffic-segment.big { background: var(--el-color-danger-light-3); }
+.traffic-segment.medium { background: var(--el-color-warning-light-3); }
+.traffic-segment.small { background: var(--el-border-color); }
 
-.countdown-timer {
+.traffic-legend {
   display: flex;
   justify-content: center;
-  align-items: baseline;
-  gap: 4px;
+  gap: 32px;
 }
 
-.countdown-num {
-  font-size: 28px;
-  font-weight: 600;
-  color: var(--el-color-primary);
-  font-variant-numeric: tabular-nums;
-  min-width: 36px;
-}
-
-.countdown-unit {
-  font-size: 14px;
-  color: var(--el-text-color-secondary);
-}
-
-.countdown-highlight.in-progress {
-  background: var(--el-color-success-light-9);
-}
-
-.in-progress-indicator {
+.legend-item {
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 8px;
-  margin-top: 12px;
-}
-
-.pulse-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--el-color-success);
-  animation: pulse-animation 1.5s infinite;
-}
-
-@keyframes pulse-animation {
-  0%, 100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.5;
-    transform: scale(1.2);
-  }
-}
-
-.progress-text {
-  font-size: 14px;
-  color: var(--el-color-success);
-  font-weight: 500;
-}
-
-.progress-text.idle {
-  color: var(--el-text-color-secondary);
-  font-weight: normal;
-}
-
-/* 下半部分两栏 */
-.bottom-section {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
-}
-
-/* 流量分布 */
-.traffic-section,
-.events-section {
-  background: var(--el-bg-color);
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  padding: 20px;
-}
-
-.traffic-chart {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.traffic-item {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.traffic-bar {
-  height: 8px;
-  background: var(--el-fill-color-light);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.traffic-fill {
-  height: 100%;
-  border-radius: 4px;
-  transition: width 0.3s ease;
-}
-
-.traffic-fill.big {
-  background: linear-gradient(90deg, #f56c6c 0%, #e6a23c 100%);
-}
-
-.traffic-fill.medium {
-  background: linear-gradient(90deg, #e6a23c 0%, #67c23a 100%);
-}
-
-.traffic-fill.small {
-  background: linear-gradient(90deg, #909399 0%, #c0c4cc 100%);
-}
-
-.traffic-info {
-  display: flex;
-  justify-content: space-between;
   font-size: 13px;
 }
 
-.traffic-label {
-  color: var(--el-text-color-regular);
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
 }
 
-.traffic-value {
-  color: var(--el-text-color-secondary);
+.bg-red { background: var(--el-color-danger-light-3); }
+.bg-orange { background: var(--el-color-warning-light-3); }
+.bg-gray { background: var(--el-border-color); }
+
+.legend-val {
+  font-weight: 600;
+  color: var(--el-text-color-primary);
 }
 
-/* 优化事件 */
-.events-list {
+/* Events Timeline */
+.events-timeline {
+  padding: 0 12px;
+}
+
+.timeline-item {
+  position: relative;
   display: flex;
-  flex-direction: column;
-  gap: 12px;
+  padding-bottom: 24px;
 }
 
-.event-item {
-  display: flex;
-  gap: 12px;
-  padding: 12px;
-  background: var(--el-fill-color-lighter);
-  border-radius: 6px;
+.timeline-line {
+  position: absolute;
+  left: 5px;
+  top: 14px;
+  bottom: 0;
+  width: 2px;
+  background: var(--el-border-color-lighter);
 }
 
-.event-date {
+.timeline-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--el-bg-color);
+  border: 2px solid var(--el-color-primary);
+  z-index: 1;
+  margin-right: 16px;
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+
+.timeline-content {
+  flex: 1;
+}
+
+.timeline-time {
   font-size: 12px;
   color: var(--el-text-color-secondary);
-  white-space: nowrap;
-  padding-top: 2px;
+  margin-bottom: 2px;
 }
 
-.event-content {
-  flex: 1;
-  min-width: 0;
-}
-
-.event-title {
+.timeline-title {
   font-size: 14px;
   color: var(--el-text-color-primary);
-  margin-bottom: 6px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  margin-bottom: 4px;
 }
 
-.event-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.affected-count {
+.timeline-tag {
+  display: inline-block;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  padding: 2px 8px;
+  border-radius: 4px;
 }
 
-/* 空状态 */
-.empty-state {
+.empty-text {
+  color: var(--el-text-color-secondary);
   text-align: center;
-  padding: 32px 20px;
-  color: var(--el-text-color-secondary);
+  padding: 24px;
+  font-size: 13px;
 }
 
-.empty-state p {
-  margin: 0 0 12px;
-}
-
-/* 响应式 */
-@media (max-width: 1100px) {
-  .middle-section {
+/* Responsive */
+@media (max-width: 1200px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .ranking-bars-container {
     grid-template-columns: 1fr;
+    gap: 24px;
   }
 }
 
 @media (max-width: 900px) {
-  .stat-cards {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .bottom-section {
+  .grid-section {
     grid-template-columns: 1fr;
   }
-
-  .ranking-changes-content {
+  .movers-content {
     grid-template-columns: 1fr;
   }
-}
-
-@media (max-width: 600px) {
-  .stat-cards {
-    grid-template-columns: 1fr;
-  }
-
-  .ranking-overview {
-    grid-template-columns: 1fr;
+  .divider-vertical {
+    display: none;
   }
 }
 </style>

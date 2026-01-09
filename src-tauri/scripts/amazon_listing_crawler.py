@@ -239,6 +239,206 @@ async def set_delivery_address(page, country: str, zipcode: str, max_retries: in
         return False, ""
 
 
+# 国家对应的本地货币
+COUNTRY_CURRENCIES = {
+    'DE': 'EUR', 'FR': 'EUR', 'IT': 'EUR', 'ES': 'EUR',
+    'UK': 'GBP', 'US': 'USD', 'JP': 'JPY', 'CA': 'CAD', 'AU': 'AUD',
+}
+
+
+async def set_currency(page, country: str) -> bool:
+    """
+    设置显示货币为本地货币（主要用于德国站等可能默认显示美元的情况）
+    返回: 是否成功
+    """
+    target_currency = COUNTRY_CURRENCIES.get(country, 'EUR')
+    currency_symbol = {'EUR': '€', 'GBP': '£', 'USD': '$', 'JPY': '¥', 'CAD': 'CA$', 'AUD': 'A$'}.get(target_currency, '€')
+
+    try:
+        # 检查当前页面价格是否已经是目标货币
+        price_elem = page.locator('.a-price .a-offscreen').first
+        if await price_elem.count() > 0:
+            price_text = await price_elem.text_content() or ''
+            # 如果价格已经是目标货币符号，不需要设置
+            if currency_symbol in price_text:
+                print(f"[DEBUG] 货币已经是 {target_currency}，无需设置", file=sys.stderr)
+                return True
+            # 检测到美元但目标是欧元，需要设置
+            if '$' in price_text or 'USD' in price_text:
+                print(f"[DEBUG] 检测到美元价格，需要切换到 {target_currency}", file=sys.stderr)
+
+        print(f"[DEBUG] 尝试设置货币为 {target_currency}", file=sys.stderr)
+
+        # 点击导航栏的国旗/语言图标（在搜索框后面）
+        flag_selectors = [
+            '#icp-nav-flyout',  # 国旗下拉框
+            '#nav-icp-link-language-select',
+            'a.nav-link[href*="language"]',
+            '#nav-tools .icp-nav-link-inner',
+        ]
+
+        clicked = False
+        for selector in flag_selectors:
+            try:
+                elem = page.locator(selector).first
+                if await elem.count() > 0 and await elem.is_visible(timeout=2000):
+                    await elem.click()
+                    await page.wait_for_timeout(1500)
+                    clicked = True
+                    print(f"[DEBUG] 已点击语言/货币图标: {selector}", file=sys.stderr)
+                    break
+            except:
+                continue
+
+        if not clicked:
+            print(f"[DEBUG] 未找到语言/货币图标", file=sys.stderr)
+            return False
+
+        # 等待设置页面加载
+        await page.wait_for_timeout(1000)
+
+        # 查找货币下拉框并选择 EUR
+        # 德国站的货币下拉框在 "Währungseinstellungen" 部分
+        currency_selected = False
+
+        # 方法1: 查找 select 下拉框
+        dropdown_selectors = [
+            '#icp-sc-dropdown',
+            'select[name*="currency"]',
+            'select[id*="currency"]',
+            '.a-native-dropdown[name*="currency"]',
+            'select.a-native-dropdown',
+        ]
+
+        for selector in dropdown_selectors:
+            try:
+                dropdown = page.locator(selector).first
+                if await dropdown.count() > 0:
+                    # 尝试直接选择 EUR
+                    try:
+                        await dropdown.select_option(value=target_currency)
+                        currency_selected = True
+                        print(f"[DEBUG] 从下拉框选择货币: {target_currency}", file=sys.stderr)
+                        break
+                    except:
+                        # 如果 value 不匹配，尝试用 label
+                        try:
+                            await dropdown.select_option(label=f"€ - EUR")
+                            currency_selected = True
+                            print(f"[DEBUG] 从下拉框选择货币 (label): EUR", file=sys.stderr)
+                            break
+                        except:
+                            pass
+            except:
+                continue
+
+        # 方法2: 如果没有找到 select，可能是自定义下拉框，需要点击展开
+        if not currency_selected:
+            # 查找当前显示 USD 的元素并点击
+            usd_display_selectors = [
+                'span:has-text("USD")',
+                'div:has-text("$ - USD")',
+                '.a-dropdown-prompt:has-text("USD")',
+                '[class*="dropdown"]:has-text("USD")',
+            ]
+
+            for selector in usd_display_selectors:
+                try:
+                    elem = page.locator(selector).first
+                    if await elem.count() > 0 and await elem.is_visible(timeout=1000):
+                        await elem.click()
+                        await page.wait_for_timeout(800)
+                        print(f"[DEBUG] 已点击货币下拉框: {selector}", file=sys.stderr)
+
+                        # 在展开的列表中选择 EUR
+                        eur_options = [
+                            'a:has-text("EUR")',
+                            'li:has-text("EUR")',
+                            'div:has-text("€ - EUR")',
+                            '[data-value="EUR"]',
+                        ]
+                        for eur_sel in eur_options:
+                            try:
+                                eur_elem = page.locator(eur_sel).first
+                                if await eur_elem.count() > 0 and await eur_elem.is_visible(timeout=500):
+                                    await eur_elem.click()
+                                    currency_selected = True
+                                    print(f"[DEBUG] 已选择 EUR: {eur_sel}", file=sys.stderr)
+                                    break
+                            except:
+                                continue
+                        if currency_selected:
+                            break
+                except:
+                    continue
+
+        # 点击保存按钮 - 使用文本匹配（最可靠）
+        save_btn_texts = [
+            "Änderungen speichern",  # 德语 - 保存更改
+            "Save Changes",  # 英语
+            "Enregistrer les modifications",  # 法语
+            "Salva modifiche",  # 意大利语
+            "Guardar cambios",  # 西班牙语
+        ]
+
+        for text in save_btn_texts:
+            try:
+                # 方法1: 使用 get_by_role 查找按钮
+                btn = page.get_by_role("button", name=text)
+                if await btn.count() > 0 and await btn.first.is_visible(timeout=1000):
+                    await btn.first.click()
+                    print(f"[DEBUG] 已点击保存按钮 (role): {text}", file=sys.stderr)
+                    await page.wait_for_timeout(3000)  # 等待页面跳转
+                    return True
+            except:
+                pass
+
+            try:
+                # 方法2: 使用 get_by_text 查找
+                btn = page.get_by_text(text, exact=True)
+                if await btn.count() > 0 and await btn.first.is_visible(timeout=1000):
+                    await btn.first.click()
+                    print(f"[DEBUG] 已点击保存按钮 (text): {text}", file=sys.stderr)
+                    await page.wait_for_timeout(3000)
+                    return True
+            except:
+                pass
+
+        # 方法3: 使用 CSS 选择器
+        save_btn_selectors = [
+            'input[type="submit"][value*="speichern"]',
+            'input[type="submit"][value*="Save"]',
+            'button:has-text("speichern")',
+            'button:has-text("Save")',
+            '.a-button-primary input[type="submit"]',
+            '.a-button-primary button',
+            '#icp-save-button',
+            'input.a-button-input[type="submit"]',
+        ]
+
+        for selector in save_btn_selectors:
+            try:
+                btn = page.locator(selector).first
+                if await btn.count() > 0 and await btn.is_visible(timeout=1000):
+                    await btn.click()
+                    print(f"[DEBUG] 已点击保存按钮 (css): {selector}", file=sys.stderr)
+                    await page.wait_for_timeout(3000)
+                    return True
+            except:
+                continue
+
+        print(f"[DEBUG] 未找到保存按钮", file=sys.stderr)
+        # 如果没有找到保存按钮，按 Escape 关闭
+        await page.keyboard.press('Escape')
+        await page.wait_for_timeout(500)
+        return currency_selected
+
+    except Exception as e:
+        print(f"[DEBUG] 设置货币失败: {e}", file=sys.stderr)
+        await page.keyboard.press('Escape')
+        return False
+
+
 async def fetch_listing_info(asin: str, country: str, headless="new") -> dict:
     """
     爬取单个 ASIN 的 Listing 信息
@@ -347,7 +547,9 @@ async def fetch_listing_info(asin: str, country: str, headless="new") -> dict:
                     "Continuer les achats",  # 法语
                     "Continue shopping",      # 英语
                     "Weiter einkaufen",       # 德语
+                    "Weiter shoppen",         # 德语变体
                     "Continua lo shopping",   # 意大利语
+                    "Continua con gli acquisti",  # 意大利语变体
                     "Seguir comprando",       # 西班牙语
                     "ショッピングを続ける",     # 日语
                 ]
@@ -419,17 +621,34 @@ async def fetch_listing_info(asin: str, country: str, headless="new") -> dict:
 
                     # 刷新后可能再次出现"继续购物"按钮，需要再次处理
                     try:
-                        btn = page.get_by_text("Continuer les achats", exact=True)
-                        if await btn.count() > 0 and await btn.first.is_visible(timeout=2000):
-                            print(f"[DEBUG] 刷新后再次发现继续购物按钮，点击", file=sys.stderr)
-                            await btn.first.click()
-                            await page.wait_for_timeout(2000)
+                        refresh_continue_texts = [
+                            "Continuer les achats", "Continue shopping",
+                            "Weiter einkaufen", "Weiter shoppen",
+                            "Continua lo shopping", "Continua con gli acquisti",
+                            "Seguir comprando"
+                        ]
+                        for text in refresh_continue_texts:
+                            try:
+                                btn = page.get_by_text(text, exact=True)
+                                if await btn.count() > 0 and await btn.first.is_visible(timeout=1000):
+                                    print(f"[DEBUG] 刷新后再次发现继续购物按钮: {text}，点击", file=sys.stderr)
+                                    await btn.first.click()
+                                    await page.wait_for_timeout(2000)
+                                    break
+                            except:
+                                continue
                     except:
                         pass
                 else:
                     print(f"[DEBUG] 配送地址设置失败，使用当前地址: {address_text}", file=sys.stderr)
             except Exception as e:
                 print(f"[DEBUG] 设置配送地址出错: {e}", file=sys.stderr)
+
+            # 设置货币（处理德国站等可能显示美元的情况）
+            try:
+                await set_currency(page, country)
+            except Exception as e:
+                print(f"[DEBUG] 设置货币出错: {e}", file=sys.stderr)
 
             # 检查是否是有效的产品页
             try:
@@ -542,16 +761,18 @@ async def fetch_listing_info(asin: str, country: str, headless="new") -> dict:
                 # 意大利语: "n. 7 in Lime elettriche per unghie"
                 # 西班牙语: "nº 7 en Limas de uñas eléctricas"
                 bsr_with_category_patterns = [
-                    # 法语: 数字 en 类目 (Voir les 100 premiers)
-                    r'(\d[\d\s,.]*)\s+en\s+([A-ZÀ-Úa-zà-ú][^\n\(]{3,50})(?:\s*\(|$|\n)',
-                    # 英语: #数字 in 类目
-                    r'#(\d[\d,.\s]+)\s+in\s+([A-Za-z][^\n\(]{3,50})(?:\s*\(|$|\n)',
+                    # 法语: 数字 en 类目
+                    r'(\d[\d.,]*)\s+en\s+([A-ZÀ-Úa-zà-ú][^\n\(#]{3,80})',
+                    # 英语/美国: #数字 in 类目
+                    r'#\s*(\d[\d.,]*)\s+in\s+([A-Za-zÀ-ú][^\n\(#]{3,80})',
+                    # 英语/英国: 数字 in 类目（无 # 前缀）
+                    r'(\d[\d,]*)\s+in\s+([A-Za-z][^\n\(#]{3,80})',
                     # 德语: Nr. 数字 in 类目
-                    r'Nr\.?\s*(\d[\d,.\s]+)\s+in\s+([A-ZÄÖÜa-zäöüß][^\n\(]{3,50})(?:\s*\(|$|\n)',
+                    r'Nr\.?\s*(\d[\d.,]*)\s+in\s+([A-ZÄÖÜa-zäöüß][^\n\(#]{3,80})',
                     # 意大利语: n. 数字 in 类目
-                    r'[nN]\.?\s*(\d[\d,.\s]+)\s+in\s+([A-Za-zÀ-ú][^\n\(]{3,50})(?:\s*\(|$|\n)',
+                    r'[nN]\.?\s*(\d[\d.,]*)\s+in\s+([A-Za-zÀ-ú][^\n\(#]{3,80})',
                     # 西班牙语: nº 数字 en 类目
-                    r'[nN][º°]?\s*(\d[\d,.\s]+)\s+en\s+([A-Za-zÀ-ú][^\n\(]{3,50})(?:\s*\(|$|\n)',
+                    r'[nN][º°]?\s*(\d[\d.,]*)\s+en\s+([A-Za-zÀ-ú][^\n\(#]{3,80})',
                 ]
 
                 def extract_bsr_with_category(text):
@@ -562,12 +783,31 @@ async def fetch_listing_info(asin: str, country: str, headless="new") -> dict:
                         for rank_str, category in matches:
                             num_str = re.sub(r'[\s,.]', '', rank_str)
                             if num_str.isdigit():
+                                original_category = category.strip()
+                                category = original_category
+
+                                # 优先提取 "nella categoria X" 中的 X（意大利语）
+                                nella_match = re.search(r'nella categoria\s+(.+)$', category, re.IGNORECASE)
+                                if nella_match:
+                                    category = nella_match.group(1).strip()
+                                else:
+                                    # 提取 "in der Kategorie X" 中的 X（德语）
+                                    der_match = re.search(r'in der Kategorie\s+(.+)$', category, re.IGNORECASE)
+                                    if der_match:
+                                        category = der_match.group(1).strip()
+                                    else:
+                                        # 清理 "Top 100 in X" -> "X"
+                                        category = re.sub(r'^Top\s+\d+\s+in\s+', '', category, flags=re.IGNORECASE)
+                                        # 清理尾部的 "Voir/See/Visualizza..."
+                                        category = re.sub(r'\s*(Voir|See|Mehr|Ver|Vedi|Visualizza).*$', '', category, flags=re.IGNORECASE)
+
                                 category = category.strip()
-                                # 清理类目名称中可能的尾部内容
-                                category = re.sub(r'\s*(Voir|See|Mehr|Ver|Vedi).*$', '', category, flags=re.IGNORECASE)
+                                print(f"[DEBUG] BSR 匹配: rank={num_str}, 原始类目='{original_category}' -> 清理后='{category}'", file=sys.stderr)
                                 if len(category) > 3:
                                     all_bsr.append((int(num_str), category))
+
                     if all_bsr:
+                        print(f"[DEBUG] BSR 所有匹配: {all_bsr}", file=sys.stderr)
                         # 返回排名最小的（子类目排名通常最小）
                         all_bsr.sort(key=lambda x: x[0])
                         return all_bsr[0]
@@ -849,7 +1089,7 @@ async def fetch_listings_batch(items: list, headless="new") -> list:
 
                     # 处理"继续购物"黄色按钮
                     try:
-                        continue_texts = ["Continuer les achats", "Continue shopping", "Weiter einkaufen", "Continua lo shopping", "Seguir comprando"]
+                        continue_texts = ["Continuer les achats", "Continue shopping", "Weiter einkaufen", "Weiter shoppen", "Continua lo shopping", "Continua con gli acquisti", "Seguir comprando"]
                         clicked = False
                         for text in continue_texts:
                             try:
@@ -898,15 +1138,32 @@ async def fetch_listings_batch(items: list, headless="new") -> list:
 
                                 # 刷新后可能再次出现"继续购物"按钮
                                 try:
-                                    btn = page.get_by_text("Continuer les achats", exact=True)
-                                    if await btn.count() > 0 and await btn.first.is_visible(timeout=2000):
-                                        print(f"[DEBUG] 刷新后再次发现继续购物按钮，点击", file=sys.stderr)
-                                        await btn.first.click()
-                                        await page.wait_for_timeout(2000)
+                                    refresh_continue_texts = [
+                                        "Continuer les achats", "Continue shopping",
+                                        "Weiter einkaufen", "Weiter shoppen",
+                                        "Continua lo shopping", "Continua con gli acquisti",
+                                        "Seguir comprando"
+                                    ]
+                                    for text in refresh_continue_texts:
+                                        try:
+                                            btn = page.get_by_text(text, exact=True)
+                                            if await btn.count() > 0 and await btn.first.is_visible(timeout=1000):
+                                                print(f"[DEBUG] 刷新后再次发现继续购物按钮: {text}，点击", file=sys.stderr)
+                                                await btn.first.click()
+                                                await page.wait_for_timeout(2000)
+                                                break
+                                        except:
+                                            continue
                                 except:
                                     pass
                         except Exception as e:
                             print(f"[DEBUG] 设置配送地址出错: {e}", file=sys.stderr)
+
+                        # 设置货币（处理德国站等可能显示美元的情况）
+                        try:
+                            await set_currency(page, country)
+                        except Exception as e:
+                            print(f"[DEBUG] 设置货币出错: {e}", file=sys.stderr)
 
                     # 提取产品信息（与单个爬取一致）
                     # 1. 标题 (使用 span#productTitle 避免匹配到 hidden input)
@@ -977,11 +1234,12 @@ async def fetch_listings_batch(items: list, headless="new") -> list:
                     try:
                         # 正则表达式：同时捕获排名数字和类目名称
                         bsr_with_category_patterns = [
-                            r'(\d[\d\s,.]*)\s+en\s+([A-ZÀ-Úa-zà-ú][^\n\(]{3,50})(?:\s*\(|$|\n)',
-                            r'#(\d[\d,.\s]+)\s+in\s+([A-Za-z][^\n\(]{3,50})(?:\s*\(|$|\n)',
-                            r'Nr\.?\s*(\d[\d,.\s]+)\s+in\s+([A-ZÄÖÜa-zäöüß][^\n\(]{3,50})(?:\s*\(|$|\n)',
-                            r'[nN]\.?\s*(\d[\d,.\s]+)\s+in\s+([A-Za-zÀ-ú][^\n\(]{3,50})(?:\s*\(|$|\n)',
-                            r'[nN][º°]?\s*(\d[\d,.\s]+)\s+en\s+([A-Za-zÀ-ú][^\n\(]{3,50})(?:\s*\(|$|\n)',
+                            r'(\d[\d.,]*)\s+en\s+([A-ZÀ-Úa-zà-ú][^\n\(#]{3,80})',
+                            r'#\s*(\d[\d.,]*)\s+in\s+([A-Za-zÀ-ú][^\n\(#]{3,80})',
+                            r'(\d[\d,]*)\s+in\s+([A-Za-z][^\n\(#]{3,80})',  # 英国格式
+                            r'Nr\.?\s*(\d[\d.,]*)\s+in\s+([A-ZÄÖÜa-zäöüß][^\n\(#]{3,80})',
+                            r'[nN]\.?\s*(\d[\d.,]*)\s+in\s+([A-Za-zÀ-ú][^\n\(#]{3,80})',
+                            r'[nN][º°]?\s*(\d[\d.,]*)\s+en\s+([A-Za-zÀ-ú][^\n\(#]{3,80})',
                         ]
 
                         def extract_bsr_batch(text):
@@ -992,7 +1250,21 @@ async def fetch_listings_batch(items: list, headless="new") -> list:
                                     num_str = re.sub(r'[\s,.]', '', rank_str)
                                     if num_str.isdigit():
                                         category = category.strip()
-                                        category = re.sub(r'\s*(Voir|See|Mehr|Ver|Vedi).*$', '', category, flags=re.IGNORECASE)
+                                        # 优先提取 "nella categoria X" 中的 X（意大利语）
+                                        nella_match = re.search(r'nella categoria\s+(.+)$', category, re.IGNORECASE)
+                                        if nella_match:
+                                            category = nella_match.group(1).strip()
+                                        else:
+                                            # 提取 "in der Kategorie X" 中的 X（德语）
+                                            der_match = re.search(r'in der Kategorie\s+(.+)$', category, re.IGNORECASE)
+                                            if der_match:
+                                                category = der_match.group(1).strip()
+                                            else:
+                                                # 清理 "Top 100 in X" -> "X"
+                                                category = re.sub(r'^Top\s+\d+\s+in\s+', '', category, flags=re.IGNORECASE)
+                                                # 清理尾部的 "Voir/See/Visualizza..."
+                                                category = re.sub(r'\s*(Voir|See|Mehr|Ver|Vedi|Visualizza).*$', '', category, flags=re.IGNORECASE)
+                                        category = category.strip()
                                         if len(category) > 3:
                                             all_bsr.append((int(num_str), category))
                             if all_bsr:

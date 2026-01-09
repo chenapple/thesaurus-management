@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
-import { Plus, Delete, Right, Back, Refresh, ArrowRight } from '@element-plus/icons-vue';
+import { Plus, Delete, Right, Back, Refresh, ArrowRight, CopyDocument, DataLine, Select } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   scGetProjects, scCreateProject, scDeleteProject, scGetProject,
@@ -25,6 +25,10 @@ import {
 import * as XLSX from 'xlsx';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
+import iconRocket from '../assets/icons/rocket_3d.png';
+import iconChart from '../assets/icons/chart_3d.png';
+import AnalysisCanvas from './analysis/AnalysisCanvas.vue';
+import type { AnalysisStatus } from './analysis/AnalysisCanvas.vue';
 
 // ==================== 视图状态 ====================
 const viewMode = ref<'list' | 'detail'>('list');
@@ -338,12 +342,16 @@ async function handleFetchMyListing() {
       currentProject.value.my_bullets = result.bullets ? JSON.stringify(result.bullets) : null;
       currentProject.value.my_description = result.description;
       currentProject.value.my_listing_fetched_at = new Date().toISOString();
-      ElMessage.success('获取成功');
-      // 更新项目状态为采集中
+      // 更新项目状态为采集中（单独捕获异常，不影响成功提示）
       if (currentProject.value.status === 'draft') {
-        await scUpdateProjectStatus(currentProject.value.id, 'collecting');
-        currentProject.value.status = 'collecting';
+        try {
+          await scUpdateProjectStatus(currentProject.value.id, 'collecting');
+          currentProject.value.status = 'collecting';
+        } catch (e) {
+          console.error('更新项目状态失败:', e);
+        }
       }
+      ElMessage.success('获取成功');
     }
   } catch (error) {
     console.error('获取用户 ASIN Listing 失败:', error);
@@ -630,6 +638,21 @@ const isAnalyzing = ref(false);
 const analysisError = ref('');
 const streamingContent = ref('');
 const abortController = ref<AbortController | null>(null);
+// 画布模式并行执行时的多个 AbortController
+const parallelAbortControllers = ref<AbortController[]>([]);
+
+// 分析显示模式：classic（经典三步进度条） 或 canvas（可视化画布）
+const analysisDisplayMode = ref<'classic' | 'canvas'>(
+  (localStorage.getItem('sc_analysis_display_mode') as 'classic' | 'canvas') || 'classic'
+);
+// 并行执行状态（仅 canvas 模式使用）
+const parallelStep1Done = ref(false);
+const parallelStep2Done = ref(false);
+
+// 监听模式变化，持久化到 localStorage
+watch(analysisDisplayMode, (mode) => {
+  localStorage.setItem('sc_analysis_display_mode', mode);
+});
 
 // 进度百分比（用于进度条动画）
 const progressPercent = computed(() => {
@@ -637,6 +660,31 @@ const progressPercent = computed(() => {
   if (analysisStep.value === 1) return 33;
   if (analysisStep.value === 2) return 66;
   return 100;
+});
+
+// 画布模式的状态对象
+const analysisCanvasStatus = computed<AnalysisStatus>(() => {
+  // 检查是否有评论数据
+  let hasReviews = false;
+  for (const comp of competitors.value) {
+    if (reviewSummaries.value.get(comp.id)?.total) {
+      hasReviews = true;
+      break;
+    }
+  }
+
+  return {
+    step: analysisStep.value,
+    reviewInsightsCompleted: !!reviewInsights.value,
+    listingAnalysisCompleted: !!listingAnalysis.value,
+    optimizationCompleted: !!optimizationResult.value,
+    hasReviews,
+    hasCompetitors: competitors.value.some(c => c.fetched_at),
+    hasKeywords: true,  // 关键词数据来自关联的产品
+    isParallel: analysisDisplayMode.value === 'canvas',
+    parallelStep1Done: parallelStep1Done.value,
+    parallelStep2Done: parallelStep2Done.value,
+  };
 });
 
 // 分析结果
@@ -731,6 +779,9 @@ async function handleStartAnalysis() {
   reviewInsights.value = null;
   listingAnalysis.value = null;
   optimizationResult.value = null;
+  parallelStep1Done.value = false;
+  parallelStep2Done.value = false;
+  parallelAbortControllers.value = [];
   isAnalyzing.value = true;
 
   // 更新项目状态为分析中
@@ -740,14 +791,33 @@ async function handleStartAnalysis() {
   }
 
   try {
-    // 步骤 1: 评论洞察分析
-    await runReviewInsightsAnalysis();
+    if (analysisDisplayMode.value === 'canvas') {
+      // 画布模式：步骤 1 和 2 并行执行
+      analysisStep.value = 1;  // 标记开始分析
 
-    // 步骤 2: 文案分析
-    await runListingAnalysis();
+      // 并行执行评论洞察和文案分析
+      await Promise.all([
+        runReviewInsightsAnalysis().then(() => {
+          parallelStep1Done.value = true;
+        }),
+        runListingAnalysis().then(() => {
+          parallelStep2Done.value = true;
+        }),
+      ]);
 
-    // 步骤 3: 优化建议生成
-    await runOptimizationAnalysis();
+      // 步骤 3: 优化建议生成（依赖前两步结果）
+      await runOptimizationAnalysis();
+    } else {
+      // 经典模式：顺序执行
+      // 步骤 1: 评论洞察分析
+      await runReviewInsightsAnalysis();
+
+      // 步骤 2: 文案分析
+      await runListingAnalysis();
+
+      // 步骤 3: 优化建议生成
+      await runOptimizationAnalysis();
+    }
 
     // 更新项目状态为已完成
     if (currentProject.value) {
@@ -773,8 +843,12 @@ async function handleStartAnalysis() {
 // 步骤 1: 评论洞察分析
 async function runReviewInsightsAnalysis() {
   if (!currentProject.value) return;
-  analysisStep.value = 1;
-  streamingContent.value = '';
+
+  // 仅在经典模式下更新步骤和清空流式内容
+  if (analysisDisplayMode.value === 'classic') {
+    analysisStep.value = 1;
+    streamingContent.value = '';
+  }
 
   // 收集评论数据
   const reviewData: Array<{ asin: string; reviews: any[] }> = [];
@@ -788,8 +862,13 @@ async function runReviewInsightsAnalysis() {
   // 构建 prompt
   const prompt = buildReviewInsightsPrompt(reviewData, currentProject.value.marketplace);
 
-  // 调用 AI
-  abortController.value = new AbortController();
+  // 调用 AI - 并行模式使用独立的 AbortController
+  const localAbortController = new AbortController();
+  if (analysisDisplayMode.value === 'classic') {
+    abortController.value = localAbortController;
+  } else {
+    parallelAbortControllers.value.push(localAbortController);
+  }
   let fullResponse = '';
 
   for await (const chunk of chatStream(
@@ -798,12 +877,18 @@ async function runReviewInsightsAnalysis() {
       provider: selectedProvider.value,
       model: selectedModel.value,
       maxTokens: 4096,
-      signal: abortController.value.signal,
+      signal: localAbortController.signal,
     }
   )) {
     if (chunk.done) break;
     fullResponse += chunk.content;
-    streamingContent.value = fullResponse;
+    // 仅在经典模式或当前是步骤1时更新流式内容
+    if (analysisDisplayMode.value === 'classic') {
+      streamingContent.value = fullResponse;
+    } else {
+      // 画布模式：显示当前正在进行的任务
+      streamingContent.value = '[评论分析] ' + fullResponse.slice(-200);
+    }
   }
 
   // 解析结果
@@ -827,8 +912,12 @@ async function runReviewInsightsAnalysis() {
 // 步骤 2: 文案分析
 async function runListingAnalysis() {
   if (!currentProject.value) return;
-  analysisStep.value = 2;
-  streamingContent.value = '';
+
+  // 仅在经典模式下更新步骤和清空流式内容
+  if (analysisDisplayMode.value === 'classic') {
+    analysisStep.value = 2;
+    streamingContent.value = '';
+  }
 
   // 构建 prompt
   const prompt = buildListingAnalysisPrompt(
@@ -836,8 +925,13 @@ async function runListingAnalysis() {
     currentProject.value.marketplace
   );
 
-  // 调用 AI
-  abortController.value = new AbortController();
+  // 调用 AI - 并行模式使用独立的 AbortController
+  const localAbortController = new AbortController();
+  if (analysisDisplayMode.value === 'classic') {
+    abortController.value = localAbortController;
+  } else {
+    parallelAbortControllers.value.push(localAbortController);
+  }
   let fullResponse = '';
 
   for await (const chunk of chatStream(
@@ -846,12 +940,18 @@ async function runListingAnalysis() {
       provider: selectedProvider.value,
       model: selectedModel.value,
       maxTokens: 4096,
-      signal: abortController.value.signal,
+      signal: localAbortController.signal,
     }
   )) {
     if (chunk.done) break;
     fullResponse += chunk.content;
-    streamingContent.value = fullResponse;
+    // 仅在经典模式时更新流式内容
+    if (analysisDisplayMode.value === 'classic') {
+      streamingContent.value = fullResponse;
+    } else {
+      // 画布模式：显示当前正在进行的任务
+      streamingContent.value = '[文案分析] ' + fullResponse.slice(-200);
+    }
   }
 
   // 解析结果
@@ -927,7 +1027,12 @@ async function runOptimizationAnalysis() {
   )) {
     if (chunk.done) break;
     fullResponse += chunk.content;
-    streamingContent.value = fullResponse;
+    // 画布模式显示任务标签
+    if (analysisDisplayMode.value === 'canvas') {
+      streamingContent.value = '[优化建议] ' + fullResponse.slice(-300);
+    } else {
+      streamingContent.value = fullResponse;
+    }
   }
 
   // 解析结果
@@ -950,17 +1055,75 @@ async function runOptimizationAnalysis() {
 
 // 停止分析
 function handleStopAnalysis() {
+  // 经典模式：中断单个控制器
   if (abortController.value) {
     abortController.value.abort();
   }
+  // 画布模式：中断所有并行控制器
+  for (const controller of parallelAbortControllers.value) {
+    controller.abort();
+  }
+  parallelAbortControllers.value = [];
 }
 
 // ==================== 工具函数 ====================
+
+// 复制到剪贴板
+async function copyToClipboard(text: string, label?: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    ElMessage.success(label ? `${label} 已复制` : '已复制到剪贴板');
+  } catch (err) {
+    console.error('复制失败:', err);
+    ElMessage.error('复制失败');
+  }
+}
+
+// 复制标题
+function copyTitle(content: string) {
+  copyToClipboard(content, '标题');
+}
+
+// 复制单条五点
+function copyBullet(content: string, index: number) {
+  copyToClipboard(content, `五点${index}`);
+}
+
+// 复制全部五点
+function copyAllBullets() {
+  if (!optimizationResult.value?.bullet_suggestions?.length) return;
+  const allBullets = optimizationResult.value.bullet_suggestions
+    .map(b => b.content)
+    .join('\n\n');
+  copyToClipboard(allBullets, '全部五点');
+}
+
+// 复制后台关键词
+function copyBackendKeywords() {
+  if (!optimizationResult.value?.backend_keywords?.length) return;
+  const keywords = optimizationResult.value.backend_keywords
+    .filter(k => k && k.keyword)
+    .map(k => k.keyword)
+    .join(', ');
+  copyToClipboard(keywords, '后台关键词');
+}
+
 function formatDate(dateStr: string): string {
-  const date = new Date(dateStr);
+  if (!dateStr) return '';
+  // SQLite CURRENT_TIMESTAMP 返回 UTC 时间，格式如 "2026-01-08 08:38:00"
+  // 如果没有时区标识，添加 Z 表示 UTC
+  let date: Date;
+  if (dateStr.includes('T') || dateStr.includes('Z') || dateStr.includes('+')) {
+    // 已经是 ISO 格式或包含时区信息
+    date = new Date(dateStr);
+  } else {
+    // SQLite 格式 "YYYY-MM-DD HH:MM:SS"，是 UTC 时间
+    date = new Date(dateStr.replace(' ', 'T') + 'Z');
+  }
   return date.toLocaleDateString('zh-CN', {
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit',
+    timeZone: 'Asia/Shanghai',
   });
 }
 
@@ -1039,7 +1202,21 @@ async function exportToExcel() {
     XLSX.utils.book_append_sheet(wb, keywordSheet, '后台关键词');
   }
 
-  // Sheet 4-6: A+ 内容建议
+  // Sheet 4: 商品描述
+  if (Array.isArray(result.description_suggestions) && result.description_suggestions.length) {
+    const descData = result.description_suggestions.map(d => ({
+      '版本': d.version,
+      '商品描述': d.content,
+      '结构': d.structure,
+      '埋入关键词': Array.isArray(d.embedded_keywords) ? d.embedded_keywords.join(', ') : '',
+      '突出卖点': Array.isArray(d.highlights) ? d.highlights.join(', ') : '',
+      '理由': d.reason
+    }));
+    const descSheet = XLSX.utils.json_to_sheet(descData);
+    XLSX.utils.book_append_sheet(wb, descSheet, '商品描述');
+  }
+
+  // Sheet 5-7: A+ 内容建议
   if (result.aplus_suggestions) {
     const aplus = result.aplus_suggestions;
 
@@ -1117,16 +1294,39 @@ onMounted(async () => {
       <!-- 场景选择 -->
       <div class="scenario-selector">
         <div class="scenario-card" :class="{ active: scenarioType === 'new' }" @click="scenarioType = 'new'">
-          <div class="scenario-icon">🆕</div>
-          <div class="scenario-title">新品打造</div>
-          <div class="scenario-desc">从零开始创建全新的 Listing</div>
-          <div class="scenario-count">{{ projects.filter(p => p.scenario_type === 'new').length }} 个项目</div>
+          <div class="card-content">
+            <div class="scenario-icon-wrapper blue-theme">
+              <img :src="iconRocket" class="scenario-img" alt="New Product" />
+            </div>
+            <div class="text-content">
+              <div class="scenario-header">
+                <div class="scenario-title">新品打造</div>
+                <div class="scenario-badge" v-if="scenarioType === 'new'"><el-icon><Select /></el-icon></div>
+              </div>
+              <div class="scenario-desc">从零开始创建全新的 Listing</div>
+              <div class="scenario-status">
+                 <el-tag size="small" type="info" effect="plain" round>{{ projects.filter(p => p.scenario_type === 'new').length }} 个项目</el-tag>
+              </div>
+            </div>
+          </div>
         </div>
+
         <div class="scenario-card" :class="{ active: scenarioType === 'optimize' }" @click="scenarioType = 'optimize'">
-          <div class="scenario-icon">🔧</div>
-          <div class="scenario-title">老品优化</div>
-          <div class="scenario-desc">优化现有 Listing，提升转化和排名</div>
-          <div class="scenario-count">{{ projects.filter(p => p.scenario_type === 'optimize').length }} 个项目</div>
+          <div class="card-content">
+             <div class="scenario-icon-wrapper green-theme">
+               <img :src="iconChart" class="scenario-img" alt="Optimization" />
+            </div>
+            <div class="text-content">
+              <div class="scenario-header">
+                <div class="scenario-title">老品优化</div>
+                <div class="scenario-badge" v-if="scenarioType === 'optimize'"><el-icon><Select /></el-icon></div>
+              </div>
+              <div class="scenario-desc">优化现有 Listing，提升转化和排名</div>
+              <div class="scenario-status">
+                 <el-tag size="small" type="info" effect="plain" round>{{ projects.filter(p => p.scenario_type === 'optimize').length }} 个项目</el-tag>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1616,6 +1816,17 @@ onMounted(async () => {
             <div class="section-header">
               <span class="section-title">AI 分析</span>
               <div class="ai-settings">
+                <!-- 显示模式切换 -->
+                <el-tooltip :content="analysisDisplayMode === 'classic' ? '切换到画布模式（并行执行，更快）' : '切换到经典模式'" placement="top">
+                  <el-button
+                    :icon="analysisDisplayMode === 'classic' ? DataLine : Select"
+                    size="small"
+                    :disabled="isAnalyzing"
+                    @click="analysisDisplayMode = analysisDisplayMode === 'classic' ? 'canvas' : 'classic'"
+                  >
+                    {{ analysisDisplayMode === 'classic' ? '经典' : '画布' }}
+                  </el-button>
+                </el-tooltip>
                 <span class="setting-label">AI 服务:</span>
                 <el-select v-model="selectedProvider" size="small" style="width: 110px" :disabled="isAnalyzing">
                   <el-option v-for="(config, key) in AI_PROVIDERS" :key="key" :label="config.name" :value="key" />
@@ -1636,8 +1847,15 @@ onMounted(async () => {
               </div>
             </div>
 
-            <!-- 分析进度 -->
-            <div v-if="isAnalyzing" class="analysis-progress">
+            <!-- 画布模式进度显示 -->
+            <AnalysisCanvas
+              v-if="isAnalyzing && analysisDisplayMode === 'canvas'"
+              :status="analysisCanvasStatus"
+              :streaming-content="streamingContent"
+            />
+
+            <!-- 经典模式进度显示 -->
+            <div v-if="isAnalyzing && analysisDisplayMode === 'classic'" class="analysis-progress">
               <div class="progress-steps">
                 <div :class="['step', { active: analysisStep === 1, done: analysisStep > 1 }]">
                   <span class="step-icon">
@@ -1721,7 +1939,12 @@ onMounted(async () => {
                 <div v-if="optimizationResult.title_suggestions?.length" class="suggestion-group">
                   <h5>标题建议</h5>
                   <div v-for="(t, i) in optimizationResult.title_suggestions" :key="i" class="suggestion-item">
-                    <div class="suggestion-content">{{ t.content }}</div>
+                    <div class="suggestion-content-wrapper">
+                      <div class="suggestion-content">{{ t.content }}</div>
+                      <el-button class="copy-btn" size="small" text @click="copyTitle(t.content)">
+                        <el-icon><CopyDocument /></el-icon>
+                      </el-button>
+                    </div>
                     <div class="suggestion-reasons">
                       <span v-for="(r, j) in t.reasons" :key="j" class="reason-tag">
                         <strong>{{ r.word }}</strong>: {{ r.reason }}
@@ -1732,13 +1955,23 @@ onMounted(async () => {
 
                 <!-- 五点建议 -->
                 <div v-if="optimizationResult.bullet_suggestions?.length" class="suggestion-group">
-                  <h5>五点描述建议</h5>
+                  <div class="suggestion-group-header">
+                    <h5>五点描述建议</h5>
+                    <el-button size="small" text @click="copyAllBullets">
+                      <el-icon><CopyDocument /></el-icon>复制全部
+                    </el-button>
+                  </div>
                   <div v-for="(b, i) in optimizationResult.bullet_suggestions" :key="i" class="suggestion-item">
                     <div class="bullet-header">
                       <span class="bullet-index">{{ b.index || (i + 1) }}</span>
                       <el-tag size="small" type="info">{{ b.focus }}</el-tag>
                     </div>
-                    <div class="suggestion-content">{{ b.content }}</div>
+                    <div class="suggestion-content-wrapper">
+                      <div class="suggestion-content">{{ b.content }}</div>
+                      <el-button class="copy-btn" size="small" text @click="copyBullet(b.content, b.index || (i + 1))">
+                        <el-icon><CopyDocument /></el-icon>
+                      </el-button>
+                    </div>
                     <div v-if="b.embedded_keywords?.length" class="embedded-keywords">
                       <span class="keywords-label">埋入关键词：</span>
                       <el-tag v-for="(kw, ki) in b.embedded_keywords" :key="ki" size="small" type="success">
@@ -1755,7 +1988,12 @@ onMounted(async () => {
 
                 <!-- 后台关键词 -->
                 <div v-if="optimizationResult.backend_keywords?.length" class="suggestion-group">
-                  <h5>后台关键词建议</h5>
+                  <div class="suggestion-group-header">
+                    <h5>后台关键词建议</h5>
+                    <el-button size="small" text @click="copyBackendKeywords">
+                      <el-icon><CopyDocument /></el-icon>复制全部
+                    </el-button>
+                  </div>
                   <div class="keyword-list">
                     <template v-for="(k, i) in optimizationResult.backend_keywords" :key="i">
                       <el-tag v-if="k && k.keyword && String(k.keyword).trim()" size="small">
@@ -1763,6 +2001,42 @@ onMounted(async () => {
                         <span v-if="k.search_volume" class="keyword-volume">({{ k.search_volume }})</span>
                       </el-tag>
                     </template>
+                  </div>
+                </div>
+
+                <!-- 商品描述建议 -->
+                <div v-if="optimizationResult.description_suggestions?.length" class="suggestion-group">
+                  <div class="suggestion-header">
+                    <h5>商品描述建议</h5>
+                  </div>
+                  <div v-for="(desc, i) in optimizationResult.description_suggestions" :key="i" class="description-item">
+                    <div class="description-header">
+                      <el-tag size="small" type="primary">版本 {{ desc.version }}</el-tag>
+                      <el-button size="small" text @click="copyToClipboard(desc.content)">
+                        <el-icon><CopyDocument /></el-icon>复制
+                      </el-button>
+                    </div>
+                    <div class="description-content">
+                      <pre class="description-text">{{ desc.content }}</pre>
+                    </div>
+                    <div class="description-meta">
+                      <div class="meta-row">
+                        <span class="meta-label">结构：</span>
+                        <span>{{ desc.structure }}</span>
+                      </div>
+                      <div v-if="desc.embedded_keywords?.length" class="meta-row">
+                        <span class="meta-label">埋入关键词：</span>
+                        <el-tag v-for="kw in desc.embedded_keywords" :key="kw" size="small" type="info" class="meta-tag">{{ kw }}</el-tag>
+                      </div>
+                      <div v-if="desc.highlights?.length" class="meta-row">
+                        <span class="meta-label">突出卖点：</span>
+                        <el-tag v-for="hl in desc.highlights" :key="hl" size="small" type="success" class="meta-tag">{{ hl }}</el-tag>
+                      </div>
+                      <div class="meta-row reason-row">
+                        <span class="meta-label">理由：</span>
+                        <span class="reason-text">{{ desc.reason }}</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -1943,35 +2217,101 @@ onMounted(async () => {
 /* 场景选择器 */
 .scenario-selector {
   display: flex;
-  gap: 16px;
+  gap: 20px;
   margin-bottom: 32px;
 }
 
 .scenario-card {
   flex: 1;
-  max-width: 280px;
-  padding: 20px;
-  background: var(--el-bg-color-page);
-  border: 2px solid var(--el-border-color);
+  max-width: 320px;
+  padding: 0;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 12px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+  position: relative;
 }
 
 .scenario-card:hover {
-  border-color: var(--el-color-primary-light-3);
-  background: var(--el-color-primary-light-9);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.08);
+  border-color: var(--el-color-primary-light-5);
 }
 
 .scenario-card.active {
   border-color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
+  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.15);
 }
 
-.scenario-icon { font-size: 32px; margin-bottom: 12px; }
-.scenario-title { font-size: 16px; font-weight: 600; color: var(--el-text-color-primary); margin-bottom: 8px; }
-.scenario-desc { font-size: 13px; color: var(--el-text-color-secondary); margin-bottom: 8px; }
-.scenario-count { font-size: 12px; color: var(--el-text-color-placeholder); }
+.card-content {
+  display: flex;
+  align-items: flex-start;
+  padding: 24px;
+  gap: 16px;
+}
+
+.scenario-icon-wrapper {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px; /* Squircle looks more modern for 3D icons */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.scenario-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  mix-blend-mode: multiply; /* Make white bg transparent on colored wrapper */
+}
+
+.scenario-icon-wrapper.blue-theme {
+  background: linear-gradient(135deg, #e6f7ff 0%, #bae7ff 100%);
+}
+
+.scenario-icon-wrapper.green-theme {
+  background: linear-gradient(135deg, #f6ffed 0%, #d9f7be 100%);
+}
+
+.text-content {
+  flex: 1;
+}
+
+.scenario-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.scenario-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+
+.scenario-badge {
+  color: var(--el-color-primary);
+  font-weight: bold;
+}
+
+.scenario-desc {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.scenario-status {
+  display: flex;
+  align-items: center;
+}
 
 /* 项目列表和竞品列表 */
 .projects-section, .competitors-section {
@@ -2544,6 +2884,47 @@ onMounted(async () => {
   color: var(--el-text-color-secondary);
 }
 
+/* 建议组头部（标题 + 复制全部按钮） */
+.suggestion-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.suggestion-group-header h5 {
+  margin: 0;
+}
+
+/* 内容 + 复制按钮包装 */
+.suggestion-content-wrapper {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.suggestion-content-wrapper .suggestion-content {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+/* 复制按钮 */
+.copy-btn {
+  flex-shrink: 0;
+  opacity: 0.6;
+  transition: opacity 0.2s ease;
+}
+
+.suggestion-item:hover .copy-btn,
+.suggestion-content-wrapper:hover .copy-btn {
+  opacity: 1;
+}
+
+.copy-btn:hover {
+  opacity: 1;
+  color: var(--el-color-primary);
+}
+
 .suggestion-item {
   background: var(--el-fill-color-lighter);
   border-radius: 8px;
@@ -2578,6 +2959,80 @@ onMounted(async () => {
   background: var(--el-color-primary-light-9);
   color: var(--el-color-primary);
   border-radius: 4px;
+}
+
+/* 商品描述建议 */
+.description-item {
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.description-item:last-child {
+  margin-bottom: 0;
+}
+
+.description-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.description-content {
+  margin: 12px 0;
+  padding: 12px;
+  background: var(--el-bg-color);
+  border-radius: 6px;
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+.description-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  margin: 0;
+  line-height: 1.6;
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+}
+
+.description-meta {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.description-meta .meta-row {
+  margin-bottom: 8px;
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.description-meta .meta-row:last-child {
+  margin-bottom: 0;
+}
+
+.description-meta .meta-label {
+  font-weight: 500;
+  color: var(--el-text-color-regular);
+  flex-shrink: 0;
+}
+
+.description-meta .meta-tag {
+  margin-right: 4px;
+}
+
+.description-meta .reason-row {
+  flex-direction: column;
+  gap: 4px;
+}
+
+.description-meta .reason-text {
+  color: var(--el-text-color-secondary);
+  line-height: 1.5;
 }
 
 /* 五点建议 */

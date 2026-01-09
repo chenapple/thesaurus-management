@@ -1377,6 +1377,74 @@ fn sc_get_project_keywords(project_id: i64, limit: i64) -> Result<Vec<db::Keywor
         .map_err(|e| e.to_string())
 }
 
+// ==================== 智能广告（Smart Ads）====================
+
+#[tauri::command]
+fn ad_create_project(product_id: Option<i64>, name: String, marketplace: String, target_acos: f64) -> Result<i64, String> {
+    db::ad_create_project(product_id, &name, &marketplace, target_acos)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ad_get_projects() -> Result<Vec<db::AdProject>, String> {
+    db::ad_get_projects()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ad_get_project(id: i64) -> Result<Option<db::AdProject>, String> {
+    db::ad_get_project(id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ad_update_project(id: i64, name: String, marketplace: String, target_acos: f64) -> Result<(), String> {
+    db::ad_update_project(id, &name, &marketplace, target_acos)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ad_delete_project(id: i64) -> Result<(), String> {
+    db::ad_delete_project(id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ad_import_search_terms(project_id: i64, search_terms: Vec<db::AdSearchTerm>) -> Result<i64, String> {
+    db::ad_import_search_terms(project_id, search_terms)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ad_get_search_terms(project_id: i64) -> Result<Vec<db::AdSearchTerm>, String> {
+    db::ad_get_search_terms(project_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ad_get_search_terms_stats(project_id: i64) -> Result<db::SearchTermsStatsResult, String> {
+    db::ad_get_search_terms_stats(project_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ad_save_analysis(project_id: i64, analysis_type: String, result_json: String, ai_provider: String, ai_model: String) -> Result<i64, String> {
+    db::ad_save_analysis(project_id, &analysis_type, &result_json, &ai_provider, &ai_model)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ad_get_analysis(project_id: i64, analysis_type: String) -> Result<Option<db::AdAnalysisResult>, String> {
+    db::ad_get_analysis(project_id, &analysis_type)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn ad_get_all_analysis(project_id: i64) -> Result<Vec<db::AdAnalysisResult>, String> {
+    db::ad_get_all_analysis(project_id)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1593,6 +1661,18 @@ pub fn run() {
             sc_get_all_analysis,
             sc_delete_all_analysis,
             sc_get_project_keywords,
+            // 智能广告
+            ad_create_project,
+            ad_get_projects,
+            ad_get_project,
+            ad_update_project,
+            ad_delete_project,
+            ad_import_search_terms,
+            ad_get_search_terms,
+            ad_get_search_terms_stats,
+            ad_save_analysis,
+            ad_get_analysis,
+            ad_get_all_analysis,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

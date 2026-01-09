@@ -206,18 +206,19 @@ export const COUNTRY_OPTIONS = [
   { value: 'FR', label: '法国', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="10" height="20" fill="#002395"/><rect x="10" width="10" height="20" fill="white"/><rect x="20" width="10" height="20" fill="#ED2939"/></svg>` },
   { value: 'IT', label: '意大利', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="10" height="20" fill="#009246"/><rect x="10" width="10" height="20" fill="white"/><rect x="20" width="10" height="20" fill="#CE2B37"/></svg>` },
   { value: 'ES', label: '西班牙', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="5" fill="#AA151B"/><rect y="5" width="30" height="10" fill="#F1BF00"/><rect y="15" width="30" height="5" fill="#AA151B"/></svg>` },
+  { value: 'Unknown', label: '未知市场', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="#E0E0E0"/><text x="15" y="14" font-size="12" text-anchor="middle" fill="#666">?</text></svg>` },
 ];
 
-// 获取国旗SVG
-export function getCountryFlag(code: string): string {
-  const country = COUNTRY_OPTIONS.find(c => c.value === code);
+// 获取国旗SVG（支持代码或名称查找）
+export function getCountryFlag(codeOrName: string): string {
+  const country = COUNTRY_OPTIONS.find(c => c.value === codeOrName || c.label === codeOrName);
   return country?.flag || '';
 }
 
-// 获取国家名称
-export function getCountryLabel(code: string): string {
-  const country = COUNTRY_OPTIONS.find(c => c.value === code);
-  return country?.label || code;
+// 获取国家名称（支持代码或名称查找）
+export function getCountryLabel(codeOrName: string): string {
+  const country = COUNTRY_OPTIONS.find(c => c.value === codeOrName || c.label === codeOrName);
+  return country?.label || codeOrName;
 }
 
 // 优先级选项
@@ -663,6 +664,14 @@ export interface OptimizationResult {
     search_volume: number | null;
   }>;
   keyword_distribution_summary?: string;  // 关键词分布总结
+  description_suggestions?: Array<{       // 商品描述建议
+    version: number;           // 版本号
+    content: string;           // 商品描述内容
+    structure: string;         // 结构说明
+    embedded_keywords: string[]; // 埋入的关键词
+    highlights: string[];      // 突出的卖点
+    reason: string;            // 为什么这样写
+  }>;
   aplus_suggestions?: AplusSuggestions;   // A+ 内容建议
 }
 
@@ -697,7 +706,7 @@ export const AI_PROVIDERS: Record<AIProvider, AIProviderConfig> = {
   gemini: {
     provider: 'gemini',
     name: 'Gemini',
-    models: ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
+    models: ['gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'],
     defaultModel: 'gemini-2.5-flash',
     apiKeyName: 'gemini',
   },
@@ -709,3 +718,173 @@ export const AI_PROVIDERS: Record<AIProvider, AIProviderConfig> = {
     apiKeyName: 'qwen',
   },
 };
+
+// ==================== 智能广告（Smart Ads）====================
+
+// 国家到货币的映射（支持英文代码和中文名称）
+export const COUNTRY_CURRENCY_MAP: Record<string, { symbol: string; code: string }> = {
+  // 英文代码
+  'UK': { symbol: '£', code: 'GBP' },
+  'DE': { symbol: '€', code: 'EUR' },
+  'FR': { symbol: '€', code: 'EUR' },
+  'IT': { symbol: '€', code: 'EUR' },
+  'ES': { symbol: '€', code: 'EUR' },
+  'US': { symbol: '$', code: 'USD' },
+  'CA': { symbol: 'C$', code: 'CAD' },
+  'JP': { symbol: '¥', code: 'JPY' },
+  'AU': { symbol: 'A$', code: 'AUD' },
+  'MX': { symbol: 'MX$', code: 'MXN' },
+  'IN': { symbol: '₹', code: 'INR' },
+  'BR': { symbol: 'R$', code: 'BRL' },
+  // 中文名称
+  '英国': { symbol: '£', code: 'GBP' },
+  '德国': { symbol: '€', code: 'EUR' },
+  '法国': { symbol: '€', code: 'EUR' },
+  '意大利': { symbol: '€', code: 'EUR' },
+  '西班牙': { symbol: '€', code: 'EUR' },
+  '美国': { symbol: '$', code: 'USD' },
+  '加拿大': { symbol: 'C$', code: 'CAD' },
+  '日本': { symbol: '¥', code: 'JPY' },
+  '澳大利亚': { symbol: 'A$', code: 'AUD' },
+  '墨西哥': { symbol: 'MX$', code: 'MXN' },
+  '印度': { symbol: '₹', code: 'INR' },
+  '巴西': { symbol: 'R$', code: 'BRL' },
+  // 默认
+  'Unknown': { symbol: '', code: '' },
+  '未知市场': { symbol: '', code: '' },
+};
+
+// 按国家分组的统计数据
+export interface CountryStats {
+  country: string;
+  total_spend: number;
+  total_sales: number;
+  avg_acos: number;
+  term_count: number;
+}
+
+// 搜索词统计结果（包含总计和按国家分组）
+export interface SearchTermsStatsResult {
+  total_spend: number;
+  total_sales: number;
+  avg_acos: number;
+  count: number;
+  by_country: CountryStats[];
+}
+
+// 广告项目
+export interface AdProject {
+  id: number;
+  product_id: number | null;
+  name: string;
+  marketplace: string;
+  target_acos: number;
+  created_at: string;
+  updated_at: string;
+  search_term_count: number;
+}
+
+// 搜索词数据
+export interface AdSearchTerm {
+  id: number;
+  project_id: number;
+  portfolio_name: string | null;  // 广告组合名称
+  campaign_name: string | null;   // 广告活动名称
+  ad_group_name: string | null;   // 广告组名称
+  country: string | null;         // 国家/地区
+  targeting: string | null;       // 投放词
+  match_type: 'broad' | 'phrase' | 'exact' | 'auto' | null;  // 匹配类型
+  customer_search_term: string | null;  // 客户搜索词
+  impressions: number;            // 展示量
+  clicks: number;                 // 点击量
+  ctr: number;                    // 点击率
+  spend: number;                  // 花费
+  sales: number;                  // 销售额
+  orders: number;                 // 订单数
+  acos: number;                   // ACOS
+  roas: number;                   // ROAS
+  conversion_rate: number;        // 转化率
+  cpc: number;                    // CPC
+  report_date: string | null;     // 报告日期
+  imported_at?: string;           // 导入时间
+}
+
+// 否定词建议
+export interface NegativeWordSuggestion {
+  search_term: string;
+  reason: string;
+  risk_level: 'high' | 'medium' | 'low';
+  spend_wasted: number;
+  match_type_suggestion: 'exact' | 'phrase';
+  campaigns_affected: string[];
+}
+
+// 竞价调整建议
+export interface BidAdjustment {
+  targeting: string;
+  campaign_name: string;
+  current_performance: {
+    acos: number;
+    conversion_rate: number;
+    impressions: number;
+    clicks: number;
+  };
+  suggestion: 'increase' | 'decrease' | 'pause' | 'maintain';
+  adjustment_percent: number;
+  reason: string;
+  priority: 'high' | 'medium' | 'low';
+}
+
+// 关键词机会
+export interface KeywordOpportunity {
+  search_term: string;
+  performance: {
+    orders: number;
+    conversion_rate: number;
+    acos: number;
+  };
+  suggestion: string;
+  match_type: string;
+  estimated_potential: string;
+}
+
+// 单个国家的分析结果
+export interface CountryAnalysisResult {
+  country: string;
+  currency: { symbol: string; code: string };
+  negative_words: NegativeWordSuggestion[];
+  bid_adjustments: BidAdjustment[];
+  keyword_opportunities: KeywordOpportunity[];
+  summary: {
+    total_spend_analyzed: number;
+    potential_savings: number;
+    optimization_score: number;
+    key_insights: string[];
+  };
+}
+
+// 广告分析结果汇总
+export interface AdAnalysisResult {
+  negative_words: NegativeWordSuggestion[];
+  bid_adjustments: BidAdjustment[];
+  keyword_opportunities: KeywordOpportunity[];
+  summary: {
+    total_spend_analyzed: number;
+    potential_savings: number;
+    optimization_score: number;
+    key_insights: string[];
+  };
+  // 按国家的详细结果（多国家数据时使用）
+  by_country?: CountryAnalysisResult[];
+}
+
+// 广告分析记录（数据库存储）
+export interface AdAnalysisRecord {
+  id: number;
+  project_id: number;
+  analysis_type: string;
+  result_json: string;
+  ai_provider: string | null;
+  ai_model: string | null;
+  created_at: string;
+}
