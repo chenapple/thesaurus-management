@@ -3566,23 +3566,138 @@ onUnmounted(() => {
         <el-tab-pane label="知识库" name="knowledge">
           <div class="help-content">
             <h4>功能说明</h4>
-            <p>上传产品相关文档，构建专属知识库，支持AI对话问答。</p>
+            <p>上传产品相关文档，构建企业专属知识库。通过向量检索 + 关键词搜索的混合检索技术，实现基于文档内容的精准 AI 问答。</p>
             <ul>
-              <li><strong>文档管理：</strong>支持上传PDF、Word、TXT、Markdown等格式</li>
-              <li><strong>分类整理：</strong>创建分类文件夹，整理不同类型的文档</li>
-              <li><strong>智能问答：</strong>基于上传的文档内容，AI可以准确回答相关问题</li>
-              <li><strong>多种模式：</strong>支持知识库问答、联网搜索、自由对话三种模式</li>
+              <li><strong>文档管理：</strong>支持 PDF、Word、Excel、PPT、Markdown、TXT 等格式，批量上传带进度显示</li>
+              <li><strong>分类整理：</strong>创建分类管理文档，支持颜色标识和拖拽排序</li>
+              <li><strong>智能问答：</strong>三种对话模式，支持流式输出和来源引用</li>
+              <li><strong>图片识别：</strong>自动提取文档中的图片并用 AI 识别内容</li>
             </ul>
-            <h4>使用建议</h4>
-            <ul>
-              <li>上传产品说明书、竞品分析报告、市场调研等资料</li>
-              <li>文档越详细，AI回答越准确</li>
-              <li>可以直接拖拽文件到文档列表区域快速上传</li>
-            </ul>
+
+            <h4>核心功能详解</h4>
+            <p style="color: var(--el-text-color-secondary); margin-bottom: 12px;">点击展开查看详细说明：</p>
+
+            <el-collapse class="agent-prompts-collapse">
+              <el-collapse-item name="documentUpload">
+                <template #title>
+                  <span class="agent-title">文档上传与处理</span>
+                  <span class="agent-subtitle">支持多种格式，智能解析</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>支持的文档格式</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>PDF：</strong>自动提取文本，文本提取失败时自动使用 AI OCR 识别</li>
+                      <li><strong>Word (docx)：</strong>解析文本内容，自动提取并识别文档中的图片</li>
+                      <li><strong>Excel (xlsx/xls)：</strong>提取表格数据，支持图片识别</li>
+                      <li><strong>PPT (pptx)：</strong>提取幻灯片内容，支持图片识别</li>
+                      <li><strong>Markdown/TXT：</strong>直接解析文本内容</li>
+                    </ul>
+                  </div>
+                  <h5>处理流程</h5>
+                  <ul>
+                    <li><strong>文本解析：</strong>提取文档中的文字内容</li>
+                    <li><strong>智能分块：</strong>将长文档切分为适合检索的文本块</li>
+                    <li><strong>向量化：</strong>为每个文本块生成向量索引（需配置 DeepSeek 或通义千问）</li>
+                    <li><strong>图片处理：</strong>提取图片并用 AI Vision 识别内容（需配置通义千问或 Gemini）</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="chatModes">
+                <template #title>
+                  <span class="agent-title">三种对话模式</span>
+                  <span class="agent-subtitle">灵活切换，满足不同需求</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>严格模式</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li>仅基于知识库中的文档内容回答问题</li>
+                      <li>找不到相关内容时会明确告知</li>
+                      <li>适合需要严格依据文档的场景</li>
+                    </ul>
+                  </div>
+                  <h5>分析模式（推荐）</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li>结合知识库内容和 AI 的分析能力</li>
+                      <li>可以对文档内容进行解读、总结、分析</li>
+                      <li>平衡准确性和智能性，适合日常使用</li>
+                    </ul>
+                  </div>
+                  <h5>直接对话模式</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li>不检索知识库，直接与 AI 对话</li>
+                      <li>适合通用问题或不需要知识库参考的场景</li>
+                    </ul>
+                  </div>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="hybridSearch">
+                <template #title>
+                  <span class="agent-title">混合检索技术</span>
+                  <span class="agent-subtitle">向量 + 关键词双重匹配</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>检索流程</h5>
+                  <div class="prompt-block">
+                    <p><strong>1. 向量搜索（语义匹配）：</strong></p>
+                    <ul>
+                      <li>将用户问题转换为向量</li>
+                      <li>在向量库中查找语义相似的文档块</li>
+                      <li>能理解同义词、近义表达</li>
+                    </ul>
+                    <p><strong>2. 关键词搜索（精确匹配）：</strong></p>
+                    <ul>
+                      <li>基于关键词的全文检索</li>
+                      <li>确保包含特定术语的内容不会遗漏</li>
+                    </ul>
+                    <p><strong>3. Re-ranking 重排序：</strong></p>
+                    <ul>
+                      <li>使用 AI 对候选结果重新评估相关性</li>
+                      <li>筛选出最相关的文档块提供给 AI 回答</li>
+                    </ul>
+                  </div>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="categoryManage">
+                <template #title>
+                  <span class="agent-title">分类管理</span>
+                  <span class="agent-subtitle">灵活组织文档</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>分类功能</h5>
+                  <ul>
+                    <li><strong>新建分类：</strong>点击"新建分类"创建文档分类</li>
+                    <li><strong>颜色标识：</strong>为每个分类设置不同颜色，便于区分</li>
+                    <li><strong>拖拽排序：</strong>按住分类标签可拖拽调整顺序</li>
+                    <li><strong>移动文档：</strong>右键菜单可将文档移动到其他分类</li>
+                    <li><strong>重命名/删除：</strong>右键分类标签进行操作</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
+
+            <h4>使用流程</h4>
+            <ol>
+              <li>配置 AI 服务 API Key（建议配置 DeepSeek + 通义千问）</li>
+              <li>点击"添加文档"或拖拽文件上传文档</li>
+              <li>等待文档处理完成（解析 → 分块 → 向量化）</li>
+              <li>在对话界面输入问题，AI 会基于知识库内容回答</li>
+              <li>点击"来源"展开查看回答的参考文档</li>
+            </ol>
+
             <h4>注意事项</h4>
             <ul>
-              <li>需要配置支持知识库的AI服务（如通义千问）</li>
-              <li>首次上传文档需要等待索引构建完成</li>
+              <li><strong>API Key 要求：</strong>向量化需要 DeepSeek 或通义千问 API Key；图片识别需要通义千问或 Gemini</li>
+              <li><strong>PDF OCR：</strong>扫描版 PDF 需要安装额外依赖，首次使用时会提示安装</li>
+              <li><strong>处理时间：</strong>大文档的向量化需要一定时间，上传时可查看进度</li>
+              <li><strong>向量化状态：</strong>文档列表显示向量化进度，未完成向量化的文档检索效果会受影响</li>
+              <li><strong>对话上下文：</strong>保留最近 15 轮对话作为上下文，长对话建议新建会话</li>
             </ul>
           </div>
         </el-tab-pane>

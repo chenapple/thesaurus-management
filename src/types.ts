@@ -206,7 +206,6 @@ export const COUNTRY_OPTIONS = [
   { value: 'FR', label: '法国', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="10" height="20" fill="#002395"/><rect x="10" width="10" height="20" fill="white"/><rect x="20" width="10" height="20" fill="#ED2939"/></svg>` },
   { value: 'IT', label: '意大利', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="10" height="20" fill="#009246"/><rect x="10" width="10" height="20" fill="white"/><rect x="20" width="10" height="20" fill="#CE2B37"/></svg>` },
   { value: 'ES', label: '西班牙', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="5" fill="#AA151B"/><rect y="5" width="30" height="10" fill="#F1BF00"/><rect y="15" width="30" height="5" fill="#AA151B"/></svg>` },
-  { value: 'Unknown', label: '未知市场', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="#E0E0E0"/><text x="15" y="14" font-size="12" text-anchor="middle" fill="#666">?</text></svg>` },
 ];
 
 // 获取国旗SVG（支持代码或名称查找）

@@ -2115,8 +2115,10 @@ onMounted(async () => {
         <el-form-item label="目标站点" required>
           <el-select v-model="createForm.marketplace" style="width: 100%;">
             <el-option v-for="country in COUNTRY_OPTIONS" :key="country.value" :label="country.label" :value="country.value">
-              <span v-html="country.flag" style="width: 20px; height: 14px; display: inline-block; margin-right: 8px; vertical-align: middle;"></span>
-              <span>{{ country.label }}</span>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="country-flag" v-html="country.flag"></span>
+                <span>{{ country.label }}</span>
+              </div>
             </el-option>
           </el-select>
         </el-form-item>
@@ -2165,6 +2167,23 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+/* 国旗样式 */
+.country-flag {
+  width: 24px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.country-flag :deep(svg) {
+  width: 100%;
+  height: 100%;
+}
+
 .smart-copy-container {
   height: 100%;
   padding: 24px;
