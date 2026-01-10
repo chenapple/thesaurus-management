@@ -65,6 +65,13 @@ COUNTRY_CONFIG = {
         "zipcode": "28001",
         "market_param": "__mk_es_ES=%C3%85M%C3%85%C5%BD%C3%95%C3%91",
         "currency": "EUR"
+    },
+    "JP": {
+        "base_url": "https://www.amazon.co.jp",
+        "language": "ja-JP",
+        "zipcode": "100-0001",
+        "market_param": "__mk_ja_JP=%E3%82%AB%E3%82%BF%E3%82%AB%E3%83%8A",
+        "currency": "JPY"
     }
 }
 
@@ -76,6 +83,7 @@ EXPECTED_ADDRESS_KEYWORDS = {
     'IT': ['Italia', 'Italy', 'Italien', '00100', 'Roma', 'Rom'],
     'ES': ['España', 'Spain', 'Spanien', '28001', 'Madrid'],
     'US': ['United States', 'USA', '10001', 'New York'],
+    'JP': ['Japan', '日本', '100-0001', 'Tokyo', '東京', '千代田区'],
 }
 
 
@@ -160,11 +168,62 @@ async def set_delivery_address(page, country: str, zipcode: str, max_retries: in
                 continue
 
             # 步骤4: 清空并输入邮编 (模拟人工输入)
-            await zip_input.click()
-            await zip_input.fill('')
-            await page.wait_for_timeout(300)
-            await zip_input.type(zipcode, delay=50)
-            print(f"[DEBUG] 已输入邮编: {zipcode}", file=sys.stderr)
+            # 日本站特殊处理：有两个邮编输入框（前3位和后4位）
+            if country == 'JP':
+                # 日本邮编格式: xxx-xxxx 或 xxxxxxx
+                zip_parts = zipcode.replace('-', '')
+                if len(zip_parts) == 7:
+                    zip_prefix = zip_parts[:3]  # 前3位
+                    zip_suffix = zip_parts[3:]  # 后4位
+                else:
+                    zip_prefix = zipcode
+                    zip_suffix = ''
+
+                # 查找日本站的两个邮编输入框
+                jp_zip_selectors = [
+                    ('#GLUXZipUpdateInput_0', '#GLUXZipUpdateInput_1'),
+                    ('input[id*="ZipUpdateInput_0"]', 'input[id*="ZipUpdateInput_1"]'),
+                    ('input[name="zipCode-0"]', 'input[name="zipCode-1"]'),
+                ]
+
+                jp_inputs_found = False
+                for prefix_sel, suffix_sel in jp_zip_selectors:
+                    try:
+                        prefix_input = page.locator(prefix_sel).first
+                        suffix_input = page.locator(suffix_sel).first
+                        if await prefix_input.is_visible(timeout=1000) and await suffix_input.is_visible(timeout=1000):
+                            # 输入前3位
+                            await prefix_input.click()
+                            await prefix_input.fill('')
+                            await prefix_input.type(zip_prefix, delay=50)
+                            print(f"[DEBUG] 已输入邮编前3位: {zip_prefix}", file=sys.stderr)
+
+                            # 输入后4位
+                            await suffix_input.click()
+                            await suffix_input.fill('')
+                            await suffix_input.type(zip_suffix, delay=50)
+                            print(f"[DEBUG] 已输入邮编后4位: {zip_suffix}", file=sys.stderr)
+
+                            jp_inputs_found = True
+                            break
+                    except:
+                        continue
+
+                # 如果没找到双输入框，尝试单输入框
+                if not jp_inputs_found:
+                    await zip_input.click()
+                    await zip_input.fill('')
+                    await page.wait_for_timeout(300)
+                    await zip_input.type(zipcode, delay=50)
+                    print(f"[DEBUG] 已输入邮编(单框): {zipcode}", file=sys.stderr)
+            else:
+                # 其他国家：单个输入框
+                await zip_input.click()
+                await zip_input.fill('')
+                await page.wait_for_timeout(300)
+                await zip_input.type(zipcode, delay=50)
+                print(f"[DEBUG] 已输入邮编: {zipcode}", file=sys.stderr)
+
             await page.wait_for_timeout(500)
 
             # 步骤5: 点击应用按钮

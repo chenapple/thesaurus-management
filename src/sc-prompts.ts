@@ -27,6 +27,12 @@ export function buildReviewInsightsPrompt(
 
   return `你是一位亚马逊产品分析专家。请分析以下竞品评论数据，提取有价值的用户洞察。
 
+## 重要：输出语言要求
+**无论评论是什么语言（英语、日语、德语等），你的分析结果必须全部使用中文输出。**
+- 使用场景、卖点、痛点的描述必须是中文
+- summary 总结必须是中文
+- 只有 example_review 字段保留评论原文
+
 ## 任务
 分析评论，提取以下信息：
 1. **使用场景** (5-10条): 买家实际使用产品的场景
@@ -85,6 +91,12 @@ ${comp.bullets ? JSON.parse(comp.bullets).map((b: string, j: number) => `${j + 1
   });
 
   return `你是一位亚马逊 Listing 优化专家。请分析以下竞品的文案结构。
+
+## 重要：输出语言要求
+**无论竞品文案是什么语言（英语、日语、德语等），你的分析结果必须全部使用中文输出。**
+- common_structure、common_themes、best_practices、patterns 等分析描述必须是中文
+- high_frequency_words、covered 等关键词字段保留原文（因为是用于 Listing 优化）
+- title、structure_breakdown 中的内容保留原文
 
 ## 任务
 分析竞品文案，提取以下信息：
@@ -202,6 +214,11 @@ ${myProductInfo.additional_notes ? `**补充说明**: ${myProductInfo.additional
     : '基于现有文案生成优化建议，保留品牌调性，重点优化关键词布局和卖点表达';
 
   return `你是一位资深亚马逊 Listing 优化专家，精通 A9 搜索算法、COSMO 场景算法和 Rufus AI 购物助手的工作原理。
+
+## 重要：输出语言要求
+- **文案内容**（title_suggestions.content、bullet_suggestions.content、description_suggestions.content、aplus_suggestions）：使用目标站点的语言（如日本站用日语，德国站用德语，美国站用英语）
+- **分析说明**（reasons、reason、source、structure、highlights 等解释性字段）：必须使用中文
+- **关键词**（embedded_keywords、backend_keywords.keyword）：保留原文
 
 ## 任务
 ${taskDescription}

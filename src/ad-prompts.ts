@@ -26,6 +26,11 @@ export function buildSearchTermAnalystPrompt(
 
   return `你是一位资深的亚马逊 PPC 搜索词分析师。
 
+## 重要：输出语言要求
+**无论搜索词是什么语言（英语、日语、德语等），你的分析结果必须全部使用中文输出。**
+- reason、suggestion、insights 等说明性字段必须是中文
+- search_term 保留原文
+
 ## 任务
 分析以下搜索词数据，识别需要否定的无效词和高潜力词。${countryInfo}
 
@@ -127,6 +132,11 @@ export function buildAcosExpertPrompt(
   const noSalesTerms = searchTerms.filter(t => t.spend > 0 && t.sales === 0);
 
   return `你是一位亚马逊广告 ACOS 优化专家。
+
+## 重要：输出语言要求
+**无论搜索词是什么语言（英语、日语、德语等），你的分析结果必须全部使用中文输出。**
+- issue、suggestion、insights 等说明性字段必须是中文
+- search_term、targeting 保留原文
 
 ## 任务
 分析广告效率，识别 ACOS 异常的投放词，并提供优化建议。${countryInfo}
@@ -274,6 +284,11 @@ export function buildBidStrategistPrompt(
 
   return `你是一位亚马逊广告竞价策略专家。
 
+## 重要：输出语言要求
+**无论搜索词是什么语言（英语、日语、德语等），你的分析结果必须全部使用中文输出。**
+- reason、insights 等说明性字段必须是中文
+- targeting、campaign_name 保留原文
+
 ## 任务
 基于搜索词表现数据，生成具体的竞价调整建议。${countryInfo}
 
@@ -359,6 +374,11 @@ export function buildSuggestionIntegratorPrompt(
   const countryInfo = country ? ` (${country} - ${currency?.code || 'USD'})` : '';
 
   return `你是广告优化建议整合专家。
+
+## 重要：输出语言要求
+**无论搜索词是什么语言（英语、日语、德语等），你的分析结果必须全部使用中文输出。**
+- reason、suggestion、key_insights、executive_summary 等说明性字段必须是中文
+- search_term、targeting、campaign_name 保留原文
 
 ## 任务
 整合三位专家的分析结果，生成最终的优化建议报告。${countryInfo}

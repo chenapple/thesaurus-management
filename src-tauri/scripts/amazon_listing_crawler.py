@@ -163,11 +163,62 @@ async def set_delivery_address(page, country: str, zipcode: str, max_retries: in
                 continue
 
             # 步骤3: 输入邮编
-            await zip_input.click()
-            await zip_input.fill('')
-            await page.wait_for_timeout(300)
-            await zip_input.type(zipcode, delay=50)
-            print(f"[DEBUG] 已输入邮编: {zipcode}", file=sys.stderr)
+            # 日本站特殊处理：有两个邮编输入框（前3位和后4位）
+            if country == 'JP':
+                # 日本邮编格式: xxx-xxxx 或 xxxxxxx
+                zip_parts = zipcode.replace('-', '')
+                if len(zip_parts) == 7:
+                    zip_prefix = zip_parts[:3]  # 前3位
+                    zip_suffix = zip_parts[3:]  # 后4位
+                else:
+                    zip_prefix = zipcode
+                    zip_suffix = ''
+
+                # 查找日本站的两个邮编输入框
+                jp_zip_selectors = [
+                    ('#GLUXZipUpdateInput_0', '#GLUXZipUpdateInput_1'),
+                    ('input[id*="ZipUpdateInput_0"]', 'input[id*="ZipUpdateInput_1"]'),
+                    ('input[name="zipCode-0"]', 'input[name="zipCode-1"]'),
+                ]
+
+                jp_inputs_found = False
+                for prefix_sel, suffix_sel in jp_zip_selectors:
+                    try:
+                        prefix_input = page.locator(prefix_sel).first
+                        suffix_input = page.locator(suffix_sel).first
+                        if await prefix_input.is_visible(timeout=1000) and await suffix_input.is_visible(timeout=1000):
+                            # 输入前3位
+                            await prefix_input.click()
+                            await prefix_input.fill('')
+                            await prefix_input.type(zip_prefix, delay=50)
+                            print(f"[DEBUG] 已输入邮编前3位: {zip_prefix}", file=sys.stderr)
+
+                            # 输入后4位
+                            await suffix_input.click()
+                            await suffix_input.fill('')
+                            await suffix_input.type(zip_suffix, delay=50)
+                            print(f"[DEBUG] 已输入邮编后4位: {zip_suffix}", file=sys.stderr)
+
+                            jp_inputs_found = True
+                            break
+                    except:
+                        continue
+
+                # 如果没找到双输入框，尝试单输入框
+                if not jp_inputs_found:
+                    await zip_input.click()
+                    await zip_input.fill('')
+                    await page.wait_for_timeout(300)
+                    await zip_input.type(zipcode, delay=50)
+                    print(f"[DEBUG] 已输入邮编(单框): {zipcode}", file=sys.stderr)
+            else:
+                # 其他国家：单个输入框
+                await zip_input.click()
+                await zip_input.fill('')
+                await page.wait_for_timeout(300)
+                await zip_input.type(zipcode, delay=50)
+                print(f"[DEBUG] 已输入邮编: {zipcode}", file=sys.stderr)
+
             await page.wait_for_timeout(500)
 
             # 步骤4: 点击应用按钮
@@ -760,6 +811,7 @@ async def fetch_listing_info(asin: str, country: str, headless="new") -> dict:
                 # 德语: "Nr. 7 in Elektrische Nagelfeilen"
                 # 意大利语: "n. 7 in Lime elettriche per unghie"
                 # 西班牙语: "nº 7 en Limas de uñas eléctricas"
+                # 日语: "ビューティー - 116,737位" 或 "ヘアカーリングワンド - 11位"
                 bsr_with_category_patterns = [
                     # 法语: 数字 en 类目
                     r'(\d[\d.,]*)\s+en\s+([A-ZÀ-Úa-zà-ú][^\n\(#]{3,80})',
@@ -775,9 +827,29 @@ async def fetch_listing_info(asin: str, country: str, headless="new") -> dict:
                     r'[nN][º°]?\s*(\d[\d.,]*)\s+en\s+([A-Za-zÀ-ú][^\n\(#]{3,80})',
                 ]
 
-                def extract_bsr_with_category(text):
+                # 日本站特殊处理：格式为 "类目 - 数字位"
+                # 注意：类目名可以包含长音符号 ー，分隔符是空格包围的短横线 " - "
+                jp_bsr_pattern = r'([ぁ-んァ-ヶー一-龥a-zA-Z&]+)\s+[-‐−]\s+(\d[\d,]*)\s*位'
+
+                def extract_bsr_with_category(text, is_japan=False):
                     """从文本中提取所有 BSR 排名及其类目，返回排名最小的那个"""
                     all_bsr = []
+
+                    # 日本站特殊处理：格式为 "类目 - 数字位"
+                    if is_japan:
+                        jp_matches = re.findall(jp_bsr_pattern, text)
+                        for category, rank_str in jp_matches:
+                            num_str = re.sub(r'[\s,]', '', rank_str)
+                            if num_str.isdigit():
+                                category = category.strip()
+                                # 清理日本站的类目名称，移除末尾的"の売れ筋ランキングを見る"等
+                                category = re.sub(r'\s*[（\(].*[）\)].*$', '', category)
+                                category = category.strip()
+                                print(f"[DEBUG] BSR 匹配(JP): rank={num_str}, 类目='{category}'", file=sys.stderr)
+                                if len(category) >= 2:
+                                    all_bsr.append((int(num_str), category))
+
+                    # 其他国家的处理
                     for pattern in bsr_with_category_patterns:
                         matches = re.findall(pattern, text, re.IGNORECASE | re.MULTILINE)
                         for rank_str, category in matches:
@@ -820,12 +892,13 @@ async def fetch_listing_info(asin: str, country: str, headless="new") -> dict:
                     '#prodDetails',
                     '#detailBullets_feature_div',
                 ]
+                is_japan = country == 'JP'
                 for selector in bsr_id_selectors:
                     try:
                         detail_elem = page.locator(selector).first
                         if await detail_elem.count() > 0:
                             detail_text = await detail_elem.inner_text()
-                            bsr_info = extract_bsr_with_category(detail_text)
+                            bsr_info = extract_bsr_with_category(detail_text, is_japan=is_japan)
                             if bsr_info:
                                 rank, category = bsr_info
                                 result['bsr_rank'] = f"#{rank} in {category}"
@@ -844,7 +917,7 @@ async def fetch_listing_info(asin: str, country: str, headless="new") -> dict:
                         for i in range(table_count):
                             table = tables.nth(i)
                             table_text = await table.inner_text()
-                            bsr_info = extract_bsr_with_category(table_text)
+                            bsr_info = extract_bsr_with_category(table_text, is_japan=is_japan)
                             if bsr_info:
                                 rank, category = bsr_info
                                 result['bsr_rank'] = f"#{rank} in {category}"
@@ -856,7 +929,7 @@ async def fetch_listing_info(asin: str, country: str, headless="new") -> dict:
                 # 方法3: 如果上面没找到，尝试从整个页面搜索
                 if not result['bsr_rank']:
                     page_content = await page.content()
-                    bsr_info = extract_bsr_with_category(page_content)
+                    bsr_info = extract_bsr_with_category(page_content, is_japan=is_japan)
                     if bsr_info:
                         rank, category = bsr_info
                         result['bsr_rank'] = f"#{rank} in {category}"
@@ -1242,8 +1315,26 @@ async def fetch_listings_batch(items: list, headless="new") -> list:
                             r'[nN][º°]?\s*(\d[\d.,]*)\s+en\s+([A-Za-zÀ-ú][^\n\(#]{3,80})',
                         ]
 
+                        # 日本站特殊处理：格式为 "类目 - 数字位"
+                        # 注意：类目名可以包含长音符号 ー，分隔符是空格包围的短横线 " - "
+                        jp_bsr_pattern = r'([ぁ-んァ-ヶー一-龥a-zA-Z&]+)\s+[-‐−]\s+(\d[\d,]*)\s*位'
+                        is_japan = country == 'JP'
+
                         def extract_bsr_batch(text):
                             all_bsr = []
+
+                            # 日本站特殊处理
+                            if is_japan:
+                                jp_matches = re.findall(jp_bsr_pattern, text)
+                                for category, rank_str in jp_matches:
+                                    num_str = re.sub(r'[\s,]', '', rank_str)
+                                    if num_str.isdigit():
+                                        category = category.strip()
+                                        category = re.sub(r'\s*[（\(].*[）\)].*$', '', category)
+                                        category = category.strip()
+                                        if len(category) >= 2:
+                                            all_bsr.append((int(num_str), category))
+
                             for pattern in bsr_with_category_patterns:
                                 matches = re.findall(pattern, text, re.IGNORECASE | re.MULTILINE)
                                 for rank_str, category in matches:

@@ -63,7 +63,7 @@
           <br>
           示例：<code>wireless mouse,B09X1234AB,US,high</code>
           <br>
-          站点可选: US, UK, DE, FR, IT, ES；优先级可选: high, medium, low
+          站点可选: US, UK, DE, FR, IT, ES, JP；优先级可选: high, medium, low
         </div>
         <el-input
           v-model="batchText"

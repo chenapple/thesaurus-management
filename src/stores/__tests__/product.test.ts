@@ -26,8 +26,8 @@ describe('Product Store', () => {
   });
 
   describe('countryOptions', () => {
-    it('应该包含 6 个国家选项', () => {
-      expect(countryOptions.length).toBe(6);
+    it('应该包含 7 个国家选项', () => {
+      expect(countryOptions.length).toBe(7);
     });
 
     it('每个国家应该有 code, name, flag', () => {
@@ -39,7 +39,7 @@ describe('Product Store', () => {
       }
     });
 
-    it('应该包含 US, UK, DE, FR, IT, ES', () => {
+    it('应该包含 US, UK, DE, FR, IT, ES, JP', () => {
       const codes = countryOptions.map(c => c.code);
       expect(codes).toContain('US');
       expect(codes).toContain('UK');
@@ -47,6 +47,7 @@ describe('Product Store', () => {
       expect(codes).toContain('FR');
       expect(codes).toContain('IT');
       expect(codes).toContain('ES');
+      expect(codes).toContain('JP');
     });
   });
 
@@ -58,6 +59,7 @@ describe('Product Store', () => {
       expect(amazonDomains.FR).toBe('www.amazon.fr');
       expect(amazonDomains.IT).toBe('www.amazon.it');
       expect(amazonDomains.ES).toBe('www.amazon.es');
+      expect(amazonDomains.JP).toBe('www.amazon.co.jp');
     });
   });
 

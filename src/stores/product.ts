@@ -11,6 +11,7 @@ export const countryOptions = [
   { code: "FR", name: "法国", flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="10" height="20" fill="#002395"/><rect x="10" width="10" height="20" fill="white"/><rect x="20" width="10" height="20" fill="#ED2939"/></svg>` },
   { code: "IT", name: "意大利", flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="10" height="20" fill="#009246"/><rect x="10" width="10" height="20" fill="white"/><rect x="20" width="10" height="20" fill="#CE2B37"/></svg>` },
   { code: "ES", name: "西班牙", flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="5" fill="#AA151B"/><rect y="5" width="30" height="10" fill="#F1BF00"/><rect y="15" width="30" height="5" fill="#AA151B"/></svg>` },
+  { code: "JP", name: "日本", flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="white"/><circle cx="15" cy="10" r="6" fill="#BC002D"/></svg>` },
 ];
 
 // Amazon 域名映射
@@ -21,6 +22,7 @@ export const amazonDomains: Record<string, string> = {
   FR: "www.amazon.fr",
   IT: "www.amazon.it",
   ES: "www.amazon.es",
+  JP: "www.amazon.co.jp",
 };
 
 export const useProductStore = defineStore("product", () => {

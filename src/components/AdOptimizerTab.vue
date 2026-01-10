@@ -412,6 +412,14 @@ async function enterProject(project: AdProject) {
   currentProject.value = project;
   viewMode.value = 'detail';
 
+  // 重置分析相关状态（防止显示上一个项目的数据）
+  analysisResult.value = null;
+  completedResults.value = [];
+  searchTerms.value = [];
+  failedCountries.value = [];
+  analysisSession.value = null;
+  stats.value = { total_spend: 0, total_sales: 0, avg_acos: 0, count: 0, by_country: [] };
+
   // 加载项目数据统计
   await loadProjectStats();
 

@@ -66,6 +66,13 @@ COUNTRY_CONFIG = {
         "zipcode": "28001",
         "market_param": "__mk_es_ES=%C3%85M%C3%85%C5%BD%C3%95%C3%91",
         "currency": "EUR"
+    },
+    "JP": {
+        "base_url": "https://www.amazon.co.jp",
+        "language": "ja-JP",
+        "zipcode": "100-0001",
+        "market_param": "__mk_ja_JP=%E3%82%AB%E3%82%BF%E3%82%AB%E3%83%8A",
+        "currency": "JPY"
     }
 }
 
