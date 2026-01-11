@@ -80,6 +80,9 @@
             <el-icon><Search /></el-icon>
           </template>
         </el-input>
+        <el-button circle size="small" class="help-btn" @click="emit('showHelp', 'monitoring')" title="查看帮助">
+          <el-icon><QuestionFilled /></el-icon>
+        </el-button>
       </div>
     </div>
 
@@ -843,7 +846,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Search, ArrowDown } from '@element-plus/icons-vue';
+import { Search, ArrowDown, QuestionFilled } from '@element-plus/icons-vue';
 import { listen } from '@tauri-apps/api/event';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -873,6 +876,10 @@ import { getOptimizationEvents, deleteOptimizationEvent } from '../api';
 
 const props = defineProps<{
   productId: number;
+}>();
+
+const emit = defineEmits<{
+  (e: 'showHelp', tab: string): void;
 }>();
 
 // 视图模式: flat(平铺列表), product(按产品分组), keyword(按关键词分组)
@@ -1755,6 +1762,22 @@ onUnmounted(() => {
 .toolbar-left {
   display: flex;
   gap: 8px;
+}
+
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.help-btn {
+  color: var(--el-text-color-secondary);
+  border-color: var(--el-border-color-light);
+}
+
+.help-btn:hover {
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary-light-5);
 }
 
 /* 进度条样式 */

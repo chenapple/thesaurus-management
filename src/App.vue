@@ -177,6 +177,39 @@ const showApiKeyDialog = ref(false);
 // 帮助弹窗
 const showHelpDialog = ref(false);
 const activeHelpTab = ref('dashboard');
+const helpSearchQuery = ref('');
+
+// 帮助内容定义（用于搜索）
+const helpSections = [
+  { id: 'dashboard', title: '数据概览', icon: 'DataAnalysis', keywords: ['首页', '数据', '统计', '关键词', '监控', '排名变化', '待办'] },
+  { id: 'keywords', title: '词库管理', icon: 'Collection', keywords: ['关键词', '导入', '分类', '词根', '流量', '搜索量', 'AI', '西柚', '卖家精灵'] },
+  { id: 'monitoring', title: '排名监控', icon: 'TrendCharts', keywords: ['排名', '监控', '追踪', '变化', '调度', '定时', '通知'] },
+  { id: 'smartcopy', title: '智能文案', icon: 'EditPen', keywords: ['文案', '标题', '五点', 'listing', 'AI', '竞品', '分析', '新品', '老品'] },
+  { id: 'ads', title: '智能广告', icon: 'Promotion', keywords: ['广告', 'ACOS', 'CPC', '否词', '优化', '预算', '投放'] },
+  { id: 'knowledge', title: '知识库', icon: 'FolderOpened', keywords: ['知识', '文档', 'AI问答', '向量', '搜索', 'RAG'] },
+];
+
+// 搜索过滤后的菜单项
+const filteredHelpSections = computed(() => {
+  const query = helpSearchQuery.value.toLowerCase().trim();
+  if (!query) return helpSections;
+  return helpSections.filter(section =>
+    section.title.toLowerCase().includes(query) ||
+    section.keywords.some(k => k.toLowerCase().includes(query))
+  );
+});
+
+// 是否显示搜索结果
+const isSearchingHelp = computed(() => helpSearchQuery.value.trim().length > 0);
+
+// 打开帮助并跳转到指定模块
+function openHelp(tab?: string) {
+  if (tab) {
+    activeHelpTab.value = tab;
+  }
+  helpSearchQuery.value = ''; // 打开时清空搜索
+  showHelpDialog.value = true;
+}
 
 // 首次启动配置向导
 const showSetupWizard = ref(false);
@@ -1734,6 +1767,13 @@ function handleKeyboard(e: KeyboardEvent) {
     return;
   }
 
+  // Ctrl/Cmd + H: 显示帮助中心
+  if (isMod && e.key === "h") {
+    e.preventDefault();
+    openHelp(viewMode.value);
+    return;
+  }
+
   // ? 或 Ctrl/Cmd + /: 显示快捷键帮助
   if (e.key === "?" || (isMod && e.key === "/")) {
     e.preventDefault();
@@ -2274,6 +2314,16 @@ onUnmounted(() => {
             <el-icon><Setting /></el-icon>
             列配置
           </el-button>
+          <el-button
+            v-if="viewMode === 'keywords' || viewMode === 'roots'"
+            circle
+            size="small"
+            class="help-btn"
+            @click="openHelp('keywords')"
+            title="查看帮助"
+          >
+            <el-icon><QuestionFilled /></el-icon>
+          </el-button>
         </div>
       </header>
 
@@ -2576,6 +2626,7 @@ onUnmounted(() => {
       <KeywordMonitoringTab
         v-if="selectedProduct && viewMode === 'monitoring'"
         :product-id="selectedProduct.id"
+        @show-help="openHelp"
       />
 
       <!-- 智能文案视图 - 使用 keep-alive 保持状态 -->
@@ -2583,6 +2634,7 @@ onUnmounted(() => {
         <SmartCopyTab
           v-if="viewMode === 'smartcopy'"
           class="smart-copy-view"
+          @show-help="openHelp"
         />
       </keep-alive>
 
@@ -2591,6 +2643,7 @@ onUnmounted(() => {
         <KnowledgeBaseTab
           v-if="viewMode === 'knowledge'"
           class="knowledge-base-view"
+          @show-help="openHelp"
         />
       </keep-alive>
 
@@ -2599,6 +2652,7 @@ onUnmounted(() => {
         <AdOptimizerTab
           v-if="viewMode === 'ads'"
           class="ad-optimizer-view"
+          @show-help="openHelp"
         />
       </keep-alive>
 
@@ -2608,6 +2662,7 @@ onUnmounted(() => {
         :selected-product="selectedProduct"
         class="dashboard-view"
         @switch-view="switchViewMode"
+        @show-help="openHelp"
       />
 
       <!-- 词根表格 -->
@@ -2821,12 +2876,58 @@ onUnmounted(() => {
     <!-- 帮助弹窗 -->
     <el-dialog
       v-model="showHelpDialog"
-      title="使用帮助"
-      width="700px"
+      title="帮助中心"
+      width="950px"
       class="help-dialog"
     >
-      <el-tabs v-model="activeHelpTab">
-        <el-tab-pane label="首页" name="dashboard">
+      <div class="help-layout">
+        <!-- 左侧导航 -->
+        <div class="help-nav">
+          <el-input
+            v-model="helpSearchQuery"
+            placeholder="搜索帮助..."
+            clearable
+            class="help-search"
+          >
+            <template #prefix>
+              <el-icon><Search /></el-icon>
+            </template>
+          </el-input>
+          <el-menu
+            :default-active="activeHelpTab"
+            @select="(key: string) => activeHelpTab = key"
+            class="help-menu"
+          >
+            <el-menu-item
+              v-for="section in filteredHelpSections"
+              :key="section.id"
+              :index="section.id"
+            >
+              <el-icon>
+                <DataAnalysis v-if="section.icon === 'DataAnalysis'" />
+                <Collection v-else-if="section.icon === 'Collection'" />
+                <TrendCharts v-else-if="section.icon === 'TrendCharts'" />
+                <EditPen v-else-if="section.icon === 'EditPen'" />
+                <Promotion v-else-if="section.icon === 'Promotion'" />
+                <FolderOpened v-else-if="section.icon === 'FolderOpened'" />
+              </el-icon>
+              <span>{{ section.title }}</span>
+            </el-menu-item>
+            <!-- 无搜索结果提示 -->
+            <div v-if="filteredHelpSections.length === 0 && isSearchingHelp" class="help-no-result">
+              <el-icon><Search /></el-icon>
+              <span>未找到相关帮助</span>
+            </div>
+          </el-menu>
+          <div class="help-shortcut-hint">
+            <kbd>⌘</kbd> + <kbd>H</kbd> 快速打开
+          </div>
+        </div>
+
+        <!-- 右侧内容 -->
+        <div class="help-content-area">
+          <!-- 首页帮助 -->
+          <div v-show="activeHelpTab === 'dashboard'">
           <div class="help-content">
             <h4>功能说明</h4>
             <p>首页是数据总览面板，展示所有产品的关键指标汇总。</p>
@@ -2842,9 +2943,10 @@ onUnmounted(() => {
               <li>关注排名变化榜，及时发现异常波动</li>
             </ul>
           </div>
-        </el-tab-pane>
+          </div>
 
-        <el-tab-pane label="关键词" name="keywords">
+          <!-- 关键词帮助 -->
+          <div v-show="activeHelpTab === 'keywords'">
           <div class="help-content">
             <h4>功能说明</h4>
             <p>管理和分析亚马逊关键词数据，支持导入第三方工具数据、AI智能分类、流量分级等功能，帮助运营建立完整的关键词词库。</p>
@@ -3079,9 +3181,10 @@ onUnmounted(() => {
               <li>建议定期更新关键词数据，保持词库时效性</li>
             </ul>
           </div>
-        </el-tab-pane>
+          </div>
 
-        <el-tab-pane label="排名监控" name="monitoring">
+          <!-- 排名监控帮助 -->
+          <div v-show="activeHelpTab === 'monitoring'">
           <div class="help-content">
             <h4>功能说明</h4>
             <p>实时监控关键词在亚马逊搜索结果中的自然排名和广告排名变化，帮助运营及时发现排名波动并追踪优化效果。</p>
@@ -3275,9 +3378,10 @@ onUnmounted(() => {
               <li>检测失败时检查网络连接，或尝试减少检测页数</li>
             </ul>
           </div>
-        </el-tab-pane>
+          </div>
 
-        <el-tab-pane label="智能文案" name="smartcopy">
+          <!-- 智能文案帮助 -->
+          <div v-show="activeHelpTab === 'smartcopy'">
           <div class="help-content">
             <h4>功能说明</h4>
             <p>基于AI分析竞品数据，生成符合 A9、COSMO、Rufus 算法的优质 Listing 文案建议。</p>
@@ -3396,9 +3500,10 @@ onUnmounted(() => {
               <li>建议关联产品关键词，以便 AI 选择高搜索量词</li>
             </ul>
           </div>
-        </el-tab-pane>
+          </div>
 
-        <el-tab-pane label="智能广告" name="ads">
+          <!-- 智能广告帮助 -->
+          <div v-show="activeHelpTab === 'ads'">
           <div class="help-content">
             <h4>功能说明</h4>
             <p>基于AI多智能体架构分析亚马逊广告搜索词报告，提供优化建议。</p>
@@ -3563,9 +3668,10 @@ onUnmounted(() => {
               <li>分析过程中请勿关闭页面，否则需要重新开始</li>
             </ul>
           </div>
-        </el-tab-pane>
+          </div>
 
-        <el-tab-pane label="知识库" name="knowledge">
+          <!-- 知识库帮助 -->
+          <div v-show="activeHelpTab === 'knowledge'">
           <div class="help-content">
             <h4>功能说明</h4>
             <p>上传产品相关文档，构建企业专属知识库。通过向量检索 + 关键词搜索的混合检索技术，实现基于文档内容的精准 AI 问答。</p>
@@ -3702,8 +3808,10 @@ onUnmounted(() => {
               <li><strong>对话上下文：</strong>保留最近 15 轮对话作为上下文，长对话建议新建会话</li>
             </ul>
           </div>
-        </el-tab-pane>
-      </el-tabs>
+          </div>
+
+        </div><!-- .help-content-area -->
+      </div><!-- .help-layout -->
     </el-dialog>
 
     <!-- 首次启动配置向导 -->
@@ -3912,7 +4020,80 @@ h1, h2, h3, h4, h5, h6,
   right: 20px;
 }
 
-/* 帮助对话框 */
+/* 帮助对话框 - 左右分栏布局 */
+.help-dialog .el-dialog__body {
+  padding: 0 !important;
+}
+
+.help-layout {
+  display: flex;
+  height: 520px;
+}
+
+.help-nav {
+  width: 200px;
+  border-right: 1px solid var(--el-border-color-light);
+  display: flex;
+  flex-direction: column;
+  background: var(--el-bg-color-page);
+}
+
+.help-search {
+  margin: 12px;
+}
+
+.help-menu {
+  flex: 1;
+  border-right: none !important;
+}
+
+.help-menu .el-menu-item {
+  height: 44px;
+  line-height: 44px;
+}
+
+.help-menu .el-menu-item.is-active {
+  background: var(--el-color-primary-light-9);
+}
+
+.help-shortcut-hint {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  text-align: center;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.help-shortcut-hint kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  background: var(--el-fill-color);
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.help-no-result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 12px;
+  color: var(--el-text-color-placeholder);
+  font-size: 13px;
+}
+
+.help-no-result .el-icon {
+  font-size: 24px;
+}
+
+.help-content-area {
+  flex: 1;
+  padding: 20px 24px;
+  overflow-y: auto;
+}
+
 .help-dialog .help-content {
   line-height: 1.8;
   color: var(--el-text-color-regular);
@@ -4357,6 +4538,16 @@ h1, h2, h3, h4, h5, h6,
   align-items: center;
   gap: 8px;
   margin-left: auto;
+}
+
+.header-actions .help-btn {
+  color: var(--el-text-color-secondary);
+  border-color: var(--el-border-color-light);
+}
+
+.header-actions .help-btn:hover {
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary-light-5);
 }
 
 .table-container {

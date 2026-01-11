@@ -4,10 +4,15 @@
     <div v-if="viewMode === 'list'" class="project-list-view">
       <div class="list-header">
         <h2>智能广告分析</h2>
-        <el-button type="primary" @click="showCreateDialog = true">
-          <el-icon><Plus /></el-icon>
-          新建项目
-        </el-button>
+        <div class="header-actions">
+          <el-button circle size="small" class="help-btn" @click="emit('showHelp', 'ads')" title="查看帮助">
+            <el-icon><QuestionFilled /></el-icon>
+          </el-button>
+          <el-button type="primary" @click="showCreateDialog = true">
+            <el-icon><Plus /></el-icon>
+            新建项目
+          </el-button>
+        </div>
       </div>
 
       <!-- 项目管理工具栏（有项目时显示） -->
@@ -248,7 +253,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, MoreFilled, ArrowLeft, Search } from '@element-plus/icons-vue';
+import { Plus, MoreFilled, ArrowLeft, Search, QuestionFilled } from '@element-plus/icons-vue';
 import type { AdProject, AdSearchTerm, AdAnalysisResult, AIProvider, SearchTermsStatsResult } from '../types';
 import { AI_PROVIDERS, COUNTRY_CURRENCY_MAP, getCountryLabel } from '../types';
 import type { AnalysisSession } from '../ad-prompts';
@@ -269,6 +274,11 @@ import AdDataImport from './ad-optimizer/AdDataImport.vue';
 import AdAnalysisCanvas from './ad-optimizer/AdAnalysisCanvas.vue';
 import AdAnalysisResults from './ad-optimizer/AdAnalysisResults.vue';
 import AdCountryCard from './ad-optimizer/AdCountryCard.vue';
+
+// Emits
+const emit = defineEmits<{
+  (e: 'showHelp', tab: string): void;
+}>();
 
 // 视图模式
 const viewMode = ref<'list' | 'detail'>('list');
@@ -741,6 +751,22 @@ onMounted(() => {
   margin: 0;
   font-size: 20px;
   font-weight: 600;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.help-btn {
+  color: var(--el-text-color-secondary);
+  border-color: var(--el-border-color-light);
+}
+
+.help-btn:hover {
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary-light-5);
 }
 
 .project-toolbar {

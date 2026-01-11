@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
-import { Plus, Delete, Back, Refresh, ArrowRight, CopyDocument, DataLine, Select, Search, MoreFilled } from '@element-plus/icons-vue';
+import { Plus, Delete, Back, Refresh, ArrowRight, CopyDocument, DataLine, Select, Search, MoreFilled, QuestionFilled } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   scGetProjects, scCreateProject, scDeleteProject, scGetProject, scUpdateProject,
@@ -29,6 +29,11 @@ import iconRocket from '../assets/icons/rocket_3d.png';
 import iconChart from '../assets/icons/chart_3d.png';
 import AnalysisCanvas from './analysis/AnalysisCanvas.vue';
 import type { AnalysisStatus } from './analysis/AnalysisCanvas.vue';
+
+// Emits
+const emit = defineEmits<{
+  (e: 'showHelp', tab: string): void;
+}>();
 
 // ==================== 视图状态 ====================
 const viewMode = ref<'list' | 'detail'>('list');
@@ -1374,8 +1379,13 @@ onMounted(async () => {
     <!-- ==================== 项目列表视图 ==================== -->
     <template v-if="viewMode === 'list'">
       <div class="smart-copy-header">
-        <h2>智能文案</h2>
-        <p class="subtitle">基于竞品分析，打造符合 A9、COSMO、Rufus 算法的优质 Listing</p>
+        <div class="header-content">
+          <h2>智能文案</h2>
+          <p class="subtitle">基于竞品分析，打造符合 A9、COSMO、Rufus 算法的优质 Listing</p>
+        </div>
+        <el-button circle size="small" class="help-btn" @click="emit('showHelp', 'smartcopy')" title="查看帮助">
+          <el-icon><QuestionFilled /></el-icon>
+        </el-button>
       </div>
 
       <!-- 场景选择 -->
@@ -2335,6 +2345,22 @@ onMounted(async () => {
 
 .smart-copy-header, .detail-header {
   margin-bottom: 24px;
+}
+
+.smart-copy-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.smart-copy-header .help-btn {
+  color: var(--el-text-color-secondary);
+  border-color: var(--el-border-color-light);
+}
+
+.smart-copy-header .help-btn:hover {
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary-light-5);
 }
 
 .smart-copy-header h2, .detail-title h2 {

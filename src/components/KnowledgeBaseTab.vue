@@ -11,6 +11,12 @@ import type { ChatMessage } from '../ai-service';
 import type { KbDocument, KbConversation, KbMessage, KbSearchResult, KbChunk, AIProvider, DependencyStatus, InstallProgress } from '../types';
 import { AI_PROVIDERS } from '../types';
 import { marked } from 'marked';
+import { QuestionFilled } from '@element-plus/icons-vue';
+
+// Emits
+const emit = defineEmits<{
+  (e: 'showHelp', tab: string): void;
+}>();
 
 // ==================== 状态 ====================
 
@@ -1537,6 +1543,9 @@ onMounted(async () => {
             知识库
           </el-button>
         </el-button-group>
+        <el-button circle size="small" class="help-btn" @click="emit('showHelp', 'knowledge')" title="查看帮助">
+          <el-icon><QuestionFilled /></el-icon>
+        </el-button>
       </div>
 
       <!-- 对话列表 -->
@@ -2236,12 +2245,25 @@ onMounted(async () => {
 }
 
 .sidebar-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 12px;
   border-bottom: 1px solid var(--el-border-color);
 }
 
 .section-toggle {
-  width: 100%;
+  flex: 1;
+}
+
+.sidebar-tabs .help-btn {
+  color: var(--el-text-color-secondary);
+  border-color: var(--el-border-color-light);
+}
+
+.sidebar-tabs .help-btn:hover {
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary-light-5);
 }
 
 .section-toggle .el-button {

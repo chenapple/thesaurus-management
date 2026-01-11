@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue';
-import { TrendCharts, Document, Monitor, Folder, Top, Bottom, Timer } from '@element-plus/icons-vue';
+import { TrendCharts, Document, Monitor, Folder, Top, Bottom, Timer, QuestionFilled } from '@element-plus/icons-vue';
 import * as api from '../api';
 import type { MonitoringStats, TrafficLevelStats, OptimizationEvent, Product, SchedulerSettings, SchedulerStatus } from '../types';
 
@@ -15,6 +15,7 @@ type ViewMode = 'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' 
 // Emits
 const emit = defineEmits<{
   (e: 'switchView', view: ViewMode): void;
+  (e: 'showHelp', tab: string): void;
 }>();
 
 // 加载状态
@@ -361,6 +362,9 @@ function formatDateTime(dateStr: string | null): string {
           <span class="product-badge" v-if="selectedProduct">{{ selectedProduct.name }}</span>
         </div>
         <div class="header-right">
+          <el-button circle size="small" class="help-btn" @click="emit('showHelp', 'dashboard')" title="查看帮助">
+            <el-icon><QuestionFilled /></el-icon>
+          </el-button>
           <span class="current-date">{{ new Date().toLocaleDateString('zh-CN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) }}</span>
         </div>
       </div>
@@ -663,6 +667,22 @@ function formatDateTime(dateStr: string | null): string {
   color: var(--el-text-color-secondary);
   font-size: 14px;
   font-weight: 500;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.help-btn {
+  color: var(--el-text-color-secondary);
+  border-color: var(--el-border-color-light);
+}
+
+.help-btn:hover {
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary-light-5);
 }
 
 /* Card Utility - Glassmorphism */
