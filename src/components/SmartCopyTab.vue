@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
-import { Plus, Delete, Right, Back, Refresh, ArrowRight, CopyDocument, DataLine, Select } from '@element-plus/icons-vue';
+import { Plus, Delete, Back, Refresh, ArrowRight, CopyDocument, DataLine, Select, Search, MoreFilled } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
-  scGetProjects, scCreateProject, scDeleteProject, scGetProject,
+  scGetProjects, scCreateProject, scDeleteProject, scGetProject, scUpdateProject,
   scAddCompetitor, scGetCompetitors, scDeleteCompetitor, scUpdateCompetitorType,
   scFetchCompetitorListing, scFetchCompetitorsBatch, scFetchCompetitorReviews, scGetReviewsSummary,
   getProducts, getKeywordDataStats,
@@ -39,8 +39,40 @@ const scenarioType = ref<'new' | 'optimize'>('new');
 const projects = ref<ScProject[]>([]);
 const loading = ref(false);
 
+// 搜索和排序
+const projectSearch = ref('');
+const projectSort = ref<'updated' | 'created' | 'name_asc' | 'name_desc'>('updated');
+
 const filteredProjects = computed(() => {
-  return projects.value.filter(p => p.scenario_type === scenarioType.value);
+  let result = projects.value.filter(p => p.scenario_type === scenarioType.value);
+
+  // 搜索过滤
+  if (projectSearch.value.trim()) {
+    const search = projectSearch.value.toLowerCase().trim();
+    result = result.filter(p =>
+      p.name.toLowerCase().includes(search) ||
+      (p.my_asin && p.my_asin.toLowerCase().includes(search))
+    );
+  }
+
+  // 排序
+  switch (projectSort.value) {
+    case 'name_asc':
+      result.sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+      break;
+    case 'name_desc':
+      result.sort((a, b) => b.name.localeCompare(a.name, 'zh'));
+      break;
+    case 'created':
+      result.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      break;
+    case 'updated':
+    default:
+      result.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+      break;
+  }
+
+  return result;
 });
 
 async function loadProjects() {
@@ -122,6 +154,61 @@ async function handleDeleteProject(project: ScProject) {
       console.error('删除项目失败:', error);
       ElMessage.error('删除项目失败');
     }
+  }
+}
+
+// 编辑项目
+const showEditDialog = ref(false);
+const editingProject = ref<ScProject | null>(null);
+const editForm = ref({ name: '', marketplace: 'US', myAsin: '' });
+const saving = ref(false);
+
+function handleEditProject(project: ScProject, event?: Event) {
+  event?.stopPropagation();  // 防止触发卡片点击
+  editingProject.value = project;
+  editForm.value = {
+    name: project.name,
+    marketplace: project.marketplace,
+    myAsin: project.my_asin || '',
+  };
+  showEditDialog.value = true;
+}
+
+async function confirmEdit() {
+  if (!editForm.value.name.trim()) {
+    ElMessage.warning('请输入项目名称');
+    return;
+  }
+  if (!editingProject.value) return;
+
+  saving.value = true;
+  try {
+    await scUpdateProject(
+      editingProject.value.id,
+      editForm.value.name.trim(),
+      editForm.value.marketplace,
+      editForm.value.myAsin.trim() || undefined
+    );
+    ElMessage.success('更新成功');
+    showEditDialog.value = false;
+
+    // 如果正在编辑当前打开的项目，也更新 currentProject
+    if (currentProject.value && editingProject.value && currentProject.value.id === editingProject.value.id) {
+      currentProject.value = {
+        ...currentProject.value,
+        name: editForm.value.name.trim(),
+        marketplace: editForm.value.marketplace,
+        my_asin: editForm.value.myAsin.trim() || null,
+      };
+    }
+
+    editingProject.value = null;
+    await loadProjects();
+  } catch (error) {
+    console.error('更新项目失败:', error);
+    ElMessage.error('更新项目失败');
+  } finally {
+    saving.value = false;
   }
 }
 
@@ -1339,32 +1426,61 @@ onMounted(async () => {
           </el-button>
         </div>
 
+        <!-- 搜索和排序工具栏 -->
+        <div class="project-toolbar">
+          <el-input
+            v-model="projectSearch"
+            placeholder="搜索项目名称或 ASIN..."
+            :prefix-icon="Search"
+            clearable
+            class="search-input"
+          />
+          <el-select v-model="projectSort" class="sort-select">
+            <el-option value="updated" label="最近更新" />
+            <el-option value="created" label="创建时间" />
+            <el-option value="name_asc" label="名称 A-Z" />
+            <el-option value="name_desc" label="名称 Z-A" />
+          </el-select>
+          <span class="project-count">{{ filteredProjects.length }} 个项目</span>
+        </div>
+
         <div v-if="loading" class="loading-state"><el-skeleton :rows="3" animated /></div>
-        <div v-else-if="filteredProjects.length === 0" class="empty-state">
+        <div v-else-if="filteredProjects.length === 0 && !projectSearch" class="empty-state">
           <el-empty :description="`暂无${scenarioType === 'new' ? '新品打造' : '老品优化'}项目`">
             <el-button type="primary" @click="handleCreateProject"><el-icon><Plus /></el-icon>创建第一个项目</el-button>
           </el-empty>
         </div>
-        <div v-else class="project-list">
-          <div v-for="project in filteredProjects" :key="project.id" class="project-card">
-            <div class="project-main" @click="enterProject(project)">
-              <div class="project-header">
-                <span class="project-name">{{ project.name }}</span>
-                <el-tag :type="statusLabels[project.status].type" size="small">{{ statusLabels[project.status].text }}</el-tag>
-              </div>
-              <div class="project-info">
-                <span class="info-item"><span class="info-label">站点：</span><span class="info-value">{{ getCountryLabel(project.marketplace) }}</span></span>
-                <span v-if="project.my_asin" class="info-item"><span class="info-label">ASIN：</span><span class="info-value">{{ project.my_asin }}</span></span>
-                <span class="info-item"><span class="info-label">创建时间：</span><span class="info-value">{{ formatDate(project.created_at) }}</span></span>
+        <div v-else-if="filteredProjects.length === 0 && projectSearch" class="empty-state">
+          <el-empty description="未找到匹配的项目">
+            <el-button @click="projectSearch = ''">清除搜索</el-button>
+          </el-empty>
+        </div>
+        <div v-else class="project-grid">
+          <div v-for="project in filteredProjects" :key="project.id" class="project-card" @click="enterProject(project)">
+            <div class="card-header">
+              <span class="project-name">{{ project.name }}</span>
+              <div class="more-btn" @click.stop>
+                <el-dropdown trigger="click">
+                  <el-icon class="more-icon"><MoreFilled /></el-icon>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item @click="handleEditProject(project)">编辑</el-dropdown-item>
+                      <el-dropdown-item @click="handleDeleteProject(project)" divided style="color: var(--el-color-danger)">删除</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
               </div>
             </div>
-            <div class="project-actions">
-              <el-tooltip content="进入项目" placement="top">
-                <el-button type="primary" size="small" circle @click="enterProject(project)"><el-icon><Right /></el-icon></el-button>
-              </el-tooltip>
-              <el-tooltip content="删除项目" placement="top">
-                <el-button type="danger" size="small" circle @click="handleDeleteProject(project)"><el-icon><Delete /></el-icon></el-button>
-              </el-tooltip>
+            <div class="card-tags">
+              <el-tag size="small" type="info">{{ getCountryLabel(project.marketplace) }}</el-tag>
+              <el-tag :type="statusLabels[project.status].type" size="small">{{ statusLabels[project.status].text }}</el-tag>
+            </div>
+            <div v-if="project.my_asin" class="card-asin">
+              ASIN: {{ project.my_asin }}
+            </div>
+            <div class="card-stats">
+              <span class="stat">{{ project.competitor_count || 0 }} 个竞品</span>
+              <span class="stat-time">{{ formatDate(project.updated_at) }}</span>
             </div>
           </div>
         </div>
@@ -2142,6 +2258,32 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
+    <!-- ==================== 编辑项目弹窗 ==================== -->
+    <el-dialog v-model="showEditDialog" title="编辑项目" width="480px" :close-on-click-modal="false">
+      <el-form :model="editForm" label-width="100px">
+        <el-form-item label="项目名称" required>
+          <el-input v-model="editForm.name" placeholder="项目名称" maxlength="50" show-word-limit />
+        </el-form-item>
+        <el-form-item label="目标站点" required>
+          <el-select v-model="editForm.marketplace" style="width: 100%;">
+            <el-option v-for="country in COUNTRY_OPTIONS" :key="country.value" :label="country.label" :value="country.value">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="country-flag" v-html="country.flag"></span>
+                <span>{{ country.label }}</span>
+              </div>
+            </el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="editingProject?.scenario_type === 'optimize'" label="您的ASIN">
+          <el-input v-model="editForm.myAsin" placeholder="输入需要优化的产品 ASIN" maxlength="20" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showEditDialog = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="confirmEdit">保存</el-button>
+      </template>
+    </el-dialog>
+
     <!-- ==================== 添加竞品弹窗 ==================== -->
     <el-dialog v-model="showAddCompetitorDialog" title="添加竞品" width="420px" :close-on-click-modal="false">
       <el-form :model="addCompetitorForm" label-width="80px">
@@ -2352,36 +2494,128 @@ onMounted(async () => {
 .loading-state { padding: 20px 0; }
 .empty-state { padding: 40px 0; }
 
-/* 项目卡片 */
-.project-list {
+/* 搜索和排序工具栏 */
+.project-toolbar {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
+}
+
+.project-toolbar .search-input {
+  width: 280px;
+}
+
+.project-toolbar .sort-select {
+  width: 140px;
+}
+
+.project-toolbar .project-count {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+/* 项目网格 */
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
 }
 
 .project-card {
-  display: flex;
-  align-items: center;
+  background: var(--glass-bg, var(--el-bg-color));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--glass-border, var(--el-border-color-lighter));
+  border-radius: 12px;
   padding: 16px;
-  background: var(--el-bg-color);
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  transition: all 0.2s ease;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .project-card:hover {
   border-color: var(--el-color-primary-light-5);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
 }
 
-.project-main { flex: 1; cursor: pointer; }
-.project-header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
-.project-name { font-size: 15px; font-weight: 500; color: var(--el-text-color-primary); }
-.project-info { display: flex; flex-wrap: wrap; gap: 16px; }
-.info-item { font-size: 13px; }
-.info-label { color: var(--el-text-color-secondary); }
-.info-value { color: var(--el-text-color-regular); }
-.project-actions { display: flex; gap: 8px; margin-left: 16px; }
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.project-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  margin-right: 8px;
+}
+
+.more-btn {
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.more-btn:hover {
+  background: var(--el-fill-color);
+}
+
+.more-icon {
+  color: var(--el-text-color-secondary);
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.more-icon:hover {
+  color: var(--el-text-color-primary);
+}
+
+.card-tags {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.card-asin {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-stats {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  padding-top: 10px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.card-stats .stat {
+  font-weight: 500;
+}
+
+.card-stats .stat-time {
+  color: var(--el-text-color-disabled);
+}
 
 /* 横向对比表格 */
 .compare-table-wrapper {

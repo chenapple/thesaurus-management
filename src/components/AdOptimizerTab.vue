@@ -773,17 +773,20 @@ onMounted(() => {
 }
 
 .project-card {
-  background: var(--el-bg-color);
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 8px;
+  background: var(--glass-bg, var(--el-bg-color));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--glass-border, var(--el-border-color-lighter));
+  border-radius: 12px;
   padding: 16px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .project-card:hover {
-  border-color: var(--el-color-primary);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  border-color: var(--el-color-primary-light-5);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
 }
 
 .card-header {

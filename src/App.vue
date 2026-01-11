@@ -3759,6 +3759,9 @@ onUnmounted(() => {
 </template>
 
 <style>
+/* Google Fonts: Poppins + Open Sans */
+@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;500;600;700&family=Poppins:wght@400;500;600;700&display=swap');
+
 :root {
   /* 亮色主题 */
   --bg-primary: #f5f7fa;
@@ -3770,6 +3773,19 @@ onUnmounted(() => {
   --text-muted: #909399;
   --border-color: #e4e7ed;
   --accent-color: var(--accent-color);
+
+  /* Glassmorphism 变量 - 亮色 */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 10px 15px -3px rgba(0, 0, 0, 0.05);
+  --glass-shadow-hover: 0 8px 12px -2px rgba(0, 0, 0, 0.08), 0 16px 24px -4px rgba(0, 0, 0, 0.06);
+
+  /* 渐变背景 */
+  --gradient-bg: linear-gradient(135deg, #f0f4ff 0%, #fdf4ff 50%, #fff7ed 100%);
+  --gradient-primary: linear-gradient(135deg, #2563EB 0%, #3B82F6 100%);
+  --gradient-success: linear-gradient(135deg, #10B981 0%, #34D399 100%);
+  --gradient-purple: linear-gradient(135deg, #8B5CF6 0%, #A78BFA 100%);
+  --gradient-orange: linear-gradient(135deg, #F97316 0%, #FB923C 100%);
 }
 
 html.dark {
@@ -3783,6 +3799,15 @@ html.dark {
   --text-muted: #737373;
   --border-color: #3a3a3a;
   --accent-color: var(--accent-color);
+
+  /* Glassmorphism 变量 - 暗色 */
+  --glass-bg: rgba(30, 41, 59, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.15);
+  --glass-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 10px 15px -3px rgba(0, 0, 0, 0.15);
+  --glass-shadow-hover: 0 8px 12px -2px rgba(0, 0, 0, 0.25), 0 16px 24px -4px rgba(0, 0, 0, 0.2);
+
+  /* 渐变背景 - 暗色 */
+  --gradient-bg: linear-gradient(135deg, #1e293b 0%, #1e1b2e 50%, #1f1814 100%);
 }
 
 * {
@@ -3795,8 +3820,14 @@ html,
 body,
 #app {
   height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+  font-family: 'Open Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
     Arial, sans-serif;
+}
+
+/* 标题字体 */
+h1, h2, h3, h4, h5, h6,
+.font-heading {
+  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 /* 表格排序箭头样式：放在文字后面同一行 */
