@@ -34,149 +34,262 @@
       </div>
     </div>
 
-    <div class="canvas-container">
-      <!-- 数据源节点 -->
-      <div class="node-row">
-        <div class="agent-node data-source" :class="{ 'active': session?.status !== 'idle' }">
-          <div class="node-icon">
-            <el-icon><Document /></el-icon>
-          </div>
-          <div class="node-info">
-            <div class="node-name">广告报表数据</div>
-            <div class="node-status">已导入</div>
-          </div>
-        </div>
-      </div>
+    <!-- 流程图容器 -->
+    <div class="flow-container" ref="flowContainer">
+      <!-- SVG 连接线层 -->
+      <svg class="flow-lines" :viewBox="`0 0 ${svgWidth} ${svgHeight}`" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <!-- 渐变定义 -->
+          <linearGradient id="line-gradient-active" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="var(--el-color-primary)" />
+            <stop offset="100%" stop-color="var(--el-color-primary-light-3)" />
+          </linearGradient>
+          <linearGradient id="line-gradient-success" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="var(--el-color-success)" />
+            <stop offset="100%" stop-color="var(--el-color-success-light-3)" />
+          </linearGradient>
+          <!-- 箭头标记 -->
+          <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 L2,4 Z" fill="var(--el-border-color-darker)" />
+          </marker>
+          <marker id="arrow-active" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 L2,4 Z" fill="var(--el-color-primary)" />
+          </marker>
+          <marker id="arrow-success" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 L2,4 Z" fill="var(--el-color-success)" />
+          </marker>
+          <!-- 流动动画 -->
+          <filter id="glow">
+            <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+            <feMerge>
+              <feMergeNode in="coloredBlur"/>
+              <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
+        </defs>
 
-      <!-- 连接线 -->
-      <div class="connector-row">
-        <div class="connector-line vertical"></div>
-        <div class="connector-branch">
-          <div class="branch-line left"></div>
-          <div class="branch-line center"></div>
-          <div class="branch-line right"></div>
-        </div>
-      </div>
+        <!-- 数据源 -> 三个分析师 -->
+        <g class="connection-group" :class="{ 'active': isDataSourceActive }">
+          <!-- 左分支 -->
+          <path
+            :d="`M ${centerX} ${row1Bottom}
+                 L ${centerX} ${row1Bottom + 15}
+                 L ${agent1X} ${row1Bottom + 15}
+                 L ${agent1X} ${row2Top}`"
+            :class="getLineClass('source-to-agents')"
+            fill="none"
+            marker-end="url(#arrow)"
+          />
+          <!-- 中分支 -->
+          <path
+            :d="`M ${centerX} ${row1Bottom} L ${centerX} ${row2Top}`"
+            :class="getLineClass('source-to-agents')"
+            fill="none"
+            marker-end="url(#arrow)"
+          />
+          <!-- 右分支 -->
+          <path
+            :d="`M ${centerX} ${row1Bottom}
+                 L ${centerX} ${row1Bottom + 15}
+                 L ${agent3X} ${row1Bottom + 15}
+                 L ${agent3X} ${row2Top}`"
+            :class="getLineClass('source-to-agents')"
+            fill="none"
+            marker-end="url(#arrow)"
+          />
+        </g>
 
-      <!-- 分析智能体节点 -->
-      <div class="node-row agents-row">
-        <div
-          class="agent-node"
-          :class="getNodeClass(session?.agents?.searchTermAnalyst)"
-        >
-          <div class="node-icon">
-            <el-icon><Search /></el-icon>
-          </div>
-          <div class="node-info">
-            <div class="node-name">搜索词分析师</div>
-            <div class="node-status">{{ getStatusText(session?.agents?.searchTermAnalyst) }}</div>
-          </div>
-          <div v-if="session?.agents?.searchTermAnalyst?.status === 'running'" class="node-progress">
-            <el-progress
-              :percentage="session.agents.searchTermAnalyst.progress"
-              :show-text="false"
-              :stroke-width="3"
-            />
+        <!-- 三个分析师 -> 整合器 -->
+        <g class="connection-group">
+          <!-- 左分支 -->
+          <path
+            :d="`M ${agent1X} ${row2Bottom}
+                 L ${agent1X} ${row2Bottom + 15}
+                 L ${centerX} ${row2Bottom + 15}
+                 L ${centerX} ${row3Top}`"
+            :class="getLineClass('agents-to-integrator', 'searchTermAnalyst')"
+            fill="none"
+            marker-end="url(#arrow)"
+          />
+          <!-- 中分支 -->
+          <path
+            :d="`M ${centerX} ${row2Bottom} L ${centerX} ${row3Top}`"
+            :class="getLineClass('agents-to-integrator', 'acosExpert')"
+            fill="none"
+            marker-end="url(#arrow)"
+          />
+          <!-- 右分支 -->
+          <path
+            :d="`M ${agent3X} ${row2Bottom}
+                 L ${agent3X} ${row2Bottom + 15}
+                 L ${centerX} ${row2Bottom + 15}
+                 L ${centerX} ${row3Top}`"
+            :class="getLineClass('agents-to-integrator', 'bidStrategist')"
+            fill="none"
+            marker-end="url(#arrow)"
+          />
+        </g>
+
+        <!-- 整合器 -> 三个结果 -->
+        <g class="connection-group">
+          <!-- 左分支 -->
+          <path
+            :d="`M ${centerX} ${row3Bottom}
+                 L ${centerX} ${row3Bottom + 15}
+                 L ${result1X} ${row3Bottom + 15}
+                 L ${result1X} ${row4Top}`"
+            :class="getLineClass('integrator-to-results')"
+            fill="none"
+            marker-end="url(#arrow)"
+          />
+          <!-- 中分支 -->
+          <path
+            :d="`M ${centerX} ${row3Bottom} L ${centerX} ${row4Top}`"
+            :class="getLineClass('integrator-to-results')"
+            fill="none"
+            marker-end="url(#arrow)"
+          />
+          <!-- 右分支 -->
+          <path
+            :d="`M ${centerX} ${row3Bottom}
+                 L ${centerX} ${row3Bottom + 15}
+                 L ${result3X} ${row3Bottom + 15}
+                 L ${result3X} ${row4Top}`"
+            :class="getLineClass('integrator-to-results')"
+            fill="none"
+            marker-end="url(#arrow)"
+          />
+        </g>
+
+        <!-- 运行时的动态流动效果 -->
+        <g v-if="session?.status === 'running'" class="flow-particles">
+          <circle
+            v-for="(particle, idx) in flowParticles"
+            :key="idx"
+            :cx="particle.x"
+            :cy="particle.y"
+            r="3"
+            class="particle"
+            :style="{ animationDelay: `${idx * 0.3}s` }"
+          />
+        </g>
+      </svg>
+
+      <!-- 节点层 -->
+      <div class="nodes-layer">
+        <!-- 数据源节点 -->
+        <div class="node-row row-1">
+          <div class="agent-node data-source" :class="{ 'active': session?.status !== 'idle' }">
+            <div class="node-icon">
+              <el-icon><Document /></el-icon>
+            </div>
+            <div class="node-info">
+              <div class="node-name">广告报表数据</div>
+              <div class="node-status">已导入</div>
+            </div>
           </div>
         </div>
 
-        <div
-          class="agent-node"
-          :class="getNodeClass(session?.agents?.acosExpert)"
-        >
-          <div class="node-icon">
-            <el-icon><TrendCharts /></el-icon>
+        <!-- 分析智能体节点 -->
+        <div class="node-row row-2">
+          <div
+            class="agent-node"
+            :class="getNodeClass(session?.agents?.searchTermAnalyst)"
+          >
+            <div class="node-icon">
+              <el-icon><Search /></el-icon>
+            </div>
+            <div class="node-info">
+              <div class="node-name">搜索词分析师</div>
+              <div class="node-status">{{ getStatusText(session?.agents?.searchTermAnalyst) }}</div>
+            </div>
+            <div v-if="session?.agents?.searchTermAnalyst?.status === 'running'" class="node-progress">
+              <el-progress
+                :percentage="session.agents.searchTermAnalyst.progress"
+                :show-text="false"
+                :stroke-width="3"
+              />
+            </div>
           </div>
-          <div class="node-info">
-            <div class="node-name">ACOS 专家</div>
-            <div class="node-status">{{ getStatusText(session?.agents?.acosExpert) }}</div>
+
+          <div
+            class="agent-node"
+            :class="getNodeClass(session?.agents?.acosExpert)"
+          >
+            <div class="node-icon">
+              <el-icon><TrendCharts /></el-icon>
+            </div>
+            <div class="node-info">
+              <div class="node-name">ACOS 专家</div>
+              <div class="node-status">{{ getStatusText(session?.agents?.acosExpert) }}</div>
+            </div>
+            <div v-if="session?.agents?.acosExpert?.status === 'running'" class="node-progress">
+              <el-progress
+                :percentage="session.agents.acosExpert.progress"
+                :show-text="false"
+                :stroke-width="3"
+              />
+            </div>
           </div>
-          <div v-if="session?.agents?.acosExpert?.status === 'running'" class="node-progress">
-            <el-progress
-              :percentage="session.agents.acosExpert.progress"
-              :show-text="false"
-              :stroke-width="3"
-            />
+
+          <div
+            class="agent-node"
+            :class="getNodeClass(session?.agents?.bidStrategist)"
+          >
+            <div class="node-icon">
+              <el-icon><Money /></el-icon>
+            </div>
+            <div class="node-info">
+              <div class="node-name">竞价策略师</div>
+              <div class="node-status">{{ getStatusText(session?.agents?.bidStrategist) }}</div>
+            </div>
+            <div v-if="session?.agents?.bidStrategist?.status === 'running'" class="node-progress">
+              <el-progress
+                :percentage="session.agents.bidStrategist.progress"
+                :show-text="false"
+                :stroke-width="3"
+              />
+            </div>
           </div>
         </div>
 
-        <div
-          class="agent-node"
-          :class="getNodeClass(session?.agents?.bidStrategist)"
-        >
-          <div class="node-icon">
-            <el-icon><Money /></el-icon>
-          </div>
-          <div class="node-info">
-            <div class="node-name">竞价策略师</div>
-            <div class="node-status">{{ getStatusText(session?.agents?.bidStrategist) }}</div>
-          </div>
-          <div v-if="session?.agents?.bidStrategist?.status === 'running'" class="node-progress">
-            <el-progress
-              :percentage="session.agents.bidStrategist.progress"
-              :show-text="false"
-              :stroke-width="3"
-            />
+        <!-- 整合器节点 -->
+        <div class="node-row row-3">
+          <div
+            class="agent-node integrator"
+            :class="getNodeClass(session?.agents?.suggestionIntegrator)"
+          >
+            <div class="node-icon">
+              <el-icon><Merge /></el-icon>
+            </div>
+            <div class="node-info">
+              <div class="node-name">建议整合器</div>
+              <div class="node-status">{{ getStatusText(session?.agents?.suggestionIntegrator) }}</div>
+            </div>
+            <div v-if="session?.agents?.suggestionIntegrator?.status === 'running'" class="node-progress">
+              <el-progress
+                :percentage="session.agents.suggestionIntegrator.progress"
+                :show-text="false"
+                :stroke-width="3"
+              />
+            </div>
           </div>
         </div>
-      </div>
 
-      <!-- 连接线 -->
-      <div class="connector-row">
-        <div class="connector-branch">
-          <div class="branch-line-up left"></div>
-          <div class="branch-line-up center"></div>
-          <div class="branch-line-up right"></div>
-        </div>
-        <div class="connector-line vertical"></div>
-      </div>
-
-      <!-- 整合器节点 -->
-      <div class="node-row">
-        <div
-          class="agent-node integrator"
-          :class="getNodeClass(session?.agents?.suggestionIntegrator)"
-        >
-          <div class="node-icon">
-            <el-icon><Merge /></el-icon>
+        <!-- 结果节点 -->
+        <div class="node-row row-4">
+          <div class="result-node" :class="{ 'active': session?.status === 'completed' }">
+            <el-icon><CircleClose /></el-icon>
+            <span>否定词建议</span>
           </div>
-          <div class="node-info">
-            <div class="node-name">建议整合器</div>
-            <div class="node-status">{{ getStatusText(session?.agents?.suggestionIntegrator) }}</div>
+          <div class="result-node" :class="{ 'active': session?.status === 'completed' }">
+            <el-icon><Setting /></el-icon>
+            <span>竞价调整</span>
           </div>
-          <div v-if="session?.agents?.suggestionIntegrator?.status === 'running'" class="node-progress">
-            <el-progress
-              :percentage="session.agents.suggestionIntegrator.progress"
-              :show-text="false"
-              :stroke-width="3"
-            />
+          <div class="result-node" :class="{ 'active': session?.status === 'completed' }">
+            <el-icon><Star /></el-icon>
+            <span>新词机会</span>
           </div>
-        </div>
-      </div>
-
-      <!-- 连接线 -->
-      <div class="connector-row">
-        <div class="connector-line vertical"></div>
-        <div class="connector-branch">
-          <div class="branch-line left"></div>
-          <div class="branch-line center"></div>
-          <div class="branch-line right"></div>
-        </div>
-      </div>
-
-      <!-- 结果节点 -->
-      <div class="node-row results-row">
-        <div class="result-node" :class="{ 'active': session?.status === 'completed' }">
-          <el-icon><CircleClose /></el-icon>
-          <span>否定词建议</span>
-        </div>
-        <div class="result-node" :class="{ 'active': session?.status === 'completed' }">
-          <el-icon><Setting /></el-icon>
-          <span>竞价调整</span>
-        </div>
-        <div class="result-node" :class="{ 'active': session?.status === 'completed' }">
-          <el-icon><Star /></el-icon>
-          <span>新词机会</span>
         </div>
       </div>
     </div>
@@ -198,7 +311,7 @@
       <div v-if="currentStreamingContent" class="streaming-preview">
         <div class="streaming-header">
           <span class="streaming-title">AI 输出中...</span>
-          <span class="typing-cursor">▋</span>
+          <span class="typing-cursor">|</span>
         </div>
         <pre class="streaming-content">{{ currentStreamingContent }}</pre>
       </div>
@@ -207,7 +320,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import {
   Document,
   Search,
@@ -217,15 +330,53 @@ import {
   Setting,
   Star,
   Loading,
+  Connection as Merge,
 } from '@element-plus/icons-vue';
 import type { AnalysisSession, AgentState } from '../../ad-prompts';
-
-// 使用 Connection 图标作为 Merge 的替代
-import { Connection as Merge } from '@element-plus/icons-vue';
 
 const props = defineProps<{
   session?: AnalysisSession | null;
 }>();
+
+const flowContainer = ref<HTMLElement>();
+
+// SVG 尺寸和坐标计算
+const svgWidth = 720;
+const svgHeight = 440;
+const centerX = svgWidth / 2;
+
+// 节点位置 (基于 180px 节点宽度 + 40px 间距)
+const nodeWidth = 180;
+const nodeGap = 40;
+const totalRowWidth = nodeWidth * 3 + nodeGap * 2;
+const startX = (svgWidth - totalRowWidth) / 2;
+
+const agent1X = startX + nodeWidth / 2;
+const agent3X = startX + totalRowWidth - nodeWidth / 2;
+const result1X = agent1X;
+const result3X = agent3X;
+
+// 行的 Y 坐标
+const row1Bottom = 80;
+const row2Top = 120;
+const row2Bottom = 200;
+const row3Top = 240;
+const row3Bottom = 320;
+const row4Top = 360;
+
+// 流动粒子（用于动画效果）
+const flowParticles = computed(() => {
+  return [
+    { x: centerX, y: row1Bottom + 10 },
+    { x: agent1X, y: row2Top - 10 },
+    { x: agent3X, y: row2Top - 10 },
+  ];
+});
+
+// 数据源是否激活
+const isDataSourceActive = computed(() => {
+  return props.session?.status !== 'idle';
+});
 
 const activeAgents = computed(() => {
   if (!props.session?.agents) return [];
@@ -234,18 +385,49 @@ const activeAgents = computed(() => {
   );
 });
 
-// 获取当前正在流式输出的内容（取所有运行中智能体的流式内容）
+// 获取当前正在流式输出的内容
 const currentStreamingContent = computed(() => {
   if (!props.session?.agents) return '';
   const runningAgents = Object.values(props.session.agents).filter(
     (agent) => agent.status === 'running' && agent.streamingContent
   );
   if (runningAgents.length === 0) return '';
-  // 合并所有运行中智能体的流式内容
   return runningAgents
     .map(agent => `[${agent.name}]\n${agent.streamingContent}`)
     .join('\n\n');
 });
+
+// 获取连接线的样式类
+function getLineClass(section: string, agentKey?: string): string {
+  const classes = ['flow-line'];
+
+  if (section === 'source-to-agents') {
+    if (props.session?.status === 'running' || props.session?.status === 'completed') {
+      classes.push('active');
+    }
+    if (props.session?.status === 'completed') {
+      classes.push('success');
+    }
+  } else if (section === 'agents-to-integrator' && agentKey) {
+    const agent = props.session?.agents?.[agentKey as keyof typeof props.session.agents];
+    if (agent?.status === 'running') {
+      classes.push('active');
+    }
+    if (agent?.status === 'completed') {
+      classes.push('success');
+    }
+  } else if (section === 'integrator-to-results') {
+    const integrator = props.session?.agents?.suggestionIntegrator;
+    if (integrator?.status === 'running') {
+      classes.push('active');
+    }
+    if (integrator?.status === 'completed' || props.session?.status === 'completed') {
+      classes.push('success');
+    }
+  }
+
+  return classes.join(' ');
+}
 
 function getNodeClass(agent?: AgentState): Record<string, boolean> {
   return {
@@ -324,7 +506,6 @@ function getCountryLabel(country?: string): string {
 function isCountryCompleted(country: string): boolean {
   if (!props.session?.countryProgress) return false;
   const { completed, countries, failedCountries } = props.session.countryProgress;
-  // 失败的国家不算完成
   if (failedCountries?.includes(country)) return false;
   const index = countries.indexOf(country);
   return index < completed;
@@ -341,11 +522,86 @@ function isCountryFailed(country: string): boolean {
   padding: 20px;
 }
 
-.canvas-container {
+/* 流程图容器 */
+.flow-container {
+  position: relative;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  height: 440px;
+}
+
+/* SVG 连接线 */
+.flow-lines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.flow-line {
+  stroke: var(--el-border-color-darker);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke 0.3s, stroke-width 0.3s;
+}
+
+.flow-line.active {
+  stroke: var(--el-color-primary);
+  stroke-width: 2.5;
+  animation: line-pulse 1.5s ease-in-out infinite;
+}
+
+.flow-line.success {
+  stroke: var(--el-color-success);
+  stroke-width: 2;
+  animation: none;
+}
+
+@keyframes line-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/* 流动粒子 */
+.particle {
+  fill: var(--el-color-primary);
+  opacity: 0;
+  animation: particle-flow 2s ease-in-out infinite;
+}
+
+@keyframes particle-flow {
+  0% {
+    opacity: 0;
+    transform: translateY(0);
+  }
+  20% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(80px);
+  }
+}
+
+/* 节点层 */
+.nodes-layer {
+  position: relative;
+  z-index: 2;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 0;
+  height: 100%;
 }
 
 .node-row {
@@ -354,8 +610,21 @@ function isCountryFailed(country: string): boolean {
   gap: 40px;
 }
 
-.agents-row {
-  gap: 60px;
+.row-1 {
+  padding-top: 20px;
+  margin-bottom: 40px;
+}
+
+.row-2 {
+  margin-bottom: 40px;
+}
+
+.row-3 {
+  margin-bottom: 40px;
+}
+
+.row-4 {
+  /* 最后一行 */
 }
 
 /* 智能体节点 */
@@ -364,17 +633,23 @@ function isCountryFailed(country: string): boolean {
   align-items: center;
   gap: 12px;
   padding: 16px 20px;
-  background: var(--el-fill-color-light);
+  background: var(--el-bg-color);
   border: 2px solid var(--el-border-color);
   border-radius: 12px;
   min-width: 180px;
-  transition: all 0.3s;
+  transition: all 0.3s ease;
   position: relative;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.agent-node:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
 }
 
 .agent-node.data-source,
 .agent-node.integrator {
-  background: var(--el-color-primary-light-9);
+  background: linear-gradient(135deg, var(--el-color-primary-light-9), var(--el-bg-color));
   border-color: var(--el-color-primary-light-5);
 }
 
@@ -384,50 +659,63 @@ function isCountryFailed(country: string): boolean {
 
 .agent-node.running {
   border-color: var(--el-color-primary);
-  box-shadow: 0 0 0 4px var(--el-color-primary-light-8);
-  animation: pulse 1.5s infinite;
+  box-shadow: 0 0 0 4px var(--el-color-primary-light-8),
+              0 4px 12px rgba(64, 158, 255, 0.2);
+  animation: node-pulse 2s ease-in-out infinite;
 }
 
 .agent-node.completed {
   border-color: var(--el-color-success);
-  background: var(--el-color-success-light-9);
+  background: linear-gradient(135deg, var(--el-color-success-light-9), var(--el-bg-color));
 }
 
 .agent-node.error {
   border-color: var(--el-color-danger);
-  background: var(--el-color-danger-light-9);
+  background: linear-gradient(135deg, var(--el-color-danger-light-9), var(--el-bg-color));
 }
 
 .agent-node.active {
   border-color: var(--el-color-success);
 }
 
-@keyframes pulse {
+@keyframes node-pulse {
   0%, 100% {
-    box-shadow: 0 0 0 4px var(--el-color-primary-light-8);
+    box-shadow: 0 0 0 4px var(--el-color-primary-light-8),
+                0 4px 12px rgba(64, 158, 255, 0.2);
   }
   50% {
-    box-shadow: 0 0 0 8px var(--el-color-primary-light-9);
+    box-shadow: 0 0 0 8px var(--el-color-primary-light-9),
+                0 4px 16px rgba(64, 158, 255, 0.3);
   }
 }
 
 .node-icon {
-  font-size: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--el-color-primary-light-8);
   color: var(--el-color-primary);
+  font-size: 20px;
+  flex-shrink: 0;
 }
 
 .agent-node.completed .node-icon {
+  background: var(--el-color-success-light-8);
   color: var(--el-color-success);
 }
 
 .agent-node.error .node-icon {
+  background: var(--el-color-danger-light-8);
   color: var(--el-color-danger);
 }
 
 .node-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
 .node-name {
@@ -443,110 +731,42 @@ function isCountryFailed(country: string): boolean {
 
 .node-progress {
   position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  padding: 0 4px 4px;
-}
-
-/* 连接线 */
-.connector-row {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  height: 40px;
-}
-
-.connector-line.vertical {
-  width: 2px;
-  height: 20px;
-  background: var(--el-border-color);
-}
-
-.connector-branch {
-  display: flex;
-  justify-content: center;
-  gap: 240px;  /* 与节点中心间距匹配：180px(宽度) + 60px(间距) */
-}
-
-.branch-line {
-  width: 2px;
-  height: 20px;
-  background: var(--el-border-color);
-  position: relative;
-}
-
-.branch-line::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  width: 120px;
-  height: 2px;
-  background: var(--el-border-color);
-}
-
-.branch-line.left::before {
-  right: 0;
-}
-
-.branch-line.right::before {
-  left: 0;
-}
-
-.branch-line.center::before {
-  display: none;
-}
-
-.branch-line-up {
-  width: 2px;
-  height: 20px;
-  background: var(--el-border-color);
-  position: relative;
-}
-
-.branch-line-up::before {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  width: 120px;
-  height: 2px;
-  background: var(--el-border-color);
-}
-
-.branch-line-up.left::before {
-  right: 0;
-}
-
-.branch-line-up.right::before {
-  left: 0;
-}
-
-.branch-line-up.center::before {
-  display: none;
+  bottom: 4px;
+  left: 12px;
+  right: 12px;
 }
 
 /* 结果节点 */
-.results-row {
-  gap: 40px;
-}
-
 .result-node {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 16px;
-  background: var(--el-fill-color-light);
-  border: 1px solid var(--el-border-color);
-  border-radius: 8px;
+  padding: 14px 20px;
+  background: var(--el-bg-color);
+  border: 2px solid var(--el-border-color);
+  border-radius: 10px;
   font-size: 13px;
+  font-weight: 500;
   color: var(--el-text-color-secondary);
-  transition: all 0.3s;
+  transition: all 0.3s ease;
+  min-width: 140px;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.result-node:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
 .result-node.active {
-  background: var(--el-color-success-light-9);
+  background: linear-gradient(135deg, var(--el-color-success-light-9), var(--el-bg-color));
   border-color: var(--el-color-success);
   color: var(--el-color-success);
+}
+
+.result-node .el-icon {
+  font-size: 18px;
 }
 
 /* 日志区 */
@@ -554,7 +774,8 @@ function isCountryFailed(country: string): boolean {
   margin-top: 24px;
   padding: 16px;
   background: var(--el-fill-color-darker);
-  border-radius: 8px;
+  border-radius: 12px;
+  border: 1px solid var(--el-border-color-light);
 }
 
 .log-header {
@@ -566,8 +787,13 @@ function isCountryFailed(country: string): boolean {
   color: var(--el-text-color-primary);
 }
 
+.log-header .stop-btn {
+  margin-left: auto;
+}
+
 .loading-icon {
   animation: spin 1s linear infinite;
+  color: var(--el-color-primary);
 }
 
 @keyframes spin {
@@ -584,10 +810,12 @@ function isCountryFailed(country: string): boolean {
 .log-item {
   font-size: 13px;
   color: var(--el-text-color-secondary);
+  padding: 4px 0;
 }
 
 .agent-name {
   color: var(--el-color-primary);
+  font-weight: 500;
   margin-right: 8px;
 }
 
@@ -605,7 +833,7 @@ function isCountryFailed(country: string): boolean {
 .streaming-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   margin-bottom: 8px;
 }
 
@@ -616,29 +844,30 @@ function isCountryFailed(country: string): boolean {
 }
 
 .typing-cursor {
-  animation: blink 1s infinite;
+  animation: cursor-blink 1s step-end infinite;
   color: var(--el-color-primary);
+  font-weight: bold;
 }
 
-@keyframes blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0; }
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 .streaming-content {
   margin: 0;
   font-size: 11px;
-  line-height: 1.4;
+  line-height: 1.5;
   color: var(--el-text-color-secondary);
   white-space: pre-wrap;
   word-break: break-all;
-  font-family: monospace;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
 }
 
 /* 国家分析进度 */
 .country-progress-bar {
   margin-bottom: 20px;
-  padding: 16px;
+  padding: 16px 20px;
   background: linear-gradient(135deg, var(--el-color-primary-light-9), var(--el-fill-color-light));
   border: 1px solid var(--el-color-primary-light-7);
   border-radius: 12px;
@@ -681,13 +910,13 @@ function isCountryFailed(country: string): boolean {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px;
-  background: var(--el-fill-color);
+  padding: 6px 12px;
+  background: var(--el-bg-color);
   border: 1px solid var(--el-border-color);
-  border-radius: 16px;
+  border-radius: 20px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
-  transition: all 0.3s;
+  transition: all 0.3s ease;
 }
 
 .country-tag.completed {
@@ -700,10 +929,10 @@ function isCountryFailed(country: string): boolean {
   background: var(--el-color-primary-light-9);
   border-color: var(--el-color-primary);
   color: var(--el-color-primary);
-  animation: pulse-tag 1.5s infinite;
+  animation: tag-pulse 2s ease-in-out infinite;
 }
 
-@keyframes pulse-tag {
+@keyframes tag-pulse {
   0%, 100% {
     box-shadow: 0 0 0 2px var(--el-color-primary-light-8);
   }

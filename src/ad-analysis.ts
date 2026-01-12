@@ -19,6 +19,30 @@ import {
   type CurrencyInfo,
 } from './ad-prompts';
 
+// 全局 AbortController 用于中断分析
+let currentAbortController: AbortController | null = null;
+
+/**
+ * 停止当前正在进行的分析
+ * @returns 是否成功停止（如果没有分析在进行则返回 false）
+ */
+export function stopAnalysis(): boolean {
+  if (currentAbortController) {
+    console.log('[MultiAgent] 用户请求停止分析');
+    currentAbortController.abort();
+    currentAbortController = null;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * 检查分析是否正在进行
+ */
+export function isAnalysisRunning(): boolean {
+  return currentAbortController !== null;
+}
+
 // 按国家分组搜索词
 function groupSearchTermsByCountry(searchTerms: AdSearchTerm[]): Map<string, AdSearchTerm[]> {
   const grouped = new Map<string, AdSearchTerm[]>();
@@ -226,6 +250,53 @@ async function runAgentStream(
 }
 
 /**
+ * 去重否定词建议
+ * 相同搜索词合并：累加浪费金额，合并影响活动，取最高风险级别
+ */
+function deduplicateNegativeWords(negativeWords: any[]): any[] {
+  const wordMap = new Map<string, any>();
+
+  for (const word of negativeWords) {
+    const key = word.search_term?.toLowerCase?.() || '';
+    if (!key) continue;
+
+    if (wordMap.has(key)) {
+      const existing = wordMap.get(key)!;
+      // 累加浪费金额
+      existing.spend_wasted = (existing.spend_wasted || 0) + (word.spend_wasted || 0);
+      // 合并影响活动（去重）
+      const campaigns = new Set([
+        ...(existing.campaigns_affected || []),
+        ...(word.campaigns_affected || []),
+      ]);
+      existing.campaigns_affected = Array.from(campaigns);
+      // 合并广告组（记录所有涉及的广告组）
+      if (word.ad_group_name && word.ad_group_name !== existing.ad_group_name) {
+        existing.ad_group_name = existing.ad_group_name
+          ? `${existing.ad_group_name}, ${word.ad_group_name}`
+          : word.ad_group_name;
+      }
+      // 取最高风险级别
+      const riskOrder = { high: 3, medium: 2, low: 1 };
+      const existingRisk = riskOrder[existing.risk_level as keyof typeof riskOrder] || 0;
+      const newRisk = riskOrder[word.risk_level as keyof typeof riskOrder] || 0;
+      if (newRisk > existingRisk) {
+        existing.risk_level = word.risk_level;
+      }
+      // 优先使用精准否定
+      if (word.match_type_suggestion === 'exact') {
+        existing.match_type_suggestion = 'exact';
+      }
+    } else {
+      wordMap.set(key, { ...word });
+    }
+  }
+
+  // 转回数组，按浪费金额降序排列
+  return Array.from(wordMap.values()).sort((a, b) => (b.spend_wasted || 0) - (a.spend_wasted || 0));
+}
+
+/**
  * 运行单个国家的分析
  */
 async function runSingleCountryAnalysis(
@@ -316,17 +387,25 @@ async function runSingleCountryAnalysis(
     }
   }
 
+  // 去重否定词：相同搜索词合并，累加浪费金额，合并影响活动
+  const deduplicatedNegativeWords = deduplicateNegativeWords(finalResult.negative_words || []);
+
+  // 基于实际 spend_wasted 计算 potential_savings（而非依赖 AI 估算）
+  const calculatedPotentialSavings = deduplicatedNegativeWords.reduce(
+    (sum, w) => sum + (w.spend_wasted || 0), 0
+  );
+
   return {
     country,
     currency,
-    negative_words: finalResult.negative_words || [],
+    negative_words: deduplicatedNegativeWords,
     bid_adjustments: finalResult.bid_adjustments || [],
     keyword_opportunities: finalResult.keyword_opportunities || [],
-    summary: finalResult.summary || {
+    summary: {
       total_spend_analyzed: totalSpend,
-      potential_savings: 0,
-      optimization_score: 50,
-      key_insights: [],
+      potential_savings: parseFloat(calculatedPotentialSavings.toFixed(2)),
+      optimization_score: finalResult.summary?.optimization_score || 50,
+      key_insights: finalResult.summary?.key_insights || [],
     },
   };
 }
@@ -386,8 +465,9 @@ export async function runMultiAgentAnalysis(
   session.status = 'running';
   session.partialResults = [];
 
-  // 创建 AbortController 用于取消
+  // 创建 AbortController 用于取消（保存到全局变量以支持外部中断）
   const abortController = new AbortController();
+  currentAbortController = abortController;
 
   const notifyUpdate = () => {
     onSessionUpdate?.(cloneSession(session));
@@ -472,8 +552,28 @@ export async function runMultiAgentAnalysis(
       notifyUpdate();
 
     } catch (error) {
-      // 单个国家失败，记录但继续下一个
       const errorMsg = error instanceof Error ? error.message : String(error);
+
+      // 检查是否是用户主动取消
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('[MultiAgent] 分析被用户取消');
+        session.status = 'cancelled';
+        session.currentCountry = undefined;
+        session.endTime = Date.now();
+        currentAbortController = null;
+        notifyUpdate();
+
+        // 如果已有部分结果，返回它们
+        if (countryResults.length > 0) {
+          const partialMerged = mergeCountryResults(countryResults);
+          session.finalResult = partialMerged;
+          notifyUpdate();
+          return partialMerged;
+        }
+        return null;
+      }
+
+      // 单个国家失败，记录但继续下一个
       console.error(`[MultiAgent] ${country} 分析失败:`, errorMsg);
 
       // 记录更详细的错误信息
@@ -491,6 +591,9 @@ export async function runMultiAgentAnalysis(
       // 不抛出错误，继续下一个国家
     }
   }
+
+  // 清理 AbortController
+  currentAbortController = null;
 
   // 分析完成
   session.currentCountry = undefined;

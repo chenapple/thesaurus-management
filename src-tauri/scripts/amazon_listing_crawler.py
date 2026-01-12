@@ -519,6 +519,7 @@ async def fetch_listing_info(asin: str, country: str, headless="new") -> dict:
         "rating": None,
         "review_count": None,
         "bsr_rank": None,
+        "date_first_available": None,
         "image_url": None,
         "bullets": [],
         "description": None,
@@ -937,6 +938,69 @@ async def fetch_listing_info(asin: str, country: str, headless="new") -> dict:
             except Exception as e:
                 print(f"[DEBUG] 提取BSR失败: {e}", file=sys.stderr)
 
+            # 5.5 提取上架时间 (Date First Available)
+            try:
+                # 各语言格式:
+                # 英语: "Date First Available : January 1, 2020" 或 "Date First Available: 1 Jan. 2020"
+                # 德语: "Im Angebot von Amazon.de seit : 1. Januar 2020"
+                # 法语: "Date de mise en ligne sur Amazon.fr : 1 janvier 2020"
+                # 意大利语: "Disponibile su Amazon.it a partire dal : 1 gennaio 2020"
+                # 西班牙语: "Fecha de disponibilidad en Amazon.es : 1 de enero de 2020"
+                # 日语: "Amazon.co.jpでの取り扱い開始日 : 2020/1/1"
+                date_patterns = [
+                    # 英语 (US/UK/CA/AU)
+                    r'Date First Available\s*[:\-]?\s*([A-Za-z]+\.?\s*\d{1,2},?\s*\d{4}|\d{1,2}\s+[A-Za-z]+\.?\s*\d{4})',
+                    # 德语
+                    r'Im Angebot von Amazon\.de seit\s*[:\-]?\s*(\d{1,2}\.?\s*[A-Za-zäöüÄÖÜß]+\.?\s*\d{4})',
+                    r'Erstmals im Angebot auf Amazon\.de\s*[:\-]?\s*(\d{1,2}\.?\s*[A-Za-zäöüÄÖÜß]+\.?\s*\d{4})',
+                    # 法语
+                    r'Date de mise en ligne sur Amazon\.fr\s*[:\-]?\s*(\d{1,2}\s+[a-zéèàùâêîôûäëïöü]+\.?\s*\d{4})',
+                    r'Disponible sur Amazon\.fr depuis le\s*[:\-]?\s*(\d{1,2}\s+[a-zéèàùâêîôûäëïöü]+\.?\s*\d{4})',
+                    # 意大利语
+                    r'Disponibile su Amazon\.it\s+(?:a partire\s+)?dal\s*[:\-]?\s*(\d{1,2}\s+[a-z]+\.?\s*\d{4})',
+                    # 西班牙语 - "Producto en Amazon.es desde : 18 febrero 2023"
+                    r'Producto en Amazon\.es desde\s*[:\-‏‎\s]*(\d{1,2}\s+(?:de\s+)?[a-z]+(?:\s+de)?\s+\d{4})',
+                    r'Fecha de disponibilidad en Amazon\.es\s*[:\-]?\s*(\d{1,2}\s+(?:de\s+)?[a-z]+(?:\s+de)?\s+\d{4})',
+                    # 日语 - 注意 Amazon.co.jp 和 での 之间可能有空格
+                    r'Amazon\.co\.jp\s*での取り扱い開始日\s*[:\-]?\s*(\d{4}[/年]\d{1,2}[/月]\d{1,2}日?)',
+                    # 日语备用格式
+                    r'取り扱い開始日\s*[:\-]?\s*(\d{4}[/年]\d{1,2}[/月]\d{1,2}日?)',
+                ]
+
+                def extract_date_first_available(text):
+                    for pattern in date_patterns:
+                        match = re.search(pattern, text, re.IGNORECASE)
+                        if match:
+                            date_str = match.group(1).strip()
+                            print(f"[DEBUG] 上架时间匹配: '{date_str}'", file=sys.stderr)
+                            return date_str
+                    return None
+
+                # 从产品详情表格提取
+                for selector in bsr_id_selectors:
+                    try:
+                        detail_elem = page.locator(selector).first
+                        if await detail_elem.count() > 0:
+                            detail_text = await detail_elem.inner_text()
+                            date_str = extract_date_first_available(detail_text)
+                            if date_str:
+                                result['date_first_available'] = date_str
+                                print(f"[DEBUG] 上架时间: {date_str} (from {selector})", file=sys.stderr)
+                                break
+                    except:
+                        continue
+
+                # 如果没找到，尝试从整个页面搜索
+                if not result['date_first_available']:
+                    page_content = await page.content()
+                    date_str = extract_date_first_available(page_content)
+                    if date_str:
+                        result['date_first_available'] = date_str
+                        print(f"[DEBUG] 上架时间 (页面): {date_str}", file=sys.stderr)
+
+            except Exception as e:
+                print(f"[DEBUG] 提取上架时间失败: {e}", file=sys.stderr)
+
             # 6. 提取五点描述 (Bullet Points)
             try:
                 # 尝试多个选择器（从最精确到最宽泛）
@@ -1137,6 +1201,7 @@ async def fetch_listings_batch(items: list, headless="new") -> list:
                     "rating": None,
                     "review_count": None,
                     "bsr_rank": None,
+                    "date_first_available": None,
                     "image_url": None,
                     "bullets": [],
                     "description": None,
@@ -1391,6 +1456,38 @@ async def fetch_listings_batch(items: list, headless="new") -> list:
                                         break
                                 except:
                                     continue
+                    except:
+                        pass
+
+                    # 5.5 上架时间
+                    try:
+                        date_patterns = [
+                            r'Date First Available\s*[:\-]?\s*([A-Za-z]+\.?\s*\d{1,2},?\s*\d{4}|\d{1,2}\s+[A-Za-z]+\.?\s*\d{4})',
+                            r'Im Angebot von Amazon\.de seit\s*[:\-]?\s*(\d{1,2}\.?\s*[A-Za-zäöüÄÖÜß]+\.?\s*\d{4})',
+                            r'Erstmals im Angebot auf Amazon\.de\s*[:\-]?\s*(\d{1,2}\.?\s*[A-Za-zäöüÄÖÜß]+\.?\s*\d{4})',
+                            r'Date de mise en ligne sur Amazon\.fr\s*[:\-]?\s*(\d{1,2}\s+[a-zéèàùâêîôûäëïöü]+\.?\s*\d{4})',
+                            r'Disponible sur Amazon\.fr depuis le\s*[:\-]?\s*(\d{1,2}\s+[a-zéèàùâêîôûäëïöü]+\.?\s*\d{4})',
+                            r'Disponibile su Amazon\.it\s+(?:a partire\s+)?dal\s*[:\-]?\s*(\d{1,2}\s+[a-z]+\.?\s*\d{4})',
+                            r'Producto en Amazon\.es desde\s*[:\-‏‎\s]*(\d{1,2}\s+(?:de\s+)?[a-z]+(?:\s+de)?\s+\d{4})',
+                            r'Fecha de disponibilidad en Amazon\.es\s*[:\-]?\s*(\d{1,2}\s+(?:de\s+)?[a-z]+(?:\s+de)?\s+\d{4})',
+                            r'Amazon\.co\.jp\s*での取り扱い開始日\s*[:\-]?\s*(\d{4}[/年]\d{1,2}[/月]\d{1,2}日?)',
+                            r'取り扱い開始日\s*[:\-]?\s*(\d{4}[/年]\d{1,2}[/月]\d{1,2}日?)',
+                        ]
+                        bsr_selectors = ['#productDetails_detailBullets_sections1', '#detailBulletsWrapper_feature_div', '#prodDetails']
+                        for selector in bsr_selectors:
+                            try:
+                                detail_elem = page.locator(selector).first
+                                if await detail_elem.count() > 0:
+                                    detail_text = await detail_elem.inner_text()
+                                    for pattern in date_patterns:
+                                        match = re.search(pattern, detail_text, re.IGNORECASE)
+                                        if match:
+                                            result['date_first_available'] = match.group(1).strip()
+                                            break
+                                    if result['date_first_available']:
+                                        break
+                            except:
+                                continue
                     except:
                         pass
 

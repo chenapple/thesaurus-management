@@ -62,6 +62,10 @@ const COLUMN_MAPPING_EN: Record<string, keyof AdSearchTerm> = {
   '7 day conversion rate': 'conversion_rate',
   'cpc': 'cpc',
   'cost per click (cpc)': 'cpc',
+
+  // SKU
+  'sku': 'sku',
+  'advertised sku': 'sku',
 };
 
 // 亚马逊搜索词报告列名映射（中文 -> 标准字段名）
@@ -128,6 +132,10 @@ const COLUMN_MAPPING_CN: Record<string, keyof AdSearchTerm> = {
   '订单数': 'orders',
   '7天的转化率': 'conversion_rate',
   '转化率': 'conversion_rate',
+
+  // SKU
+  'sku': 'sku',
+  '广告sku': 'sku',
 };
 
 // 合并映射
@@ -333,6 +341,7 @@ function parseRow(
     conversion_rate: parseFloat(conversionRate.toFixed(2)),
     cpc: parseFloat(cpc.toFixed(2)),
     report_date: getValue('report_date')?.toString() || null,
+    sku: getValue('sku')?.toString() || null,
   };
 }
 

@@ -622,6 +622,59 @@ async function handleFetchAllListings() {
   }
 }
 
+// 一键刷新所有竞品信息（已获取过的也重新获取）
+async function handleRefreshAllListings() {
+  if (!currentProject.value) return;
+
+  if (competitors.value.length === 0) {
+    ElMessage.info('没有竞品需要刷新');
+    return;
+  }
+
+  // 标记所有竞品为加载中
+  competitors.value.forEach(c => fetchingCompetitorIds.value.add(c.id));
+
+  try {
+    ElMessage.info(`正在刷新 ${competitors.value.length} 个竞品信息...`);
+
+    // 准备批量请求数据: [id, asin, country]
+    const items: Array<[number, string, string]> = competitors.value.map(c => [
+      c.id,
+      c.asin,
+      currentProject.value!.marketplace
+    ]);
+
+    // 调用批量接口
+    const results = await scFetchCompetitorsBatch(items);
+
+    // 统计结果
+    let successCount = 0;
+    let errorCount = 0;
+    for (const [, result] of results) {
+      if (result.error) {
+        errorCount++;
+      } else {
+        successCount++;
+      }
+    }
+
+    // 重新加载竞品列表
+    await loadCompetitors();
+
+    if (errorCount > 0) {
+      ElMessage.warning(`刷新完成: ${successCount} 成功, ${errorCount} 失败`);
+    } else {
+      ElMessage.success(`成功刷新 ${successCount} 个竞品信息`);
+    }
+  } catch (error) {
+    console.error('刷新失败:', error);
+    ElMessage.error(`刷新失败: ${error}`);
+  } finally {
+    // 清除所有加载状态
+    competitors.value.forEach(c => fetchingCompetitorIds.value.delete(c.id));
+  }
+}
+
 // ==================== 评论分析 ====================
 const reviewSummaries = ref<Map<number, ScReviewSummary>>(new Map());
 const fetchingReviewIds = ref<Set<number>>(new Set());
@@ -1229,6 +1282,92 @@ function parseBullets(bulletsJson: string | null): string[] {
   }
 }
 
+// 格式化上架时间：解析日期并计算距今天数
+function formatLaunchDate(dateStr: string): string {
+  if (!dateStr) return '-';
+
+  let date: Date | null = null;
+
+  // 尝试解析不同格式的日期
+  // 格式1: 2025/8/8 或 2025-8-8 (日语/通用)
+  const slashMatch = dateStr.match(/(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/);
+  if (slashMatch) {
+    date = new Date(parseInt(slashMatch[1]), parseInt(slashMatch[2]) - 1, parseInt(slashMatch[3]));
+  }
+
+  // 格式2: October 28, 2019 或 January 1, 2020 (英语)
+  if (!date) {
+    const englishMatch = dateStr.match(/([A-Za-z]+)\.?\s*(\d{1,2}),?\s*(\d{4})/);
+    if (englishMatch) {
+      const months: Record<string, number> = {
+        'january': 0, 'february': 1, 'march': 2, 'april': 3, 'may': 4, 'june': 5,
+        'july': 6, 'august': 7, 'september': 8, 'october': 9, 'november': 10, 'december': 11
+      };
+      const monthNum = months[englishMatch[1].toLowerCase()];
+      if (monthNum !== undefined) {
+        date = new Date(parseInt(englishMatch[3]), monthNum, parseInt(englishMatch[2]));
+      }
+    }
+  }
+
+  // 格式3: 28 Oct. 2019 或 1 Jan 2020 (英式) 或 22 juin 2020 (法语) 或 17 novembre 2022
+  if (!date) {
+    const britishMatch = dateStr.match(/(\d{1,2})\s+([A-Za-zéèàùâêîôûäëïöü]+)\.?\s*(\d{4})/);
+    if (britishMatch) {
+      const months: Record<string, number> = {
+        // 英语
+        'jan': 0, 'feb': 1, 'mar': 2, 'apr': 3, 'may': 4, 'jun': 5,
+        'jul': 6, 'aug': 7, 'sep': 8, 'oct': 9, 'nov': 10, 'dec': 11,
+        'january': 0, 'february': 1, 'march': 2, 'april': 3, 'june': 5,
+        'july': 6, 'august': 7, 'september': 8, 'october': 9, 'november': 10, 'december': 11,
+        // 法语
+        'janvier': 0, 'février': 1, 'fevrier': 1, 'mars': 2, 'avril': 3, 'mai': 4, 'juin': 5,
+        'juillet': 6, 'août': 7, 'aout': 7, 'septembre': 8, 'octobre': 9, 'novembre': 10, 'décembre': 11, 'decembre': 11,
+        // 意大利语
+        'gennaio': 0, 'febbraio': 1, 'marzo': 2, 'aprile': 3, 'maggio': 4, 'giugno': 5,
+        'luglio': 6, 'agosto': 7, 'settembre': 8, 'ottobre': 9, 'dicembre': 11,
+        // 西班牙语 (marzo和agosto与意大利语相同，已在上面定义)
+        'enero': 0, 'febrero': 1, 'abril': 3, 'mayo': 4, 'junio': 5,
+        'julio': 6, 'septiembre': 8, 'octubre': 9, 'noviembre': 10, 'diciembre': 11,
+      };
+      const monthNum = months[britishMatch[2].toLowerCase()];
+      if (monthNum !== undefined) {
+        date = new Date(parseInt(britishMatch[3]), monthNum, parseInt(britishMatch[1]));
+      }
+    }
+  }
+
+  // 格式4: 1. Januar 2020 (德语)
+  if (!date) {
+    const germanMatch = dateStr.match(/(\d{1,2})\.?\s*([A-Za-zäöüÄÖÜß]+)\.?\s*(\d{4})/);
+    if (germanMatch) {
+      const months: Record<string, number> = {
+        'januar': 0, 'februar': 1, 'märz': 2, 'april': 3, 'mai': 4, 'juni': 5,
+        'juli': 6, 'august': 7, 'september': 8, 'oktober': 9, 'november': 10, 'dezember': 11
+      };
+      const monthNum = months[germanMatch[2].toLowerCase()];
+      if (monthNum !== undefined) {
+        date = new Date(parseInt(germanMatch[3]), monthNum, parseInt(germanMatch[1]));
+      }
+    }
+  }
+
+  if (!date || isNaN(date.getTime())) {
+    return dateStr; // 无法解析，返回原始字符串
+  }
+
+  // 计算距今天数
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  date.setHours(0, 0, 0, 0);
+  const diffTime = today.getTime() - date.getTime();
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+  // 格式化为 YYYY-M-D（X天）
+  const formatted = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+  return `${formatted}（${diffDays}天）`;
+}
+
 const statusLabels: Record<string, { text: string; type: 'info' | 'warning' | 'primary' | 'success' }> = {
   draft: { text: '草稿', type: 'info' },
   collecting: { text: '采集中', type: 'warning' },
@@ -1707,6 +1846,15 @@ onMounted(async () => {
             >
               <el-icon><Refresh /></el-icon>批量获取
             </el-button>
+            <el-button
+              v-if="competitors.length > 0 && competitors.every(c => c.fetched_at)"
+              type="warning"
+              size="small"
+              :loading="fetchingCompetitorIds.size > 0"
+              @click="handleRefreshAllListings"
+            >
+              <el-icon><Refresh /></el-icon>一键刷新
+            </el-button>
             <el-button type="primary" size="small" :disabled="competitors.length >= 5" @click="handleAddCompetitor">
               <el-icon><Plus /></el-icon>添加竞品
             </el-button>
@@ -1818,6 +1966,14 @@ onMounted(async () => {
                       in {{ comp.bsr_rank.split(' in ').slice(1).join(' in ') }}
                     </span>
                   </div>
+                  <span v-else class="pending-text">-</span>
+                </td>
+              </tr>
+              <!-- 上架时间 -->
+              <tr>
+                <td class="label-col">上架时间</td>
+                <td v-for="comp in competitors" :key="comp.id" class="data-col">
+                  <span v-if="comp.date_first_available" class="date-cell">{{ formatLaunchDate(comp.date_first_available) }}</span>
                   <span v-else class="pending-text">-</span>
                 </td>
               </tr>
@@ -2804,6 +2960,11 @@ onMounted(async () => {
 .bsr-category {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+.date-cell {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
 }
 
 .pending-text {

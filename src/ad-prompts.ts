@@ -48,8 +48,10 @@ ${JSON.stringify(
     .map(t => ({
       search_term: t.customer_search_term,
       campaign: t.campaign_name,
+      ad_group: t.ad_group_name,
       targeting: t.targeting,
       match_type: t.match_type,
+      sku: t.sku,
       impressions: t.impressions,
       clicks: t.clicks,
       spend: `${currencySymbol}${t.spend.toFixed(2)}`,
@@ -82,12 +84,21 @@ ${JSON.stringify(
 - high_potential: 最多 10 条（按潜力排序）
 - insights: 最多 3 条
 
+**match_type_suggestion 字段规则：**
+- "exact"（精准否定）：只否定该搜索词的完全匹配。适用于大多数情况，特别是高花费零转化的具体搜索词
+- "phrase"（词组否定）：否定包含该词组的所有搜索词。仅当该词组的所有变体都表现差时使用
+- **注意：reason 中的描述必须与 match_type_suggestion 保持一致，不要出现"否定精确"但建议"phrase"的矛盾情况**
+
 \`\`\`json
 {
   "negative_candidates": [
     {
       "search_term": "搜索词",
-      "reason": "高花费零转化，花费${currencySymbol}XX",
+      "campaign_name": "具体广告活动名称",
+      "ad_group_name": "具体广告组名称",
+      "targeting": "投放词",
+      "sku": "SKU（如有）",
+      "reason": "高花费零转化，花费${currencySymbol}XX，建议精准否定",
       "risk_level": "high",
       "spend_wasted": 12.5,
       "match_type_suggestion": "exact",
@@ -97,6 +108,9 @@ ${JSON.stringify(
   "high_potential": [
     {
       "search_term": "搜索词",
+      "campaign_name": "广告活动名称",
+      "ad_group_name": "广告组名称",
+      "targeting": "投放词",
       "performance": { "orders": 5, "acos": 15, "conversion_rate": 8.5 },
       "suggestion": "建议精准投放",
       "current_match_type": "broad"
@@ -162,7 +176,10 @@ export function buildAcosExpertPrompt(
 ### 超高 ACOS (>100%) - 前 30 条
 ${JSON.stringify(veryPoorTerms.slice(0, 30).map(t => ({
   search_term: t.customer_search_term,
+  campaign: t.campaign_name,
+  ad_group: t.ad_group_name,
   targeting: t.targeting,
+  sku: t.sku,
   spend: `${currencySymbol}${t.spend.toFixed(2)}`,
   sales: `${currencySymbol}${t.sales.toFixed(2)}`,
   acos: t.acos,
@@ -172,7 +189,10 @@ ${JSON.stringify(veryPoorTerms.slice(0, 30).map(t => ({
 ### 高花费无销售 - 前 30 条
 ${JSON.stringify(noSalesTerms.sort((a, b) => b.spend - a.spend).slice(0, 30).map(t => ({
   search_term: t.customer_search_term,
+  campaign: t.campaign_name,
+  ad_group: t.ad_group_name,
   targeting: t.targeting,
+  sku: t.sku,
   spend: `${currencySymbol}${t.spend.toFixed(2)}`,
   clicks: t.clicks,
   impressions: t.impressions
@@ -201,8 +221,10 @@ ${JSON.stringify(noSalesTerms.sort((a, b) => b.spend - a.spend).slice(0, 30).map
   },
   "optimization_priorities": [
     {
-      "targeting": "投放词",
       "search_term": "搜索词",
+      "campaign_name": "广告活动名称",
+      "ad_group_name": "广告组名称",
+      "targeting": "投放词",
       "current_acos": 85,
       "spend": 50,
       "issue": "ACOS 过高但有转化",
@@ -231,6 +253,7 @@ export function buildBidStrategistPrompt(
   // 按投放词聚合数据
   const targetingMap = new Map<string, {
     campaigns: Set<string>;
+    adGroups: Set<string>;
     totalSpend: number;
     totalSales: number;
     totalOrders: number;
@@ -245,6 +268,7 @@ export function buildBidStrategistPrompt(
     if (!targetingMap.has(key)) {
       targetingMap.set(key, {
         campaigns: new Set(),
+        adGroups: new Set(),
         totalSpend: 0,
         totalSales: 0,
         totalOrders: 0,
@@ -256,6 +280,7 @@ export function buildBidStrategistPrompt(
     }
     const data = targetingMap.get(key)!;
     if (t.campaign_name) data.campaigns.add(t.campaign_name);
+    if (t.ad_group_name) data.adGroups.add(t.ad_group_name);
     data.totalSpend += t.spend;
     data.totalSales += t.sales;
     data.totalOrders += t.orders;
@@ -269,6 +294,7 @@ export function buildBidStrategistPrompt(
     .map(([targeting, data]) => ({
       targeting,
       campaigns: Array.from(data.campaigns),
+      ad_groups: Array.from(data.adGroups),
       spend: `${currencySymbol}${data.totalSpend.toFixed(2)}`,
       sales: `${currencySymbol}${data.totalSales.toFixed(2)}`,
       orders: data.totalOrders,
@@ -330,6 +356,7 @@ ${JSON.stringify(aggregatedData, null, 2)}
     {
       "targeting": "投放词",
       "campaign_name": "广告活动名称",
+      "ad_group_name": "广告组名称",
       "current_performance": {
         "acos": 45,
         "conversion_rate": 8,
@@ -354,6 +381,10 @@ ${JSON.stringify(aggregatedData, null, 2)}
   "insights": ["洞察1", "洞察2"]
 }
 \`\`\`
+
+**重要提示：**
+- 每条建议必须包含 campaign_name 和 ad_group_name，从输入数据的 campaigns 和 ad_groups 数组中选取
+- 如果一个投放词存在多个活动/广告组，选择花费最高的那个
 
 请严格按照上述 JSON 格式输出，不要添加额外的解释文字。确保 JSON 完整有效。`;
 }
@@ -412,12 +443,21 @@ ${JSON.stringify(bidStrategy, null, 2)}
 - keyword_opportunities: 最多 10 条（按潜力排序）
 - key_insights: 最多 5 条
 
+**match_type_suggestion 字段规则（必须严格遵守）：**
+- "exact"（精准否定）：只否定该搜索词的完全匹配。适用于大多数情况，特别是高花费零转化的具体搜索词
+- "phrase"（词组否定）：否定包含该词组的所有搜索词。仅当该词组的所有变体都表现差时使用
+- **重要：reason 中的描述必须与 match_type_suggestion 保持一致！如果建议"exact"则 reason 中应写"精准否定"，如果建议"phrase"则 reason 中应写"词组否定"**
+
 \`\`\`json
 {
   "negative_words": [
     {
       "search_term": "搜索词",
-      "reason": "综合原因说明",
+      "campaign_name": "广告活动名称",
+      "ad_group_name": "广告组名称",
+      "targeting": "投放词",
+      "sku": "SKU（如有）",
+      "reason": "高花费零转化，建议精准否定",
       "risk_level": "high",
       "spend_wasted": 25.00,
       "match_type_suggestion": "exact",
@@ -428,6 +468,7 @@ ${JSON.stringify(bidStrategy, null, 2)}
     {
       "targeting": "投放词",
       "campaign_name": "广告活动名称",
+      "ad_group_name": "广告组名称",
       "current_performance": {
         "acos": 45,
         "conversion_rate": 8,
@@ -443,6 +484,9 @@ ${JSON.stringify(bidStrategy, null, 2)}
   "keyword_opportunities": [
     {
       "search_term": "高潜力搜索词",
+      "campaign_name": "广告活动名称",
+      "ad_group_name": "广告组名称",
+      "targeting": "投放词",
       "performance": { "orders": 5, "acos": 12, "conversion_rate": 10 },
       "suggestion": "添加为精准匹配关键词",
       "match_type": "exact",
@@ -505,7 +549,7 @@ export interface AnalysisSession {
   };
   startTime: number;
   endTime?: number;
-  status: 'idle' | 'running' | 'completed' | 'error' | 'partial';
+  status: 'idle' | 'running' | 'completed' | 'error' | 'partial' | 'cancelled';
   finalResult?: any;
   // 多国家分析相关
   currentCountry?: string;

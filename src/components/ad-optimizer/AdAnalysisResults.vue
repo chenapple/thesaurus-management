@@ -188,7 +188,7 @@
         </div>
 
         <el-table :data="currentNegativeWords" style="width: 100%">
-          <el-table-column prop="search_term" min-width="200">
+          <el-table-column prop="search_term" min-width="280">
             <template #header>
               <el-tooltip placement="top" :show-after="300">
                 <template #content>
@@ -213,10 +213,12 @@
             </template>
             <template #default="{ row }">
               <div class="search-term-cell">
-                <span class="copyable-text" @click="copyToClipboard(row.search_term)">
-                  {{ formatAsin(row.search_term) }}
-                  <el-icon class="copy-icon"><CopyDocument /></el-icon>
-                </span>
+                <el-tooltip :content="formatAsin(row.search_term)" placement="top" :show-after="500">
+                  <span class="copyable-text search-term-text" @click="copyToClipboard(row.search_term)">
+                    {{ formatAsin(row.search_term) }}
+                    <el-icon class="copy-icon"><CopyDocument /></el-icon>
+                  </span>
+                </el-tooltip>
                 <el-tag
                   size="small"
                   :type="getRiskType(row.risk_level)"
@@ -226,7 +228,22 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column prop="reason" label="原因" min-width="200" />
+          <el-table-column prop="ad_group_name" label="广告组" min-width="150">
+            <template #default="{ row }">
+              <span v-if="row.ad_group_name">{{ row.ad_group_name }}</span>
+              <span v-else class="no-data">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="targeting" label="投放词" min-width="150">
+            <template #default="{ row }">
+              <span v-if="row.targeting" class="copyable-text" @click="copyToClipboard(row.targeting)">
+                {{ formatAsin(row.targeting) }}
+                <el-icon class="copy-icon"><CopyDocument /></el-icon>
+              </span>
+              <span v-else class="no-data">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="reason" label="原因" min-width="280" />
           <el-table-column prop="spend_wasted" label="浪费花费" width="100">
             <template #default="{ row }">
               <span class="money-red">{{ currentCurrency }}{{ row.spend_wasted.toFixed(2) }}</span>
@@ -275,6 +292,12 @@
             </template>
           </el-table-column>
           <el-table-column prop="campaign_name" label="广告活动" min-width="150" />
+          <el-table-column prop="ad_group_name" label="广告组" min-width="150">
+            <template #default="{ row }">
+              <span v-if="row.ad_group_name">{{ row.ad_group_name }}</span>
+              <span v-else class="no-data">-</span>
+            </template>
+          </el-table-column>
           <el-table-column label="当前表现" width="200">
             <template #default="{ row }">
               <div class="performance-cell">
@@ -304,7 +327,7 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="reason" label="原因" min-width="200" />
+          <el-table-column prop="reason" label="原因" min-width="280" />
         </el-table>
       </el-tab-pane>
 
@@ -315,12 +338,26 @@
         </div>
 
         <el-table :data="currentKeywordOpportunities" style="width: 100%">
-          <el-table-column prop="search_term" label="搜索词" min-width="200">
+          <el-table-column prop="search_term" label="搜索词" min-width="280">
             <template #default="{ row }">
-              <span class="copyable-text" @click="copyToClipboard(row.search_term)">
-                {{ formatAsin(row.search_term) }}
-                <el-icon class="copy-icon"><CopyDocument /></el-icon>
-              </span>
+              <el-tooltip :content="formatAsin(row.search_term)" placement="top" :show-after="500">
+                <span class="copyable-text search-term-text" @click="copyToClipboard(row.search_term)">
+                  {{ formatAsin(row.search_term) }}
+                  <el-icon class="copy-icon"><CopyDocument /></el-icon>
+                </span>
+              </el-tooltip>
+            </template>
+          </el-table-column>
+          <el-table-column prop="campaign_name" label="广告活动" min-width="150">
+            <template #default="{ row }">
+              <span v-if="row.campaign_name">{{ row.campaign_name }}</span>
+              <span v-else class="no-data">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="ad_group_name" label="广告组" min-width="150">
+            <template #default="{ row }">
+              <span v-if="row.ad_group_name">{{ row.ad_group_name }}</span>
+              <span v-else class="no-data">-</span>
             </template>
           </el-table-column>
           <el-table-column label="表现数据" width="200">
@@ -696,6 +733,14 @@ defineExpose({
   opacity: 1;
 }
 
+/* 搜索词文本截断 */
+.search-term-text {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 活动列表样式 */
 .campaigns-list {
   display: flex;
@@ -724,7 +769,8 @@ defineExpose({
   text-decoration: underline;
 }
 
-.no-campaign {
+.no-campaign,
+.no-data {
   color: var(--el-text-color-placeholder);
 }
 

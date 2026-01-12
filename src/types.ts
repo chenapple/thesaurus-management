@@ -506,6 +506,7 @@ export interface ScCompetitor {
   rating: string | null;
   review_count: number | null;
   bsr_rank: string | null;
+  date_first_available: string | null;  // 上架时间
   image_url: string | null;
   bullets: string | null;         // JSON array
   description: string | null;
@@ -806,6 +807,7 @@ export interface AdSearchTerm {
   conversion_rate: number;        // 转化率
   cpc: number;                    // CPC
   report_date: string | null;     // 报告日期
+  sku: string | null;             // SKU
   imported_at?: string;           // 导入时间
 }
 
@@ -817,12 +819,18 @@ export interface NegativeWordSuggestion {
   spend_wasted: number;
   match_type_suggestion: 'exact' | 'phrase';
   campaigns_affected: string[];
+  // 精准定位字段
+  campaign_name?: string;         // 广告活动名称
+  ad_group_name?: string;         // 广告组名称
+  targeting?: string;             // 投放词
+  sku?: string;                   // SKU
 }
 
 // 竞价调整建议
 export interface BidAdjustment {
   targeting: string;
   campaign_name: string;
+  ad_group_name?: string;         // 广告组名称
   current_performance: {
     acos: number;
     conversion_rate: number;
@@ -838,6 +846,9 @@ export interface BidAdjustment {
 // 关键词机会
 export interface KeywordOpportunity {
   search_term: string;
+  campaign_name?: string;         // 广告活动名称
+  ad_group_name?: string;         // 广告组名称
+  targeting?: string;             // 投放词
   performance: {
     orders: number;
     conversion_rate: number;

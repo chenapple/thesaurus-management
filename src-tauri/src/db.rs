@@ -4042,6 +4042,7 @@ pub fn init_smart_copy_tables(conn: &Connection) -> Result<()> {
             rating TEXT,
             review_count INTEGER,
             bsr_rank TEXT,
+            date_first_available TEXT,
             image_url TEXT,
             bullets TEXT,
             description TEXT,
@@ -4093,6 +4094,9 @@ pub fn init_smart_copy_tables(conn: &Connection) -> Result<()> {
 
     // 迁移：给 sc_competitors 添加 image_url 字段（如果不存在）
     let _ = conn.execute("ALTER TABLE sc_competitors ADD COLUMN image_url TEXT", []);
+
+    // 迁移：给 sc_competitors 添加 date_first_available 字段（上架时间）
+    let _ = conn.execute("ALTER TABLE sc_competitors ADD COLUMN date_first_available TEXT", []);
 
     // 迁移：给 sc_projects 添加 product_id 字段（关联关键词数据）
     let _ = conn.execute("ALTER TABLE sc_projects ADD COLUMN product_id INTEGER REFERENCES products(id)", []);
@@ -4147,6 +4151,7 @@ pub fn init_smart_copy_tables(conn: &Connection) -> Result<()> {
             conversion_rate REAL DEFAULT 0,
             cpc REAL DEFAULT 0,
             report_date TEXT,
+            sku TEXT,
             imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (project_id) REFERENCES ad_projects(id) ON DELETE CASCADE
         );
@@ -4171,9 +4176,10 @@ pub fn init_smart_copy_tables(conn: &Connection) -> Result<()> {
         "
     )?;
 
-    // 迁移：给 ad_search_terms 添加 portfolio_name 和 country 字段（用于现有数据库）
+    // 迁移：给 ad_search_terms 添加 portfolio_name、country、sku 字段（用于现有数据库）
     let _ = conn.execute("ALTER TABLE ad_search_terms ADD COLUMN portfolio_name TEXT", []);
     let _ = conn.execute("ALTER TABLE ad_search_terms ADD COLUMN country TEXT", []);
+    let _ = conn.execute("ALTER TABLE ad_search_terms ADD COLUMN sku TEXT", []);
 
     Ok(())
 }
@@ -4385,6 +4391,7 @@ pub struct ScCompetitor {
     pub rating: Option<String>,
     pub review_count: Option<i64>,
     pub bsr_rank: Option<String>,
+    pub date_first_available: Option<String>,
     pub image_url: Option<String>,
     pub bullets: Option<String>,  // JSON array
     pub description: Option<String>,
@@ -4406,7 +4413,7 @@ pub fn sc_get_competitors(project_id: i64) -> Result<Vec<ScCompetitor>> {
     let conn = get_db().lock();
     let mut stmt = conn.prepare(
         "SELECT id, project_id, asin, competitor_type, title, price, rating, review_count,
-                bsr_rank, image_url, bullets, description, fetched_at
+                bsr_rank, date_first_available, image_url, bullets, description, fetched_at
          FROM sc_competitors
          WHERE project_id = ?1
          ORDER BY id ASC"
@@ -4423,10 +4430,11 @@ pub fn sc_get_competitors(project_id: i64) -> Result<Vec<ScCompetitor>> {
             rating: row.get(6)?,
             review_count: row.get(7)?,
             bsr_rank: row.get(8)?,
-            image_url: row.get(9)?,
-            bullets: row.get(10)?,
-            description: row.get(11)?,
-            fetched_at: row.get(12)?,
+            date_first_available: row.get(9)?,
+            image_url: row.get(10)?,
+            bullets: row.get(11)?,
+            description: row.get(12)?,
+            fetched_at: row.get(13)?,
         })
     })?;
 
@@ -4441,6 +4449,7 @@ pub fn sc_update_competitor_info(
     rating: Option<&str>,
     review_count: Option<i64>,
     bsr_rank: Option<&str>,
+    date_first_available: Option<&str>,
     image_url: Option<&str>,
     bullets: Option<&str>,
     description: Option<&str>,
@@ -4449,9 +4458,9 @@ pub fn sc_update_competitor_info(
     conn.execute(
         "UPDATE sc_competitors SET
             title = ?1, price = ?2, rating = ?3, review_count = ?4,
-            bsr_rank = ?5, image_url = ?6, bullets = ?7, description = ?8, fetched_at = CURRENT_TIMESTAMP
-         WHERE id = ?9",
-        rusqlite::params![title, price, rating, review_count, bsr_rank, image_url, bullets, description, id],
+            bsr_rank = ?5, date_first_available = ?6, image_url = ?7, bullets = ?8, description = ?9, fetched_at = CURRENT_TIMESTAMP
+         WHERE id = ?10",
+        rusqlite::params![title, price, rating, review_count, bsr_rank, date_first_available, image_url, bullets, description, id],
     )?;
     Ok(())
 }
@@ -4821,6 +4830,7 @@ pub struct AdSearchTerm {
     pub conversion_rate: f64,
     pub cpc: f64,
     pub report_date: Option<String>,
+    pub sku: Option<String>,              // SKU
     pub imported_at: Option<String>,
 }
 
@@ -4957,8 +4967,8 @@ pub fn ad_import_search_terms(project_id: i64, search_terms: Vec<AdSearchTerm>) 
             "INSERT INTO ad_search_terms (
                 project_id, portfolio_name, campaign_name, ad_group_name, country, targeting, match_type,
                 customer_search_term, impressions, clicks, ctr, spend, sales,
-                orders, acos, roas, conversion_rate, cpc, report_date
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                orders, acos, roas, conversion_rate, cpc, report_date, sku
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             rusqlite::params![
                 project_id,
                 term.portfolio_name,
@@ -4978,7 +4988,8 @@ pub fn ad_import_search_terms(project_id: i64, search_terms: Vec<AdSearchTerm>) 
                 term.roas,
                 term.conversion_rate,
                 term.cpc,
-                term.report_date
+                term.report_date,
+                term.sku
             ],
         )?;
         count += 1;
@@ -4999,7 +5010,7 @@ pub fn ad_get_search_terms(project_id: i64) -> Result<Vec<AdSearchTerm>> {
     let mut stmt = conn.prepare(
         "SELECT id, project_id, portfolio_name, campaign_name, ad_group_name, country, targeting, match_type,
                 customer_search_term, impressions, clicks, ctr, spend, sales,
-                orders, acos, roas, conversion_rate, cpc, report_date, imported_at
+                orders, acos, roas, conversion_rate, cpc, report_date, sku, imported_at
          FROM ad_search_terms
          WHERE project_id = ?1
          ORDER BY spend DESC"
@@ -5027,7 +5038,8 @@ pub fn ad_get_search_terms(project_id: i64) -> Result<Vec<AdSearchTerm>> {
             conversion_rate: row.get(17)?,
             cpc: row.get(18)?,
             report_date: row.get(19)?,
-            imported_at: row.get(20)?,
+            sku: row.get(20)?,
+            imported_at: row.get(21)?,
         })
     })?;
 

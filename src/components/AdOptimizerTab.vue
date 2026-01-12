@@ -167,12 +167,18 @@
                 <el-option v-for="model in availableModels" :key="model" :label="model" :value="model" />
               </el-select>
               <el-button
+                v-if="!isAnalyzing"
                 type="primary"
                 @click="startAnalysis"
-                :loading="isAnalyzing"
-                :disabled="isAnalyzing"
               >
                 {{ analysisResult ? '重新分析' : '开始分析' }}
+              </el-button>
+              <el-button
+                v-else
+                type="danger"
+                @click="handleStopAnalysis"
+              >
+                停止分析
               </el-button>
               <el-button
                 v-if="failedCountries.length > 0 && !isAnalyzing"
@@ -202,6 +208,7 @@
           <AdAnalysisCanvas
             v-if="isAnalyzing || analysisSession"
             :session="analysisSession"
+            @stop="handleStopAnalysis"
           />
 
           <!-- 分析结果（支持边分析边显示） -->
@@ -268,7 +275,7 @@ import {
   adSaveAnalysis,
   adGetAnalysis,
 } from '../api';
-import { runMultiAgentAnalysis, retryFailedCountries } from '../ad-analysis';
+import { runMultiAgentAnalysis, retryFailedCountries, stopAnalysis } from '../ad-analysis';
 import type { CountryAnalysisResult } from '../types';
 import AdDataImport from './ad-optimizer/AdDataImport.vue';
 import AdAnalysisCanvas from './ad-optimizer/AdAnalysisCanvas.vue';
@@ -481,6 +488,27 @@ function reimportData() {
   });
 }
 
+// 停止 AI 分析
+function handleStopAnalysis() {
+  ElMessageBox.confirm(
+    '确定要停止当前的分析吗？已完成的国家结果会保留。',
+    '停止分析',
+    {
+      confirmButtonText: '停止',
+      cancelButtonText: '继续分析',
+      type: 'warning',
+    }
+  ).then(() => {
+    const stopped = stopAnalysis();
+    if (stopped) {
+      ElMessage.info('分析已停止');
+      isAnalyzing.value = false;
+    }
+  }).catch(() => {
+    // 用户取消，继续分析
+  });
+}
+
 // 开始 AI 分析
 async function startAnalysis() {
   if (!currentProject.value) return;
@@ -523,6 +551,10 @@ async function startAnalysis() {
         if (session.finalResult) {
           analysisResult.value = session.finalResult;
         }
+        // 检查是否被取消
+        if (session.status === 'cancelled') {
+          isAnalyzing.value = false;
+        }
       },
       (country, countryResult) => {
         // 单个国家完成回调
@@ -534,7 +566,7 @@ async function startAnalysis() {
     if (result) {
       analysisResult.value = result;
 
-      // 保存分析结果
+      // 保存分析结果（无论是完成还是取消，都保存已有结果）
       await adSaveAnalysis(
         currentProject.value.id,
         'final_result',
@@ -543,13 +575,22 @@ async function startAnalysis() {
         selectedModel.value
       );
 
-      if (failedCountries.value.length > 0) {
+      // 根据状态显示不同消息
+      if (analysisSession.value?.status === 'cancelled') {
+        if (completedResults.value.length > 0) {
+          ElMessage.info(`分析已停止，已保存 ${completedResults.value.length} 个国家的结果`);
+        }
+      } else if (failedCountries.value.length > 0) {
         ElMessage.warning(`分析部分完成，${failedCountries.value.length} 个国家失败，可点击重试`);
       } else {
         ElMessage.success('分析完成');
       }
     }
   } catch (error) {
+    // 忽略取消导致的错误
+    if (error instanceof Error && error.name === 'AbortError') {
+      return;
+    }
     console.error('分析失败:', error);
     const errorMsg = typeof error === 'string' ? error : (error as Error)?.message || String(error);
     ElMessage.error('分析失败: ' + errorMsg);
