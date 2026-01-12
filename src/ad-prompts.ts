@@ -77,6 +77,19 @@ ${JSON.stringify(
    - 低展示高转化（需要加大投放）
    - 精准匹配候选词（已有好表现的广泛/词组匹配词）
 
+3. **否定原因分类（reason_category）- 必须为每个否定词指定**
+   - wrong_category: 产品品类不匹配（如搜"大鼠"卖"小鼠"）
+   - wrong_scenario: 使用场景不匹配（如搜"实验室用"卖家用产品）
+   - non_target_customer: 非目标客户群（如搜"批发"但只零售）
+   - low_intent: 低购买意图词（如含"免费"、"怎么做"、"DIY"）
+   - competitor: 竞品品牌词
+   - other: 纯数据驱动（高花费零转化等，无法判断具体原因）
+
+4. **否定层级建议（negation_level）- 必须为每个否定词指定**
+   - ad_group: 仅在该广告组中不相关，其他广告组可能有效
+   - campaign: 在整个活动中都不相关，建议活动级否定
+   - account: 全账户都应否定（谨慎使用，仅用于明确的不相关词如竞品词）
+
 ## 输出格式（必须是有效的 JSON）
 
 **重要：为控制输出长度，请限制数量：**
@@ -102,7 +115,10 @@ ${JSON.stringify(
       "risk_level": "high",
       "spend_wasted": 12.5,
       "match_type_suggestion": "exact",
-      "campaigns_affected": ["Campaign A"]
+      "campaigns_affected": ["Campaign A"],
+      "reason_category": "other",
+      "negation_level": "campaign",
+      "negation_level_reason": "该词在整个活动中都不相关"
     }
   ],
   "high_potential": [
@@ -344,6 +360,16 @@ ${JSON.stringify(aggregatedData, null, 2)}
    - ACOS 在目标 ± 30% 范围内
    - 表现稳定
 
+5. **调整等级（adjustment_level）- 必须为每个建议指定**
+   - L1（轻微试探）: 点击 < 20 或数据不足，建议小幅调整观察
+   - L2（明确调整）: 点击 >= 20，数据支持明确，可直接执行
+   - L3（激进策略）: 点击 >= 50 且趋势极端（ACOS > 200% 或 ACOS < 目标*0.5），需立即行动
+
+6. **信心值（confidence）- 0到1的数值**
+   - 基于点击量: 点击越多信心越高（20次+为0.7基础，50次+为0.85基础）
+   - 基于ACOS偏离度: 偏离目标越远，判断越确定（+0.1）
+   - 基于转化率稳定性: 有转化记录加分（+0.05~0.1）
+
 ## 输出格式（必须是有效的 JSON）
 
 **重要：为控制输出长度，请限制数量：**
@@ -368,7 +394,10 @@ ${JSON.stringify(aggregatedData, null, 2)}
       "suggestion": "decrease",
       "adjustment_percent": -20,
       "reason": "ACOS 超出目标 50%，建议降价观察",
-      "priority": "high"
+      "priority": "high",
+      "adjustment_level": "L2",
+      "confidence": 0.85,
+      "confidence_factors": ["基于50次点击", "ACOS持续高于目标"]
     }
   ],
   "summary": {
@@ -435,6 +464,26 @@ ${JSON.stringify(bidStrategy, null, 2)}
 3. 提取关键词机会并评估潜力
 4. 生成执行摘要和关键洞察
 
+## 新增字段要求
+
+### 否定词必须包含：
+- reason_category: 原因分类（wrong_category/wrong_scenario/non_target_customer/low_intent/competitor/other）
+- negation_level: 否定层级建议（ad_group/campaign/account）
+- negation_level_reason: 为什么建议这个层级
+
+### 竞价调整必须包含：
+- adjustment_level: 调整等级（L1轻微试探/L2明确调整/L3激进策略）
+- confidence: 信心值（0-1）
+- confidence_factors: 信心来源说明数组
+
+### 新词机会必须包含：
+- opportunity_type: 机会类型
+  - expansion（扩量词）: ACOS < 目标*0.8 且订单>=3，已验证可扩量
+  - testing（测试词）: 订单1-2但转化率高，需单独测试验证
+  - structure（结构词）: 当前是Broad匹配但表现好，适合升级匹配方式
+- recommended_match_type: 推荐匹配方式（exact/phrase/broad）
+- match_type_reason: 推荐原因
+
 ## 输出格式（必须是有效的 JSON）
 
 **重要：为控制输出长度，请限制数量：**
@@ -461,7 +510,10 @@ ${JSON.stringify(bidStrategy, null, 2)}
       "risk_level": "high",
       "spend_wasted": 25.00,
       "match_type_suggestion": "exact",
-      "campaigns_affected": ["Campaign A", "Campaign B"]
+      "campaigns_affected": ["Campaign A", "Campaign B"],
+      "reason_category": "other",
+      "negation_level": "campaign",
+      "negation_level_reason": "该词在整个活动中都不相关"
     }
   ],
   "bid_adjustments": [
@@ -478,7 +530,10 @@ ${JSON.stringify(bidStrategy, null, 2)}
       "suggestion": "decrease",
       "adjustment_percent": -20,
       "reason": "ACOS 超标，需要降价",
-      "priority": "high"
+      "priority": "high",
+      "adjustment_level": "L2",
+      "confidence": 0.85,
+      "confidence_factors": ["基于50次点击", "ACOS持续高于目标"]
     }
   ],
   "keyword_opportunities": [
@@ -490,7 +545,10 @@ ${JSON.stringify(bidStrategy, null, 2)}
       "performance": { "orders": 5, "acos": 12, "conversion_rate": 10 },
       "suggestion": "添加为精准匹配关键词",
       "match_type": "exact",
-      "estimated_potential": "高"
+      "estimated_potential": "高",
+      "opportunity_type": "expansion",
+      "recommended_match_type": "exact",
+      "match_type_reason": "该词已有5单转化，ACOS仅12%，建议精准匹配锁定"
     }
   ],
   "summary": {

@@ -623,7 +623,7 @@ async function retryFailed() {
       selectedProvider.value,
       selectedModel.value,
       countriesToRetry,
-      completedResults.value,
+      [...completedResults.value],  // 传入副本，避免回调修改时造成重复
       (session) => {
         analysisSession.value = session;
         if (session.countryProgress?.failedCountries) {

@@ -35,7 +35,7 @@
             </el-tooltip>
           </template>
           <template #default="{ row }">
-            <div class="search-term-cell">
+            <div class="search-term-cell-vertical">
               <el-tooltip :content="formatAsin(row.search_term)" placement="top" :show-after="500">
                 <span class="copyable-text search-term-text" @click="copyToClipboard(row.search_term)">
                   {{ formatAsin(row.search_term) }}
@@ -45,6 +45,7 @@
               <el-tag
                 size="small"
                 :type="getRiskType(row.risk_level)"
+                class="risk-tag-below"
               >
                 {{ row.risk_level === 'high' ? '高风险' : row.risk_level === 'medium' ? '中风险' : '低风险' }}
               </el-tag>
@@ -66,7 +67,25 @@
             <span v-else class="no-data">-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="reason" label="原因" min-width="280" />
+        <el-table-column prop="reason_category" label="原因分类" width="110">
+          <template #default="{ row }">
+            <el-tag v-if="row.reason_category" :type="getReasonCategoryType(row.reason_category)" size="small">
+              {{ formatReasonCategory(row.reason_category) }}
+            </el-tag>
+            <span v-else class="no-data">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="negation_level" label="否定层级" width="100">
+          <template #default="{ row }">
+            <el-tooltip v-if="row.negation_level" :content="row.negation_level_reason || ''" placement="top" :disabled="!row.negation_level_reason">
+              <el-tag :type="getNegationLevelType(row.negation_level)" size="small">
+                {{ formatNegationLevel(row.negation_level) }}
+              </el-tag>
+            </el-tooltip>
+            <span v-else class="no-data">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="reason" label="原因" min-width="220" />
         <el-table-column prop="spend_wasted" label="浪费花费" width="100">
           <template #default="{ row }">
             <span class="money-red">{{ countryResult.currency.symbol }}{{ row.spend_wasted.toFixed(2) }}</span>
@@ -150,7 +169,25 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="reason" label="原因" min-width="280" />
+        <el-table-column prop="adjustment_level" label="等级" width="70">
+          <template #default="{ row }">
+            <el-tag v-if="row.adjustment_level" :type="getAdjustmentLevelType(row.adjustment_level)" size="small">
+              {{ row.adjustment_level }}
+            </el-tag>
+            <span v-else class="no-data">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="confidence" label="信心" width="80">
+          <template #default="{ row }">
+            <el-tooltip v-if="row.confidence != null" :content="row.confidence_factors?.join('、') || ''" placement="top" :disabled="!row.confidence_factors?.length">
+              <span :style="{ color: getConfidenceColor(row.confidence) }">
+                {{ (row.confidence * 100).toFixed(0) }}%
+              </span>
+            </el-tooltip>
+            <span v-else class="no-data">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="reason" label="原因" min-width="220" />
       </el-table>
     </el-tab-pane>
 
@@ -192,19 +229,22 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="match_type" label="建议匹配" width="100">
+        <el-table-column prop="opportunity_type" label="机会类型" width="100">
           <template #default="{ row }">
-            <el-tag size="small">{{ formatMatchType(row.match_type) }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="estimated_potential" label="潜力评估" width="100">
-          <template #default="{ row }">
-            <el-tag
-              :type="getPotentialType(row.estimated_potential)"
-              size="small"
-            >
+            <el-tag v-if="row.opportunity_type" :type="getOpportunityTypeStyle(row.opportunity_type)" size="small">
+              {{ formatOpportunityType(row.opportunity_type) }}
+            </el-tag>
+            <el-tag v-else :type="getPotentialType(row.estimated_potential)" size="small">
               {{ formatPotential(row.estimated_potential) }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="recommended_match_type" label="推荐匹配" width="100">
+          <template #default="{ row }">
+            <el-tooltip v-if="row.recommended_match_type" :content="row.match_type_reason || ''" placement="top" :disabled="!row.match_type_reason">
+              <el-tag size="small" type="info">{{ formatMatchType(row.recommended_match_type) }}</el-tag>
+            </el-tooltip>
+            <el-tag v-else size="small">{{ formatMatchType(row.match_type) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="suggestion" label="建议操作" min-width="200" />
@@ -311,6 +351,93 @@ function getPotentialType(potential: string): 'success' | 'warning' | 'info' {
   if (normalized === 'medium' || potential === '中') return 'warning';
   return 'info';
 }
+
+// ========== 新增字段格式化函数 ==========
+
+// 否定原因分类格式化
+function formatReasonCategory(category: string): string {
+  const map: Record<string, string> = {
+    'wrong_category': '错品类',
+    'wrong_scenario': '错场景',
+    'non_target_customer': '非目标',
+    'low_intent': '低意图',
+    'competitor': '竞品词',
+    'other': '数据驱动',
+  };
+  return map[category] || category;
+}
+
+// 否定原因分类标签类型
+function getReasonCategoryType(category: string): 'danger' | 'warning' | 'info' | 'success' {
+  switch (category) {
+    case 'wrong_category':
+    case 'wrong_scenario':
+      return 'danger';
+    case 'non_target_customer':
+    case 'competitor':
+      return 'warning';
+    case 'low_intent':
+      return 'info';
+    default:
+      return 'info';
+  }
+}
+
+// 否定层级格式化
+function formatNegationLevel(level: string): string {
+  const map: Record<string, string> = {
+    'ad_group': '广告组',
+    'campaign': '活动',
+    'account': '账户⚠️',
+  };
+  return map[level] || level;
+}
+
+// 否定层级标签类型
+function getNegationLevelType(level: string): 'danger' | 'warning' | 'info' {
+  switch (level) {
+    case 'account': return 'danger';
+    case 'campaign': return 'warning';
+    default: return 'info';
+  }
+}
+
+// 调整等级标签类型
+function getAdjustmentLevelType(level: string): 'success' | 'warning' | 'danger' {
+  switch (level) {
+    case 'L1': return 'success';
+    case 'L2': return 'warning';
+    case 'L3': return 'danger';
+    default: return 'warning';
+  }
+}
+
+// 信心值颜色
+function getConfidenceColor(confidence: number): string {
+  if (confidence >= 0.8) return 'var(--el-color-success)';
+  if (confidence >= 0.6) return 'var(--el-color-warning)';
+  return 'var(--el-text-color-secondary)';
+}
+
+// 机会类型格式化
+function formatOpportunityType(type: string): string {
+  const map: Record<string, string> = {
+    'expansion': '扩量词',
+    'testing': '测试词',
+    'structure': '结构词',
+  };
+  return map[type] || type;
+}
+
+// 机会类型标签样式
+function getOpportunityTypeStyle(type: string): 'success' | 'warning' | 'info' {
+  switch (type) {
+    case 'expansion': return 'success';
+    case 'testing': return 'warning';
+    case 'structure': return 'info';
+    default: return 'info';
+  }
+}
 </script>
 
 <style scoped>
@@ -337,6 +464,18 @@ function getPotentialType(potential: string): 'success' | 'warning' | 'info' {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 垂直布局：标签在搜索词下方 */
+.search-term-cell-vertical {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.risk-tag-below {
+  margin-top: 2px;
 }
 
 /* 搜索词文本截断 */

@@ -824,6 +824,11 @@ export interface NegativeWordSuggestion {
   ad_group_name?: string;         // 广告组名称
   targeting?: string;             // 投放词
   sku?: string;                   // SKU
+  // 否定原因分类
+  reason_category?: 'wrong_category' | 'wrong_scenario' | 'non_target_customer' | 'low_intent' | 'competitor' | 'other';
+  // 否定层级建议
+  negation_level?: 'ad_group' | 'campaign' | 'account';
+  negation_level_reason?: string; // 为什么建议这个层级
 }
 
 // 竞价调整建议
@@ -841,6 +846,10 @@ export interface BidAdjustment {
   adjustment_percent: number;
   reason: string;
   priority: 'high' | 'medium' | 'low';
+  // 调整等级和信心值
+  adjustment_level?: 'L1' | 'L2' | 'L3';  // L1轻微试探 L2明确调整 L3激进策略
+  confidence?: number;                     // 信心值 0-1
+  confidence_factors?: string[];           // 信心来源说明
 }
 
 // 关键词机会
@@ -857,6 +866,10 @@ export interface KeywordOpportunity {
   suggestion: string;
   match_type: string;
   estimated_potential: string;
+  // 机会类型分类
+  opportunity_type?: 'expansion' | 'testing' | 'structure';  // 扩量词/测试词/结构词
+  recommended_match_type?: 'exact' | 'phrase' | 'broad';     // 推荐匹配方式
+  match_type_reason?: string;                                 // 匹配建议原因
 }
 
 // 单个国家的分析结果

@@ -212,7 +212,7 @@
               </el-tooltip>
             </template>
             <template #default="{ row }">
-              <div class="search-term-cell">
+              <div class="search-term-cell-vertical">
                 <el-tooltip :content="formatAsin(row.search_term)" placement="top" :show-after="500">
                   <span class="copyable-text search-term-text" @click="copyToClipboard(row.search_term)">
                     {{ formatAsin(row.search_term) }}
@@ -222,6 +222,7 @@
                 <el-tag
                   size="small"
                   :type="getRiskType(row.risk_level)"
+                  class="risk-tag-below"
                 >
                   {{ row.risk_level === 'high' ? '高风险' : row.risk_level === 'medium' ? '中风险' : '低风险' }}
                 </el-tag>
@@ -687,6 +688,18 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 垂直布局：标签在搜索词下方 */
+.search-term-cell-vertical {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.risk-tag-below {
+  margin-top: 2px;
 }
 
 .performance-cell {
