@@ -466,7 +466,7 @@ function isCountryFailed(country: string): boolean {
 .connector-branch {
   display: flex;
   justify-content: center;
-  gap: 120px;
+  gap: 240px;  /* 与节点中心间距匹配：180px(宽度) + 60px(间距) */
 }
 
 .branch-line {

@@ -1023,8 +1023,8 @@ let unlistenDragDrop: UnlistenFn | null = null;
 async function setupDragDrop() {
   const webview = getCurrentWebview();
   unlistenDragDrop = await webview.onDragDropEvent(async (event) => {
-    // 知识库页面不处理 Excel 拖拽导入（有自己的拖拽功能）
-    if (viewMode.value === 'knowledge') {
+    // 全局 Excel 拖拽导入只在关键词/词根视图起作用
+    if (!['keywords', 'roots'].includes(viewMode.value)) {
       isDragging.value = false;
       return;
     }
@@ -4040,6 +4040,7 @@ h1, h2, h3, h4, h5, h6,
 
 .help-search {
   margin: 12px;
+  width: calc(100% - 24px);
 }
 
 .help-menu {

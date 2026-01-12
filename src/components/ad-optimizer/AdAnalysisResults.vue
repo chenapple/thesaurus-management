@@ -188,7 +188,29 @@
         </div>
 
         <el-table :data="currentNegativeWords" style="width: 100%">
-          <el-table-column prop="search_term" label="搜索词" min-width="200">
+          <el-table-column prop="search_term" min-width="200">
+            <template #header>
+              <el-tooltip placement="top" :show-after="300">
+                <template #content>
+                  <div class="risk-tooltip">
+                    <div class="risk-title">风险等级判定规则</div>
+                    <div class="risk-item high">
+                      <span class="risk-label">高风险：</span>
+                      <span>高花费零转化（花费 > 平均值且无订单），或 ACOS > 200%</span>
+                    </div>
+                    <div class="risk-item medium">
+                      <span class="risk-label">中风险：</span>
+                      <span>低转化率（< 1% 且点击 > 10），或 ACOS 明显偏高</span>
+                    </div>
+                    <div class="risk-item low">
+                      <span class="risk-label">低风险：</span>
+                      <span>与投放词相关性较低，或效果略差</span>
+                    </div>
+                  </div>
+                </template>
+                <span class="header-with-tip">搜索词 <el-icon class="tip-icon"><QuestionFilled /></el-icon></span>
+              </el-tooltip>
+            </template>
             <template #default="{ row }">
               <div class="search-term-cell">
                 <span class="copyable-text" @click="copyToClipboard(row.search_term)">
@@ -215,27 +237,17 @@
               <el-tag size="small">{{ row.match_type_suggestion === 'exact' ? '精准否定' : '词组否定' }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="campaigns_affected" label="影响活动" min-width="200">
+          <el-table-column prop="campaigns_affected" label="影响活动" min-width="250">
             <template #default="{ row }">
               <div v-if="row.campaigns_affected && row.campaigns_affected.length > 0" class="campaigns-list">
-                <!-- 显示前3个活动 -->
+                <!-- 显示所有活动 -->
                 <div
-                  v-for="(campaign, idx) in row.campaigns_affected.slice(0, 3)"
+                  v-for="(campaign, idx) in row.campaigns_affected"
                   :key="idx"
                   class="campaign-item"
                 >
                   {{ campaign }}
                 </div>
-                <!-- 如果超过3个，显示剩余数量 -->
-                <el-tooltip
-                  v-if="row.campaigns_affected.length > 3"
-                  :content="row.campaigns_affected.slice(3).join(', ')"
-                  placement="top"
-                >
-                  <div class="campaign-more">
-                    +{{ row.campaigns_affected.length - 3 }} 个活动
-                  </div>
-                </el-tooltip>
               </div>
               <span v-else class="no-campaign">-</span>
             </template>
@@ -345,7 +357,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue';
-import { Download, Loading, CopyDocument } from '@element-plus/icons-vue';
+import { Download, Loading, CopyDocument, QuestionFilled } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import type { AdAnalysisResult, CountryAnalysisResult } from '../../types';
 import { getCountryFlag, getCountryLabel } from '../../types';
@@ -695,11 +707,10 @@ defineExpose({
   font-size: 12px;
   color: var(--el-text-color-regular);
   line-height: 1.4;
-  padding: 2px 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 180px;
+  padding: 2px 6px;
+  background: var(--el-fill-color-light);
+  border-radius: 4px;
+  word-break: break-all;
 }
 
 .campaign-more {
@@ -775,5 +786,60 @@ defineExpose({
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* 表头提示样式 */
+.header-with-tip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: help;
+}
+
+.tip-icon {
+  font-size: 14px;
+  color: var(--el-text-color-secondary);
+}
+
+.header-with-tip:hover .tip-icon {
+  color: var(--el-color-primary);
+}
+
+/* 风险等级提示框样式 */
+.risk-tooltip {
+  max-width: 320px;
+  line-height: 1.6;
+}
+
+.risk-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.risk-item {
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.risk-item:last-child {
+  margin-bottom: 0;
+}
+
+.risk-label {
+  font-weight: 500;
+}
+
+.risk-item.high .risk-label {
+  color: #f56c6c;
+}
+
+.risk-item.medium .risk-label {
+  color: #e6a23c;
+}
+
+.risk-item.low .risk-label {
+  color: #67c23a;
 }
 </style>
