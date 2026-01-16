@@ -1,7 +1,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use chrono::{Utc, Timelike, FixedOffset};
+use chrono::{Utc, Timelike, FixedOffset, Datelike};
+use tauri::Emitter;
 
 use crate::crawler;
 use crate::db;
@@ -314,3 +315,206 @@ impl Scheduler {
 // 全局调度器实例
 use once_cell::sync::Lazy;
 pub static SCHEDULER: Lazy<Scheduler> = Lazy::new(|| Scheduler::new());
+
+// ==================== 市场调研调度器 ====================
+
+// 市场调研任务完成通知
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MarketResearchComplete {
+    pub task_id: i64,
+    pub task_name: String,
+    pub run_id: i64,
+    pub success: bool,
+    pub summary: Option<String>,
+    pub error: Option<String>,
+}
+
+// 市场调研调度器
+pub struct MarketResearchScheduler {
+    running: Arc<AtomicBool>,
+}
+
+impl MarketResearchScheduler {
+    pub fn new() -> Self {
+        Self {
+            running: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
+    pub fn start(&self, app_handle: tauri::AppHandle) {
+        if self.running.load(Ordering::SeqCst) {
+            return;
+        }
+
+        self.running.store(true, Ordering::SeqCst);
+        let running = self.running.clone();
+
+        tokio::spawn(async move {
+            while running.load(Ordering::SeqCst) {
+                // 检查是否有需要执行的任务
+                if let Ok(tasks) = db::get_pending_research_tasks() {
+                    let beijing_offset = FixedOffset::east_opt(8 * 3600).unwrap();
+                    let beijing_time = Utc::now().with_timezone(&beijing_offset);
+                    let current_hour = beijing_time.hour();
+                    let current_minute = beijing_time.minute();
+                    let current_weekday = beijing_time.weekday().num_days_from_monday(); // 0=Monday
+
+                    for task in tasks {
+                        // 解析任务的运行时间
+                        let parts: Vec<&str> = task.schedule_time.split(':').collect();
+                        if parts.len() != 2 {
+                            continue;
+                        }
+                        let target_hour: u32 = parts[0].parse().unwrap_or(0);
+                        let target_minute: u32 = parts[1].parse().unwrap_or(0);
+
+                        // 检查时间是否匹配（精确到分钟）
+                        if current_hour != target_hour || current_minute != target_minute {
+                            continue;
+                        }
+
+                        // 检查日期是否匹配
+                        let should_run = if task.schedule_type == "daily" {
+                            true
+                        } else if task.schedule_type == "weekly" {
+                            if let Some(days_json) = &task.schedule_days {
+                                if let Ok(days) = serde_json::from_str::<Vec<u32>>(days_json) {
+                                    // 转换：我们存的是0=周日,1=周一...
+                                    // chrono 的 num_days_from_monday 返回 0=Monday
+                                    let weekday_for_compare = if current_weekday == 6 { 0 } else { current_weekday + 1 };
+                                    days.contains(&weekday_for_compare)
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+
+                        if !should_run {
+                            continue;
+                        }
+
+                        // 检查是否今天已经运行过
+                        let today = beijing_time.format("%Y-%m-%d").to_string();
+                        if let Some(last_run) = &task.last_run_at {
+                            if last_run.starts_with(&today) {
+                                continue; // 今天已运行
+                            }
+                        }
+
+                        println!("[MarketResearchScheduler] 执行任务: {} (ID: {})", task.name, task.id);
+
+                        // 创建执行记录
+                        let run_id = match db::create_research_run(task.id) {
+                            Ok(id) => id,
+                            Err(e) => {
+                                eprintln!("[MarketResearchScheduler] 创建执行记录失败: {}", e);
+                                continue;
+                            }
+                        };
+
+                        // 执行 BSR 爬取
+                        let bsr_result = crawler::fetch_category_bsr(
+                            task.marketplace.clone(),
+                            task.category_id.clone(),
+                        ).await;
+
+                        if let Some(error) = &bsr_result.error {
+                            // 爬取失败
+                            let _ = db::fail_research_run(run_id, error);
+                            let _ = db::update_task_last_run(task.id, "failed");
+
+                            // 发送失败通知
+                            let _ = app_handle.emit("market_research_complete", MarketResearchComplete {
+                                task_id: task.id,
+                                task_name: task.name.clone(),
+                                run_id,
+                                success: false,
+                                summary: None,
+                                error: Some(error.clone()),
+                            });
+                            continue;
+                        }
+
+                        // 保存 BSR 快照
+                        let products_json = serde_json::to_string(&bsr_result.products).unwrap_or_default();
+                        let product_count = bsr_result.products.len() as i64;
+                        let snapshot_id = db::save_bsr_snapshot(
+                            &task.marketplace,
+                            &task.category_id,
+                            task.category_name.as_deref(),
+                            &products_json,
+                            product_count,
+                        ).ok();
+
+                        // 生成简要报告
+                        // 解析价格字符串（例如 "$19.99" -> 19.99）
+                        fn parse_price(price_str: &str) -> Option<f64> {
+                            price_str.trim_start_matches(|c: char| !c.is_ascii_digit())
+                                .parse::<f64>()
+                                .ok()
+                        }
+
+                        let prices: Vec<f64> = bsr_result.products.iter()
+                            .filter_map(|p| p.price.as_ref().and_then(|s| parse_price(s)))
+                            .collect();
+
+                        let price_info = if prices.is_empty() {
+                            "价格信息暂无".to_string()
+                        } else {
+                            let min_price = prices.iter().cloned().fold(f64::MAX, f64::min);
+                            let max_price = prices.iter().cloned().fold(0.0_f64, f64::max);
+                            format!("价格范围: ${:.2} - ${:.2}", min_price, max_price)
+                        };
+
+                        let summary = format!(
+                            "类目: {} ({})\n获取 {} 个产品\n{}",
+                            task.category_name.as_deref().unwrap_or(&task.category_id),
+                            task.marketplace,
+                            product_count,
+                            price_info,
+                        );
+
+                        // 更新执行记录
+                        let _ = db::update_research_run(
+                            run_id,
+                            "completed",
+                            Some(&summary),
+                            None, // 完整报告需要 AI 生成，暂不实现
+                            snapshot_id,
+                        );
+                        let _ = db::update_task_last_run(task.id, "completed");
+
+                        // 发送成功通知
+                        let _ = app_handle.emit("market_research_complete", MarketResearchComplete {
+                            task_id: task.id,
+                            task_name: task.name.clone(),
+                            run_id,
+                            success: true,
+                            summary: Some(summary),
+                            error: None,
+                        });
+
+                        println!("[MarketResearchScheduler] 任务完成: {} (ID: {})", task.name, task.id);
+                    }
+                }
+
+                // 每分钟检查一次
+                tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+            }
+        });
+    }
+
+    pub fn stop(&self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
+}
+
+pub static MARKET_RESEARCH_SCHEDULER: Lazy<MarketResearchScheduler> = Lazy::new(|| MarketResearchScheduler::new());

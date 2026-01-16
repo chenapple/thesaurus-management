@@ -370,6 +370,9 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
     // 初始化智能文案表
     init_smart_copy_tables(&conn)?;
 
+    // 初始化市场调研监控表
+    init_market_research_tables(&conn)?;
+
     DB.set(Mutex::new(conn))
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
@@ -2937,6 +2940,52 @@ pub fn get_monitoring_sparklines(product_id: i64, days: i64) -> Result<Vec<Monit
     Ok(sparklines)
 }
 
+// ============ 市场调研监控相关 ============
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BsrSnapshot {
+    pub id: i64,
+    pub marketplace: String,
+    pub category_id: String,
+    pub category_name: Option<String>,
+    pub snapshot_date: String,
+    pub products_json: String,
+    pub product_count: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketResearchTask {
+    pub id: i64,
+    pub name: String,
+    pub marketplace: String,
+    pub category_id: String,
+    pub category_name: Option<String>,
+    pub ai_provider: String,
+    pub ai_model: Option<String>,   // 具体模型名称
+    pub schedule_type: String,      // daily / weekly
+    pub schedule_days: Option<String>,  // JSON array like [1,3,5]
+    pub schedule_time: String,      // HH:MM
+    pub is_enabled: bool,
+    pub last_run_at: Option<String>,
+    pub last_run_status: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketResearchRun {
+    pub id: i64,
+    pub task_id: i64,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub status: String,             // running / completed / failed
+    pub report_summary: Option<String>,
+    pub report_content: Option<String>,
+    pub snapshot_id: Option<i64>,
+    pub error_message: Option<String>,
+    pub created_at: String,
+}
+
 // ============ 定时任务记录相关 ============
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5176,6 +5225,420 @@ pub fn ad_get_all_analysis(project_id: i64) -> Result<Vec<AdAnalysisResult>> {
             ai_provider: row.get(4)?,
             ai_model: row.get(5)?,
             created_at: row.get(6)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+// ============ 市场调研监控表初始化 ============
+
+fn init_market_research_tables(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        -- BSR 历史快照表
+        CREATE TABLE IF NOT EXISTS bsr_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            marketplace TEXT NOT NULL,
+            category_id TEXT NOT NULL,
+            category_name TEXT,
+            snapshot_date DATE NOT NULL,
+            products_json TEXT NOT NULL,
+            product_count INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(marketplace, category_id, snapshot_date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_bsr_snapshots_lookup
+            ON bsr_snapshots(marketplace, category_id, snapshot_date);
+
+        -- 市场调研监控任务表
+        CREATE TABLE IF NOT EXISTS market_research_tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            marketplace TEXT NOT NULL,
+            category_id TEXT NOT NULL,
+            category_name TEXT,
+            ai_provider TEXT NOT NULL,
+            ai_model TEXT,
+            schedule_type TEXT NOT NULL,
+            schedule_days TEXT,
+            schedule_time TEXT NOT NULL,
+            is_enabled INTEGER DEFAULT 1,
+            last_run_at TIMESTAMP,
+            last_run_status TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- 任务执行记录表
+        CREATE TABLE IF NOT EXISTS market_research_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            started_at TIMESTAMP NOT NULL,
+            ended_at TIMESTAMP,
+            status TEXT DEFAULT 'running',
+            report_summary TEXT,
+            report_content TEXT,
+            snapshot_id INTEGER,
+            error_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (task_id) REFERENCES market_research_tasks(id) ON DELETE CASCADE,
+            FOREIGN KEY (snapshot_id) REFERENCES bsr_snapshots(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_research_runs_task ON market_research_runs(task_id);
+        "
+    )?;
+
+    // Migration: add ai_model column if not exists (for existing databases)
+    let has_ai_model = conn
+        .prepare("SELECT ai_model FROM market_research_tasks LIMIT 1")
+        .is_ok();
+    if !has_ai_model {
+        let _ = conn.execute(
+            "ALTER TABLE market_research_tasks ADD COLUMN ai_model TEXT",
+            [],
+        );
+    }
+
+    Ok(())
+}
+
+// ============ BSR 快照 CRUD ============
+
+pub fn save_bsr_snapshot(
+    marketplace: &str,
+    category_id: &str,
+    category_name: Option<&str>,
+    products_json: &str,
+    product_count: i64,
+) -> Result<i64> {
+    let conn = get_db().lock();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+    conn.execute(
+        "INSERT OR REPLACE INTO bsr_snapshots
+         (marketplace, category_id, category_name, snapshot_date, products_json, product_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![marketplace, category_id, category_name, today, products_json, product_count],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn get_bsr_snapshot(marketplace: &str, category_id: &str, date: &str) -> Result<Option<BsrSnapshot>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, marketplace, category_id, category_name, snapshot_date, products_json, product_count, created_at
+         FROM bsr_snapshots
+         WHERE marketplace = ?1 AND category_id = ?2 AND snapshot_date = ?3"
+    )?;
+
+    let mut rows = stmt.query_map(rusqlite::params![marketplace, category_id, date], |row| {
+        Ok(BsrSnapshot {
+            id: row.get(0)?,
+            marketplace: row.get(1)?,
+            category_id: row.get(2)?,
+            category_name: row.get(3)?,
+            snapshot_date: row.get(4)?,
+            products_json: row.get(5)?,
+            product_count: row.get(6)?,
+            created_at: row.get(7)?,
+        })
+    })?;
+
+    match rows.next() {
+        Some(Ok(snapshot)) => Ok(Some(snapshot)),
+        Some(Err(e)) => Err(e.into()),
+        None => Ok(None),
+    }
+}
+
+pub fn get_bsr_history(marketplace: &str, category_id: &str, days: i32) -> Result<Vec<BsrSnapshot>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, marketplace, category_id, category_name, snapshot_date, products_json, product_count, created_at
+         FROM bsr_snapshots
+         WHERE marketplace = ?1 AND category_id = ?2
+         AND snapshot_date >= date('now', ?3)
+         ORDER BY snapshot_date DESC"
+    )?;
+
+    let days_param = format!("-{} days", days);
+    let rows = stmt.query_map(rusqlite::params![marketplace, category_id, days_param], |row| {
+        Ok(BsrSnapshot {
+            id: row.get(0)?,
+            marketplace: row.get(1)?,
+            category_id: row.get(2)?,
+            category_name: row.get(3)?,
+            snapshot_date: row.get(4)?,
+            products_json: row.get(5)?,
+            product_count: row.get(6)?,
+            created_at: row.get(7)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+// ============ 市场调研任务 CRUD ============
+
+pub fn create_market_research_task(
+    name: &str,
+    marketplace: &str,
+    category_id: &str,
+    category_name: Option<&str>,
+    ai_provider: &str,
+    ai_model: Option<&str>,
+    schedule_type: &str,
+    schedule_days: Option<&str>,
+    schedule_time: &str,
+) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT INTO market_research_tasks
+         (name, marketplace, category_id, category_name, ai_provider, ai_model, schedule_type, schedule_days, schedule_time)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![name, marketplace, category_id, category_name, ai_provider, ai_model, schedule_type, schedule_days, schedule_time],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn get_market_research_tasks() -> Result<Vec<MarketResearchTask>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, name, marketplace, category_id, category_name, ai_provider, ai_model,
+                schedule_type, schedule_days, schedule_time, is_enabled,
+                last_run_at, last_run_status, created_at
+         FROM market_research_tasks
+         ORDER BY created_at DESC"
+    )?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok(MarketResearchTask {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            marketplace: row.get(2)?,
+            category_id: row.get(3)?,
+            category_name: row.get(4)?,
+            ai_provider: row.get(5)?,
+            ai_model: row.get(6)?,
+            schedule_type: row.get(7)?,
+            schedule_days: row.get(8)?,
+            schedule_time: row.get(9)?,
+            is_enabled: row.get::<_, i64>(10)? != 0,
+            last_run_at: row.get(11)?,
+            last_run_status: row.get(12)?,
+            created_at: row.get(13)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+pub fn get_market_research_task(id: i64) -> Result<Option<MarketResearchTask>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, name, marketplace, category_id, category_name, ai_provider, ai_model,
+                schedule_type, schedule_days, schedule_time, is_enabled,
+                last_run_at, last_run_status, created_at
+         FROM market_research_tasks
+         WHERE id = ?1"
+    )?;
+
+    let mut rows = stmt.query_map([id], |row| {
+        Ok(MarketResearchTask {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            marketplace: row.get(2)?,
+            category_id: row.get(3)?,
+            category_name: row.get(4)?,
+            ai_provider: row.get(5)?,
+            ai_model: row.get(6)?,
+            schedule_type: row.get(7)?,
+            schedule_days: row.get(8)?,
+            schedule_time: row.get(9)?,
+            is_enabled: row.get::<_, i64>(10)? != 0,
+            last_run_at: row.get(11)?,
+            last_run_status: row.get(12)?,
+            created_at: row.get(13)?,
+        })
+    })?;
+
+    match rows.next() {
+        Some(Ok(task)) => Ok(Some(task)),
+        Some(Err(e)) => Err(e.into()),
+        None => Ok(None),
+    }
+}
+
+pub fn update_market_research_task(
+    id: i64,
+    name: &str,
+    marketplace: &str,
+    category_id: &str,
+    category_name: Option<&str>,
+    ai_provider: &str,
+    ai_model: Option<&str>,
+    schedule_type: &str,
+    schedule_days: Option<&str>,
+    schedule_time: &str,
+    is_enabled: bool,
+) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE market_research_tasks
+         SET name = ?1, marketplace = ?2, category_id = ?3, category_name = ?4,
+             ai_provider = ?5, ai_model = ?6, schedule_type = ?7, schedule_days = ?8,
+             schedule_time = ?9, is_enabled = ?10
+         WHERE id = ?11",
+        rusqlite::params![
+            name, marketplace, category_id, category_name, ai_provider, ai_model,
+            schedule_type, schedule_days, schedule_time, is_enabled as i64, id
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn delete_market_research_task(id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("DELETE FROM market_research_tasks WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+pub fn update_task_last_run(id: i64, status: &str) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE market_research_tasks
+         SET last_run_at = datetime('now'), last_run_status = ?1
+         WHERE id = ?2",
+        rusqlite::params![status, id],
+    )?;
+    Ok(())
+}
+
+pub fn get_pending_research_tasks() -> Result<Vec<MarketResearchTask>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, name, marketplace, category_id, category_name, ai_provider, ai_model,
+                schedule_type, schedule_days, schedule_time, is_enabled,
+                last_run_at, last_run_status, created_at
+         FROM market_research_tasks
+         WHERE is_enabled = 1
+         ORDER BY created_at DESC"
+    )?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok(MarketResearchTask {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            marketplace: row.get(2)?,
+            category_id: row.get(3)?,
+            category_name: row.get(4)?,
+            ai_provider: row.get(5)?,
+            ai_model: row.get(6)?,
+            schedule_type: row.get(7)?,
+            schedule_days: row.get(8)?,
+            schedule_time: row.get(9)?,
+            is_enabled: row.get::<_, i64>(10)? != 0,
+            last_run_at: row.get(11)?,
+            last_run_status: row.get(12)?,
+            created_at: row.get(13)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+// ============ 执行记录 CRUD ============
+
+pub fn create_research_run(task_id: i64) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT INTO market_research_runs (task_id, started_at, status)
+         VALUES (?1, datetime('now'), 'running')",
+        [task_id],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn update_research_run(
+    run_id: i64,
+    status: &str,
+    summary: Option<&str>,
+    content: Option<&str>,
+    snapshot_id: Option<i64>,
+) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE market_research_runs
+         SET ended_at = datetime('now'), status = ?1,
+             report_summary = ?2, report_content = ?3, snapshot_id = ?4
+         WHERE id = ?5",
+        rusqlite::params![status, summary, content, snapshot_id, run_id],
+    )?;
+    Ok(())
+}
+
+pub fn fail_research_run(run_id: i64, error_message: &str) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE market_research_runs
+         SET ended_at = datetime('now'), status = 'failed', error_message = ?1
+         WHERE id = ?2",
+        rusqlite::params![error_message, run_id],
+    )?;
+    Ok(())
+}
+
+pub fn get_latest_research_runs(limit: i32) -> Result<Vec<MarketResearchRun>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, task_id, started_at, ended_at, status,
+                report_summary, report_content, snapshot_id, error_message, created_at
+         FROM market_research_runs
+         ORDER BY started_at DESC
+         LIMIT ?1"
+    )?;
+
+    let rows = stmt.query_map([limit], |row| {
+        Ok(MarketResearchRun {
+            id: row.get(0)?,
+            task_id: row.get(1)?,
+            started_at: row.get(2)?,
+            ended_at: row.get(3)?,
+            status: row.get(4)?,
+            report_summary: row.get(5)?,
+            report_content: row.get(6)?,
+            snapshot_id: row.get(7)?,
+            error_message: row.get(8)?,
+            created_at: row.get(9)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+pub fn get_research_runs_by_task(task_id: i64, limit: i32) -> Result<Vec<MarketResearchRun>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, task_id, started_at, ended_at, status,
+                report_summary, report_content, snapshot_id, error_message, created_at
+         FROM market_research_runs
+         WHERE task_id = ?1
+         ORDER BY started_at DESC
+         LIMIT ?2"
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![task_id, limit], |row| {
+        Ok(MarketResearchRun {
+            id: row.get(0)?,
+            task_id: row.get(1)?,
+            started_at: row.get(2)?,
+            ended_at: row.get(3)?,
+            status: row.get(4)?,
+            report_summary: row.get(5)?,
+            report_content: row.get(6)?,
+            snapshot_id: row.get(7)?,
+            error_message: row.get(8)?,
+            created_at: row.get(9)?,
         })
     })?;
 

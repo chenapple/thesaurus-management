@@ -8,7 +8,8 @@ mod knowledge_base;
 use db::{BackupInfo, Category, KeywordData, KeywordMonitoring, MonitoringSparkline, MonitoringStats, Product, RankingHistory, RankingSnapshot, RootWithCategories, TrafficLevelStats, UncategorizedKeyword, WorkflowStatus};
 use db::{KbCategory, KbDocument, KbChunk, KbSearchResult, KbConversation, KbMessage};
 use db::ScProject;
-use scheduler::{SchedulerSettings, SchedulerStatus, SCHEDULER};
+use scheduler::{SchedulerSettings, SchedulerStatus, SCHEDULER, MARKET_RESEARCH_SCHEDULER};
+use crawler::{BsrResult, SubcategoryResult};
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
@@ -1332,6 +1333,167 @@ fn sc_get_reviews_summary(competitor_id: i64) -> Result<db::ScReviewSummary, Str
         .map_err(|e| e.to_string())
 }
 
+// ==================== BSR 爬虫 ====================
+
+#[tauri::command]
+async fn fetch_category_bsr(marketplace: String, category_id: String) -> Result<BsrResult, String> {
+    eprintln!("[fetch_category_bsr] 开始爬取: marketplace={}, category_id={}", marketplace, category_id);
+    let result = crawler::fetch_category_bsr(marketplace, category_id).await;
+    eprintln!("[fetch_category_bsr] 爬取完成: products={}, error={:?}", result.products.len(), result.error);
+    Ok(result)
+}
+
+#[tauri::command]
+async fn discover_subcategories(marketplace: String, parent_category: String) -> Result<SubcategoryResult, String> {
+    eprintln!("[discover_subcategories] 开始发现子类目: marketplace={}, parent={}", marketplace, parent_category);
+    let result = crawler::discover_subcategories(marketplace, parent_category).await;
+    eprintln!("[discover_subcategories] 发现完成: count={}, error={:?}", result.subcategories.len(), result.error);
+    Ok(result)
+}
+
+// ==================== 市场调研监控任务 ====================
+
+#[tauri::command]
+fn get_market_research_tasks() -> Result<Vec<db::MarketResearchTask>, String> {
+    db::get_market_research_tasks().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_market_research_task(id: i64) -> Result<Option<db::MarketResearchTask>, String> {
+    db::get_market_research_task(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_market_research_task(
+    name: String,
+    marketplace: String,
+    category_id: String,
+    category_name: Option<String>,
+    ai_provider: String,
+    ai_model: Option<String>,
+    schedule_type: String,
+    schedule_days: Option<String>,
+    schedule_time: String,
+) -> Result<i64, String> {
+    db::create_market_research_task(
+        &name,
+        &marketplace,
+        &category_id,
+        category_name.as_deref(),
+        &ai_provider,
+        ai_model.as_deref(),
+        &schedule_type,
+        schedule_days.as_deref(),
+        &schedule_time,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_market_research_task(
+    id: i64,
+    name: String,
+    marketplace: String,
+    category_id: String,
+    category_name: Option<String>,
+    ai_provider: String,
+    ai_model: Option<String>,
+    schedule_type: String,
+    schedule_days: Option<String>,
+    schedule_time: String,
+    is_enabled: bool,
+) -> Result<(), String> {
+    db::update_market_research_task(
+        id,
+        &name,
+        &marketplace,
+        &category_id,
+        category_name.as_deref(),
+        &ai_provider,
+        ai_model.as_deref(),
+        &schedule_type,
+        schedule_days.as_deref(),
+        &schedule_time,
+        is_enabled,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_market_research_task(id: i64) -> Result<(), String> {
+    db::delete_market_research_task(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_pending_research_tasks() -> Result<Vec<db::MarketResearchTask>, String> {
+    db::get_pending_research_tasks().map_err(|e| e.to_string())
+}
+
+// BSR 快照管理
+
+#[tauri::command]
+fn save_bsr_snapshot(
+    marketplace: String,
+    category_id: String,
+    category_name: Option<String>,
+    products_json: String,
+    product_count: i64,
+) -> Result<i64, String> {
+    db::save_bsr_snapshot(
+        &marketplace,
+        &category_id,
+        category_name.as_deref(),
+        &products_json,
+        product_count,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_bsr_history(marketplace: String, category_id: String, days: i32) -> Result<Vec<db::BsrSnapshot>, String> {
+    db::get_bsr_history(&marketplace, &category_id, days).map_err(|e| e.to_string())
+}
+
+// 执行记录管理
+
+#[tauri::command]
+fn create_research_run(task_id: i64) -> Result<i64, String> {
+    db::create_research_run(task_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_research_run(
+    run_id: i64,
+    status: String,
+    summary: Option<String>,
+    content: Option<String>,
+    snapshot_id: Option<i64>,
+) -> Result<(), String> {
+    db::update_research_run(
+        run_id,
+        &status,
+        summary.as_deref(),
+        content.as_deref(),
+        snapshot_id,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn fail_research_run(run_id: i64, error_message: String) -> Result<(), String> {
+    db::fail_research_run(run_id, &error_message).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_latest_research_runs(limit: i32) -> Result<Vec<db::MarketResearchRun>, String> {
+    db::get_latest_research_runs(limit).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_research_runs_by_task(task_id: i64, limit: i32) -> Result<Vec<db::MarketResearchRun>, String> {
+    db::get_research_runs_by_task(task_id, limit).map_err(|e| e.to_string())
+}
+
 // ==================== AI 分析 ====================
 
 // 保存分析结果
@@ -1465,7 +1627,8 @@ pub fn run() {
             db::init_db(app_data_dir).expect("Failed to initialize database");
 
             // 自动启动调度器（如果已启用）
-            tauri::async_runtime::spawn(async {
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
                 // 加载设置
                 if let Ok(Some(json)) = db::get_setting("scheduler_settings") {
                     if let Ok(settings) = serde_json::from_str::<scheduler::SchedulerSettings>(&json) {
@@ -1476,6 +1639,10 @@ pub fn run() {
                         }
                     }
                 }
+
+                // 自动启动市场调研调度器
+                MARKET_RESEARCH_SCHEDULER.start(app_handle);
+                println!("[MarketResearchScheduler] Auto-started on app launch");
             });
 
             // 设置系统托盘
@@ -1659,6 +1826,23 @@ pub fn run() {
             sc_fetch_competitor_reviews,
             sc_get_competitor_reviews,
             sc_get_reviews_summary,
+            // BSR 爬虫
+            fetch_category_bsr,
+            discover_subcategories,
+            // 市场调研监控任务
+            get_market_research_tasks,
+            get_market_research_task,
+            create_market_research_task,
+            update_market_research_task,
+            delete_market_research_task,
+            get_pending_research_tasks,
+            save_bsr_snapshot,
+            get_bsr_history,
+            create_research_run,
+            update_research_run,
+            fail_research_run,
+            get_latest_research_runs,
+            get_research_runs_by_task,
             // AI 分析
             sc_save_analysis,
             sc_get_analysis,

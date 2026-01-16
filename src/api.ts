@@ -602,7 +602,7 @@ export async function installPdfDependencies(): Promise<InstallResult> {
 
 // ==================== 优化事件管理 ====================
 
-import type { OptimizationEvent, EventMainType, EventSubType } from "./types";
+import type { OptimizationEvent, EventMainType } from "./types";
 
 /**
  * 添加优化事件
@@ -611,7 +611,7 @@ export async function addOptimizationEvent(
   productId: number,
   eventDate: string,
   eventType: EventMainType,
-  eventSubType: EventSubType,
+  eventSubType: string,  // JSON 字符串，支持多选
   title: string,
   description?: string,
   targetAsin?: string,
@@ -651,7 +651,7 @@ export async function updateOptimizationEvent(
   id: number,
   eventDate: string,
   eventType: EventMainType,
-  eventSubType: EventSubType,
+  eventSubType: string,  // JSON 字符串，支持多选
   title: string,
   description?: string,
   targetAsin?: string,

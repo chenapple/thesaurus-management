@@ -32,6 +32,8 @@ const SetupWizardDialog = defineAsyncComponent(() => import("./components/SetupW
 const DashboardTab = defineAsyncComponent(() => import("./components/DashboardTab.vue"));
 const SmartCopyTab = defineAsyncComponent(() => import("./components/SmartCopyTab.vue"));
 const AdOptimizerTab = defineAsyncComponent(() => import("./components/AdOptimizerTab.vue"));
+const AgentTab = defineAsyncComponent(() => import("./components/AgentTab.vue"));
+const GlobalNotification = defineAsyncComponent(() => import("./components/GlobalNotification.vue"));
 
 // ==================== 产品相关状态 ====================
 const products = ref<Product[]>([]);
@@ -251,7 +253,9 @@ const updateProgress = ref(0);
 const updateTotal = ref(0);
 
 // 视图模式: 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge' | 'ads'
-const viewMode = ref<'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge' | 'ads'>('dashboard');
+const viewMode = ref<'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge' | 'ads' | 'agent'>('dashboard');
+// 是否启用智能体功能（通过环境变量控制，开发环境显示，生产环境隐藏）
+const enableAgent = import.meta.env.VITE_ENABLE_AGENT === 'true';
 const wordCloudRef = ref<InstanceType<typeof WordCloud> | null>(null);
 const allRootsForCloud = ref<Root[]>([]);
 const loadingCloud = ref(false);
@@ -600,7 +604,7 @@ async function loadAllRootsForCloud() {
 }
 
 // 切换视图模式
-function switchViewMode(mode: 'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge' | 'ads') {
+function switchViewMode(mode: 'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge' | 'ads' | 'agent') {
   viewMode.value = mode;
   if (mode === 'wordcloud' && allRootsForCloud.value.length === 0) {
     loadAllRootsForCloud();
@@ -610,6 +614,14 @@ function switchViewMode(mode: 'dashboard' | 'keywords' | 'roots' | 'wordcloud' |
     loadRoots();
   }
   // dashboard, monitoring 和 knowledge 视图由组件自行加载数据
+}
+
+// 处理市场调研通知点击详情
+function handleNotificationDetails(_notification: { taskId: number; taskName: string; runId: number }) {
+  // 切换到智能体视图（仅在启用智能体功能时）
+  if (enableAgent) {
+    switchViewMode('agent');
+  }
 }
 
 // 词云点击处理
@@ -2029,6 +2041,14 @@ onUnmounted(() => {
           <el-icon><ChatDotRound /></el-icon>
           知识库
         </el-button>
+        <el-button
+          v-if="enableAgent"
+          :type="viewMode === 'agent' ? 'primary' : 'default'"
+          @click="switchViewMode('agent')"
+        >
+          <el-icon><Cpu /></el-icon>
+          智能体
+        </el-button>
       </el-button-group>
       <el-dropdown trigger="click" class="global-settings-dropdown">
         <el-button>
@@ -2052,7 +2072,7 @@ onUnmounted(() => {
     <!-- 主体区域 -->
     <div class="app-body">
       <!-- 侧边栏 - 产品列表（仪表板和知识库视图时隐藏） -->
-    <aside v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'ads'" class="sidebar" :style="{ width: sidebarWidth + 'px' }">
+    <aside v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'ads' && viewMode !== 'agent'" class="sidebar" :style="{ width: sidebarWidth + 'px' }">
       <div class="sidebar-header">
         <span class="sidebar-title">产品列表</span>
         <el-button type="primary" size="small" circle @click="openAddProductDialog">
@@ -2119,7 +2139,7 @@ onUnmounted(() => {
 
     <!-- 拖动调整手柄（仪表板、知识库、智能文案视图时隐藏） -->
     <div
-      v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'ads'"
+      v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'ads' && viewMode !== 'agent'"
       class="resize-handle"
       :class="{ resizing: isResizing }"
       @mousedown="startResize"
@@ -2128,7 +2148,7 @@ onUnmounted(() => {
     <!-- 主内容区 -->
     <main class="main-content">
       <!-- 顶部工具栏（仪表板、知识库、智能文案视图时隐藏） -->
-      <header v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'ads'" class="header">
+      <header v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'ads' && viewMode !== 'agent'" class="header">
         <div class="header-left">
           <h1 class="title">{{ selectedProduct?.name || '请选择产品' }}</h1>
           <div class="header-stats" v-if="selectedProduct">
@@ -2652,6 +2672,15 @@ onUnmounted(() => {
         <AdOptimizerTab
           v-if="viewMode === 'ads'"
           class="ad-optimizer-view"
+          @show-help="openHelp"
+        />
+      </keep-alive>
+
+      <!-- 智能体视图 - 使用 keep-alive 保持状态（仅开发环境可用） -->
+      <keep-alive v-if="enableAgent">
+        <AgentTab
+          v-if="viewMode === 'agent'"
+          class="agent-view"
           @show-help="openHelp"
         />
       </keep-alive>
@@ -3863,6 +3892,9 @@ onUnmounted(() => {
         </div>
       </div>
     </el-dialog>
+
+    <!-- 全局通知弹窗 -->
+    <GlobalNotification @view-details="handleNotificationDetails" />
   </div>
 </template>
 

@@ -170,11 +170,22 @@ function formatDateShort(dateStr: string): string {
   return dateStr;
 }
 
-// 获取子类型标签
+// 获取子类型标签（支持多选，兼容旧数据）
 function getSubTypeLabel(mainType: string, subType?: string): string {
   if (!subType) return '';
   const subTypes = EVENT_SUB_TYPES[mainType as EventMainType];
   if (!subTypes) return '';
+
+  // 尝试解析为 JSON 数组（新数据格式）
+  if (subType.startsWith('[')) {
+    try {
+      const arr = JSON.parse(subType) as string[];
+      return arr.map(t => subTypes[t]?.label || t).join('、');
+    } catch {
+      return subTypes[subType]?.label || '';
+    }
+  }
+  // 旧数据：单个字符串
   return subTypes[subType]?.label || '';
 }
 

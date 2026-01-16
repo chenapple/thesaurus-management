@@ -775,6 +775,192 @@ fn call_review_crawler(asin: &str, country: &str) -> Result<ReviewResult, String
     ))
 }
 
+// ==================== BSR 爬虫 ====================
+
+// BSR 产品数据
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BsrProduct {
+    pub rank: i64,
+    pub asin: Option<String>,
+    pub title: Option<String>,
+    pub price: Option<String>,
+    pub rating: Option<f64>,
+    pub reviews: i64,
+    pub image_url: Option<String>,
+    pub in_stock: bool,
+}
+
+// BSR 爬取结果
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BsrResult {
+    pub marketplace: String,
+    pub category_id: String,
+    pub products: Vec<BsrProduct>,
+    pub snapshot_date: String,
+    pub error: Option<String>,
+}
+
+// 获取 BSR 爬虫脚本路径
+fn get_bsr_script_path() -> Result<std::path::PathBuf, String> {
+    let possible_paths = vec![
+        std::env::current_dir()
+            .map(|p| p.join("scripts").join("amazon_bsr_crawler.py"))
+            .ok(),
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .map(|p| p.join("scripts").join("amazon_bsr_crawler.py")),
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .map(|p| p.join("Resources").join("scripts").join("amazon_bsr_crawler.py")),
+        Some(std::path::PathBuf::from("src-tauri/scripts/amazon_bsr_crawler.py")),
+    ];
+
+    for path in possible_paths.into_iter().flatten() {
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    Err("找不到 Python 爬虫脚本 amazon_bsr_crawler.py".to_string())
+}
+
+// 爬取类目 BSR 数据
+pub async fn fetch_category_bsr(marketplace: String, category_id: String) -> BsrResult {
+    tokio::task::spawn_blocking(move || {
+        match call_bsr_crawler(&marketplace, &category_id) {
+            Ok(result) => result,
+            Err(e) => BsrResult {
+                marketplace,
+                category_id,
+                products: Vec::new(),
+                snapshot_date: chrono::Utc::now().to_rfc3339(),
+                error: Some(e),
+            },
+        }
+    })
+    .await
+    .unwrap_or_else(|e| BsrResult {
+        marketplace: String::new(),
+        category_id: String::new(),
+        products: Vec::new(),
+        snapshot_date: chrono::Utc::now().to_rfc3339(),
+        error: Some(format!("任务执行失败: {}", e)),
+    })
+}
+
+// ==================== 子类目发现 ====================
+
+// 子类目信息
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SubcategoryInfo {
+    pub name: String,
+    pub category_id: String,
+    pub url: String,
+}
+
+// 子类目发现结果
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SubcategoryResult {
+    pub marketplace: String,
+    pub parent_category: String,
+    pub subcategories: Vec<SubcategoryInfo>,
+    pub error: Option<String>,
+}
+
+// 发现子类目
+pub async fn discover_subcategories(marketplace: String, parent_category: String) -> SubcategoryResult {
+    tokio::task::spawn_blocking(move || {
+        match call_discover_subcategories(&marketplace, &parent_category) {
+            Ok(result) => result,
+            Err(e) => SubcategoryResult {
+                marketplace,
+                parent_category,
+                subcategories: Vec::new(),
+                error: Some(e),
+            },
+        }
+    })
+    .await
+    .unwrap_or_else(|e| SubcategoryResult {
+        marketplace: String::new(),
+        parent_category: String::new(),
+        subcategories: Vec::new(),
+        error: Some(format!("任务执行失败: {}", e)),
+    })
+}
+
+// 调用 Python 子类目发现
+fn call_discover_subcategories(marketplace: &str, parent_category: &str) -> Result<SubcategoryResult, String> {
+    let python_cmd = check_python()?;
+    check_dependencies(&python_cmd)?;
+    let script_path = get_bsr_script_path()?;
+
+    let mut cmd = Command::new(&python_cmd);
+    cmd.arg(&script_path)
+        .arg("discover")
+        .arg(marketplace)
+        .arg(parent_category)
+        .arg("true"); // headless 模式
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = cmd.output()
+        .map_err(|e| format!("执行 Python 脚本失败: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Python 脚本执行错误: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    serde_json::from_str(&stdout).map_err(|e| {
+        format!(
+            "解析 Python 输出失败: {}. 输出: {}",
+            e,
+            stdout.chars().take(500).collect::<String>()
+        )
+    })
+}
+
+// 调用 Python BSR 爬虫
+fn call_bsr_crawler(marketplace: &str, category_id: &str) -> Result<BsrResult, String> {
+    let python_cmd = check_python()?;
+    check_dependencies(&python_cmd)?;
+    let script_path = get_bsr_script_path()?;
+
+    let mut cmd = Command::new(&python_cmd);
+    cmd.arg(&script_path)
+        .arg(marketplace)
+        .arg(category_id)
+        .arg("true"); // headless 模式
+
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = cmd.output()
+        .map_err(|e| format!("执行 Python 脚本失败: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Python 脚本执行错误: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    serde_json::from_str(&stdout).map_err(|e| {
+        format!(
+            "解析 Python 输出失败: {}. 输出: {}",
+            e,
+            stdout.chars().take(500).collect::<String>()
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -46,10 +46,13 @@
         </el-select>
       </el-form-item>
 
-      <el-form-item label="具体操作" prop="eventSubType">
+      <el-form-item label="具体操作" prop="eventSubTypes">
         <el-select
-          v-model="form.eventSubType"
-          placeholder="选择具体操作"
+          v-model="form.eventSubTypes"
+          multiple
+          collapse-tags
+          collapse-tags-tooltip
+          placeholder="选择具体操作（可多选）"
           style="width: 100%"
         >
           <el-option
@@ -191,7 +194,7 @@ type EventScope = 'product' | 'asin' | 'keyword';
 const form = reactive({
   eventDate: '',
   eventType: 'listing' as EventMainType,
-  eventSubType: 'title' as EventSubType,
+  eventSubTypes: ['title'] as EventSubType[],  // 改为数组支持多选
   title: '',
   description: '',
   eventScope: 'product' as EventScope,
@@ -207,7 +210,7 @@ const subTypeOptions = computed(() => {
 function handleMainTypeChange() {
   const subTypes = EVENT_SUB_TYPES[form.eventType];
   const keys = Object.keys(subTypes);
-  form.eventSubType = (keys[0] || 'title') as EventSubType;
+  form.eventSubTypes = keys.length > 0 ? [keys[0] as EventSubType] : [];
 }
 
 // 表单验证规则
@@ -218,8 +221,8 @@ const rules: FormRules = {
   eventType: [
     { required: true, message: '请选择优化类型', trigger: 'change' },
   ],
-  eventSubType: [
-    { required: true, message: '请选择具体操作', trigger: 'change' },
+  eventSubTypes: [
+    { required: true, type: 'array', min: 1, message: '请至少选择一个具体操作', trigger: 'change' },
   ],
   title: [
     { required: true, message: '请输入事件标题', trigger: 'blur' },
@@ -253,12 +256,27 @@ function handleAsinChange() {
   selectedKeywords.value = [];
 }
 
+// 解析 event_sub_type 字段（兼容旧数据：单字符串 或 新数据：JSON 数组）
+function parseEventSubTypes(value: string | undefined): EventSubType[] {
+  if (!value) return ['title'];
+  // 尝试解析为 JSON 数组
+  if (value.startsWith('[')) {
+    try {
+      return JSON.parse(value) as EventSubType[];
+    } catch {
+      return [value as EventSubType];
+    }
+  }
+  // 旧数据：单个字符串
+  return [value as EventSubType];
+}
+
 // 初始化表单
 function initForm() {
   if (props.editingEvent) {
     form.eventDate = props.editingEvent.event_date;
     form.eventType = props.editingEvent.event_type as EventMainType;
-    form.eventSubType = props.editingEvent.event_sub_type as EventSubType;
+    form.eventSubTypes = parseEventSubTypes(props.editingEvent.event_sub_type as string);
     form.title = props.editingEvent.title;
     form.description = props.editingEvent.description || '';
     form.targetAsin = props.editingEvent.target_asin || '';
@@ -287,7 +305,7 @@ function initForm() {
     const today = new Date();
     form.eventDate = today.toISOString().split('T')[0];
     form.eventType = 'listing';
-    form.eventSubType = 'title';
+    form.eventSubTypes = ['title'];
     form.title = '';
     form.description = '';
     form.eventScope = 'product';
@@ -331,13 +349,16 @@ async function handleSubmit() {
       ? JSON.stringify(selectedKeywords.value)
       : undefined;
 
+    // 将多选的具体操作序列化为 JSON 字符串
+    const eventSubTypesJson = JSON.stringify(form.eventSubTypes);
+
     if (props.editingEvent) {
       // 更新事件
       await updateOptimizationEvent(
         props.editingEvent.id,
         form.eventDate,
         form.eventType,
-        form.eventSubType,
+        eventSubTypesJson,
         form.title,
         form.description || undefined,
         targetAsin,
@@ -350,7 +371,7 @@ async function handleSubmit() {
         props.productId,
         form.eventDate,
         form.eventType,
-        form.eventSubType,
+        eventSubTypesJson,
         form.title,
         form.description || undefined,
         targetAsin,
