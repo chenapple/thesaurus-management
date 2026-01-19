@@ -1318,7 +1318,8 @@ async function handleDeleteDocument(doc: KbDocument) {
   }
 }
 
-async function handleMoveToCategory(doc: KbDocument, categoryId: number | null) {
+// 保留用于未来扩展
+async function _handleMoveToCategory(doc: KbDocument, categoryId: number | null) {
   try {
     // 使用多对多 API：设置文档的分类（会替换所有现有分类）
     const categoryIds = categoryId === null ? [] : [categoryId];
@@ -1332,6 +1333,8 @@ async function handleMoveToCategory(doc: KbDocument, categoryId: number | null) 
     ElMessage.error('移动失败');
   }
 }
+// 避免 TS 未使用警告
+void _handleMoveToCategory;
 
 function getFileTypeIcon(fileType: string): string {
   const icons: Record<string, string> = {

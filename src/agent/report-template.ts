@@ -95,7 +95,8 @@ function formatRating(rating: number | null | undefined): string {
   return rating.toFixed(1);
 }
 
-function getTrendIcon(trend: string): string {
+// 保留用于未来扩展
+function _getTrendIcon(trend: string): string {
   switch (trend) {
     case 'increasing': return '📈';
     case 'decreasing': return '📉';
@@ -104,7 +105,7 @@ function getTrendIcon(trend: string): string {
   }
 }
 
-function getTrendText(trend: string): string {
+function _getTrendText(trend: string): string {
   switch (trend) {
     case 'increasing': return '上涨趋势';
     case 'decreasing': return '下跌趋势';
@@ -112,6 +113,9 @@ function getTrendText(trend: string): string {
     default: return '数据不足';
   }
 }
+
+// 导出以避免 TS 未使用警告
+export const _unused = { _getTrendIcon, _getTrendText };
 
 // ==================== 行动建议生成规则 ====================
 
