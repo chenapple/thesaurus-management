@@ -373,6 +373,9 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
     // 初始化市场调研监控表
     init_market_research_tables(&conn)?;
 
+    // 初始化竞品情报监控表
+    init_competitor_tables(&conn)?;
+
     DB.set(Mutex::new(conn))
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
@@ -3299,6 +3302,27 @@ pub struct KbMessage {
     pub created_at: String,
 }
 
+// 文档链接结构（双向链接）
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KbDocumentLink {
+    pub id: i64,
+    pub source_doc_id: i64,
+    pub target_doc_id: i64,
+    pub source_title: String,
+    pub target_title: String,
+    pub link_text: Option<String>,
+    pub created_at: String,
+}
+
+// 文档分类关联结构（多对多）
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KbDocumentCategory {
+    pub document_id: i64,
+    pub category_id: i64,
+    pub category_name: String,
+    pub category_color: String,
+}
+
 // 初始化知识库表
 pub fn init_knowledge_base_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(
@@ -3363,6 +3387,33 @@ pub fn init_knowledge_base_tables(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_kb_documents_status ON kb_documents(status);
         CREATE INDEX IF NOT EXISTS idx_kb_chunks_document ON kb_chunks(document_id);
         CREATE INDEX IF NOT EXISTS idx_kb_messages_conversation ON kb_messages(conversation_id);
+
+        -- 文档链接关系表（双向链接）
+        CREATE TABLE IF NOT EXISTS kb_document_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_doc_id INTEGER NOT NULL,
+            target_doc_id INTEGER NOT NULL,
+            link_text TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (source_doc_id) REFERENCES kb_documents(id) ON DELETE CASCADE,
+            FOREIGN KEY (target_doc_id) REFERENCES kb_documents(id) ON DELETE CASCADE,
+            UNIQUE(source_doc_id, target_doc_id)
+        );
+
+        -- 文档分类关联表（多对多，一个文档可以属于多个分类）
+        CREATE TABLE IF NOT EXISTS kb_document_categories (
+            document_id INTEGER NOT NULL,
+            category_id INTEGER NOT NULL,
+            PRIMARY KEY (document_id, category_id),
+            FOREIGN KEY (document_id) REFERENCES kb_documents(id) ON DELETE CASCADE,
+            FOREIGN KEY (category_id) REFERENCES kb_categories(id) ON DELETE CASCADE
+        );
+
+        -- 索引
+        CREATE INDEX IF NOT EXISTS idx_kb_document_links_source ON kb_document_links(source_doc_id);
+        CREATE INDEX IF NOT EXISTS idx_kb_document_links_target ON kb_document_links(target_doc_id);
+        CREATE INDEX IF NOT EXISTS idx_kb_document_categories_document ON kb_document_categories(document_id);
+        CREATE INDEX IF NOT EXISTS idx_kb_document_categories_category ON kb_document_categories(category_id);
         "
     )?;
 
@@ -3429,6 +3480,33 @@ pub fn init_knowledge_base_tables(conn: &Connection) -> Result<()> {
         conn.execute("ALTER TABLE kb_categories ADD COLUMN sort_order INTEGER DEFAULT 0", [])?;
         conn.execute("ALTER TABLE kb_categories ADD COLUMN color TEXT DEFAULT '#409EFF'", [])?;
         println!("[DB Migration] Added sort_order and color columns to kb_categories table");
+    }
+
+    // 数据库迁移：将旧的 category_id 数据迁移到新的多对多关联表
+    // 检查是否已经迁移过（通过检查 kb_document_categories 表是否有数据）
+    let migration_needed: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM kb_documents WHERE category_id IS NOT NULL",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0) > 0;
+
+    let already_migrated: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM kb_document_categories",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0) > 0;
+
+    if migration_needed && !already_migrated {
+        conn.execute(
+            "INSERT INTO kb_document_categories (document_id, category_id)
+             SELECT id, category_id FROM kb_documents WHERE category_id IS NOT NULL",
+            [],
+        )?;
+        println!("[DB Migration] Migrated category_id data to kb_document_categories table");
     }
 
     Ok(())
@@ -4060,6 +4138,217 @@ pub fn kb_get_messages(conversation_id: i64) -> Result<Vec<KbMessage>> {
     .collect();
 
     Ok(messages)
+}
+
+// ==================== 文档链接 CRUD ====================
+
+// 添加文档链接
+pub fn kb_add_document_link(source_id: i64, target_id: i64, link_text: Option<String>) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT OR IGNORE INTO kb_document_links (source_doc_id, target_doc_id, link_text) VALUES (?1, ?2, ?3)",
+        rusqlite::params![source_id, target_id, link_text],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+// 移除文档链接
+pub fn kb_remove_document_link(source_id: i64, target_id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "DELETE FROM kb_document_links WHERE source_doc_id = ?1 AND target_doc_id = ?2",
+        rusqlite::params![source_id, target_id],
+    )?;
+    Ok(())
+}
+
+// 获取文档的出链（从当前文档链接到其他文档）
+pub fn kb_get_document_links(doc_id: i64) -> Result<Vec<KbDocumentLink>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT l.id, l.source_doc_id, l.target_doc_id,
+                s.title as source_title, t.title as target_title,
+                l.link_text, l.created_at
+         FROM kb_document_links l
+         JOIN kb_documents s ON l.source_doc_id = s.id
+         JOIN kb_documents t ON l.target_doc_id = t.id
+         WHERE l.source_doc_id = ?1
+         ORDER BY l.created_at DESC"
+    )?;
+
+    let links = stmt.query_map([doc_id], |row| {
+        Ok(KbDocumentLink {
+            id: row.get(0)?,
+            source_doc_id: row.get(1)?,
+            target_doc_id: row.get(2)?,
+            source_title: row.get(3)?,
+            target_title: row.get(4)?,
+            link_text: row.get(5)?,
+            created_at: row.get(6)?,
+        })
+    })?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    Ok(links)
+}
+
+// 获取文档的反向链接（其他文档链接到当前文档）
+pub fn kb_get_document_backlinks(doc_id: i64) -> Result<Vec<KbDocumentLink>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT l.id, l.source_doc_id, l.target_doc_id,
+                s.title as source_title, t.title as target_title,
+                l.link_text, l.created_at
+         FROM kb_document_links l
+         JOIN kb_documents s ON l.source_doc_id = s.id
+         JOIN kb_documents t ON l.target_doc_id = t.id
+         WHERE l.target_doc_id = ?1
+         ORDER BY l.created_at DESC"
+    )?;
+
+    let links = stmt.query_map([doc_id], |row| {
+        Ok(KbDocumentLink {
+            id: row.get(0)?,
+            source_doc_id: row.get(1)?,
+            target_doc_id: row.get(2)?,
+            source_title: row.get(3)?,
+            target_title: row.get(4)?,
+            link_text: row.get(5)?,
+            created_at: row.get(6)?,
+        })
+    })?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    Ok(links)
+}
+
+// 获取所有链接（用于知识图谱）
+pub fn kb_get_all_links() -> Result<Vec<KbDocumentLink>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT l.id, l.source_doc_id, l.target_doc_id,
+                s.title as source_title, t.title as target_title,
+                l.link_text, l.created_at
+         FROM kb_document_links l
+         JOIN kb_documents s ON l.source_doc_id = s.id
+         JOIN kb_documents t ON l.target_doc_id = t.id
+         ORDER BY l.created_at DESC"
+    )?;
+
+    let links = stmt.query_map([], |row| {
+        Ok(KbDocumentLink {
+            id: row.get(0)?,
+            source_doc_id: row.get(1)?,
+            target_doc_id: row.get(2)?,
+            source_title: row.get(3)?,
+            target_title: row.get(4)?,
+            link_text: row.get(5)?,
+            created_at: row.get(6)?,
+        })
+    })?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    Ok(links)
+}
+
+// ==================== 文档分类关联 CRUD（多对多）====================
+
+// 给文档添加分类
+pub fn kb_add_document_category(doc_id: i64, category_id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT OR IGNORE INTO kb_document_categories (document_id, category_id) VALUES (?1, ?2)",
+        rusqlite::params![doc_id, category_id],
+    )?;
+    Ok(())
+}
+
+// 移除文档分类
+pub fn kb_remove_document_category(doc_id: i64, category_id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "DELETE FROM kb_document_categories WHERE document_id = ?1 AND category_id = ?2",
+        rusqlite::params![doc_id, category_id],
+    )?;
+    Ok(())
+}
+
+// 获取文档的所有分类
+pub fn kb_get_document_categories(doc_id: i64) -> Result<Vec<KbDocumentCategory>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT dc.document_id, dc.category_id, c.name, c.color
+         FROM kb_document_categories dc
+         JOIN kb_categories c ON dc.category_id = c.id
+         WHERE dc.document_id = ?1
+         ORDER BY c.sort_order, c.name"
+    )?;
+
+    let categories = stmt.query_map([doc_id], |row| {
+        Ok(KbDocumentCategory {
+            document_id: row.get(0)?,
+            category_id: row.get(1)?,
+            category_name: row.get(2)?,
+            category_color: row.get(3)?,
+        })
+    })?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    Ok(categories)
+}
+
+// 按分类筛选文档（多对多版本）
+pub fn kb_get_documents_by_categories(category_id: i64) -> Result<Vec<KbDocument>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT d.id, d.category_id, d.title, d.file_name, d.file_path,
+                d.file_type, d.file_size, d.status, d.chunk_count, d.created_at
+         FROM kb_documents d
+         JOIN kb_document_categories dc ON d.id = dc.document_id
+         WHERE dc.category_id = ?1
+         ORDER BY d.created_at DESC"
+    )?;
+
+    let documents = stmt.query_map([category_id], |row| {
+        Ok(KbDocument {
+            id: row.get(0)?,
+            category_id: row.get(1)?,
+            title: row.get(2)?,
+            file_name: row.get(3)?,
+            file_path: row.get(4)?,
+            file_type: row.get(5)?,
+            file_size: row.get(6)?,
+            status: row.get(7)?,
+            chunk_count: row.get(8)?,
+            created_at: row.get(9)?,
+        })
+    })?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    Ok(documents)
+}
+
+// 设置文档的分类（替换所有现有分类）
+pub fn kb_set_document_categories(doc_id: i64, category_ids: Vec<i64>) -> Result<()> {
+    let conn = get_db().lock();
+    // 先删除所有现有分类
+    conn.execute(
+        "DELETE FROM kb_document_categories WHERE document_id = ?1",
+        [doc_id],
+    )?;
+    // 添加新分类
+    for cat_id in category_ids {
+        conn.execute(
+            "INSERT INTO kb_document_categories (document_id, category_id) VALUES (?1, ?2)",
+            rusqlite::params![doc_id, cat_id],
+        )?;
+    }
+    Ok(())
 }
 
 // ==================== 智能文案模块 ====================
@@ -5639,6 +5928,498 @@ pub fn get_research_runs_by_task(task_id: i64, limit: i32) -> Result<Vec<MarketR
             snapshot_id: row.get(7)?,
             error_message: row.get(8)?,
             created_at: row.get(9)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+// ============ 竞品情报监控表初始化 ============
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompetitorTask {
+    pub id: i64,
+    pub name: String,
+    pub marketplace: String,
+    pub my_asin: Option<String>,
+    pub ai_provider: String,
+    pub ai_model: Option<String>,
+    pub schedule_type: String,
+    pub schedule_days: Option<String>,
+    pub schedule_time: String,
+    pub is_enabled: bool,
+    pub last_run_at: Option<String>,
+    pub last_run_status: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompetitorAsin {
+    pub id: i64,
+    pub task_id: i64,
+    pub asin: String,
+    pub title: Option<String>,
+    pub tags: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompetitorSnapshot {
+    pub id: i64,
+    pub asin_id: i64,
+    pub snapshot_date: String,
+    pub price: Option<f64>,
+    pub bsr_rank: Option<i64>,
+    pub rating: Option<f64>,
+    pub review_count: Option<i64>,
+    pub availability: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompetitorRun {
+    pub id: i64,
+    pub task_id: i64,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub status: String,
+    pub report_summary: Option<String>,
+    pub report_content: Option<String>,
+    pub error_message: Option<String>,
+    pub created_at: String,
+}
+
+fn init_competitor_tables(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        -- 竞品监控任务表
+        CREATE TABLE IF NOT EXISTS competitor_tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            marketplace TEXT NOT NULL,
+            my_asin TEXT,
+            ai_provider TEXT NOT NULL DEFAULT 'deepseek',
+            ai_model TEXT,
+            schedule_type TEXT NOT NULL DEFAULT 'daily',
+            schedule_days TEXT,
+            schedule_time TEXT NOT NULL DEFAULT '09:00',
+            is_enabled INTEGER DEFAULT 1,
+            last_run_at TIMESTAMP,
+            last_run_status TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- 监控的竞品 ASIN 表
+        CREATE TABLE IF NOT EXISTS competitor_asins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            asin TEXT NOT NULL,
+            title TEXT,
+            tags TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (task_id) REFERENCES competitor_tasks(id) ON DELETE CASCADE,
+            UNIQUE(task_id, asin)
+        );
+        CREATE INDEX IF NOT EXISTS idx_competitor_asins_task ON competitor_asins(task_id);
+
+        -- 竞品快照表（每日数据）
+        CREATE TABLE IF NOT EXISTS competitor_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            asin_id INTEGER NOT NULL,
+            snapshot_date TEXT NOT NULL,
+            price REAL,
+            bsr_rank INTEGER,
+            rating REAL,
+            review_count INTEGER,
+            availability TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (asin_id) REFERENCES competitor_asins(id) ON DELETE CASCADE,
+            UNIQUE(asin_id, snapshot_date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_competitor_snapshots_asin ON competitor_snapshots(asin_id);
+        CREATE INDEX IF NOT EXISTS idx_competitor_snapshots_date ON competitor_snapshots(snapshot_date);
+
+        -- 竞品监控执行记录表
+        CREATE TABLE IF NOT EXISTS competitor_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            started_at TIMESTAMP NOT NULL,
+            ended_at TIMESTAMP,
+            status TEXT DEFAULT 'running',
+            report_summary TEXT,
+            report_content TEXT,
+            error_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (task_id) REFERENCES competitor_tasks(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_competitor_runs_task ON competitor_runs(task_id);
+        "
+    )?;
+
+    // 迁移：给 competitor_tasks 添加 schedule_days 字段（用于现有数据库）
+    let _ = conn.execute("ALTER TABLE competitor_tasks ADD COLUMN schedule_days TEXT", []);
+
+    Ok(())
+}
+
+// ============ 竞品监控任务 CRUD ============
+
+pub fn create_competitor_task(
+    name: &str,
+    marketplace: &str,
+    my_asin: Option<&str>,
+    ai_provider: &str,
+    ai_model: Option<&str>,
+    schedule_type: &str,
+    schedule_days: Option<&str>,
+    schedule_time: &str,
+) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT INTO competitor_tasks (name, marketplace, my_asin, ai_provider, ai_model, schedule_type, schedule_days, schedule_time)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![name, marketplace, my_asin, ai_provider, ai_model, schedule_type, schedule_days, schedule_time],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn update_competitor_task(
+    id: i64,
+    name: &str,
+    marketplace: &str,
+    my_asin: Option<&str>,
+    ai_provider: &str,
+    ai_model: Option<&str>,
+    schedule_type: &str,
+    schedule_days: Option<&str>,
+    schedule_time: &str,
+    is_enabled: bool,
+) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE competitor_tasks
+         SET name = ?2, marketplace = ?3, my_asin = ?4, ai_provider = ?5, ai_model = ?6,
+             schedule_type = ?7, schedule_days = ?8, schedule_time = ?9, is_enabled = ?10
+         WHERE id = ?1",
+        rusqlite::params![id, name, marketplace, my_asin, ai_provider, ai_model, schedule_type, schedule_days, schedule_time, is_enabled],
+    )?;
+    Ok(())
+}
+
+pub fn delete_competitor_task(id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("DELETE FROM competitor_tasks WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+pub fn get_competitor_tasks() -> Result<Vec<CompetitorTask>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, name, marketplace, my_asin, ai_provider, ai_model, schedule_type, schedule_days, schedule_time,
+                is_enabled, last_run_at, last_run_status, created_at
+         FROM competitor_tasks
+         ORDER BY created_at DESC"
+    )?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok(CompetitorTask {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            marketplace: row.get(2)?,
+            my_asin: row.get(3)?,
+            ai_provider: row.get(4)?,
+            ai_model: row.get(5)?,
+            schedule_type: row.get(6)?,
+            schedule_days: row.get(7)?,
+            schedule_time: row.get(8)?,
+            is_enabled: row.get(9)?,
+            last_run_at: row.get(10)?,
+            last_run_status: row.get(11)?,
+            created_at: row.get(12)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+pub fn get_competitor_task(id: i64) -> Result<Option<CompetitorTask>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, name, marketplace, my_asin, ai_provider, ai_model, schedule_type, schedule_days, schedule_time,
+                is_enabled, last_run_at, last_run_status, created_at
+         FROM competitor_tasks WHERE id = ?1"
+    )?;
+
+    let mut rows = stmt.query_map([id], |row| {
+        Ok(CompetitorTask {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            marketplace: row.get(2)?,
+            my_asin: row.get(3)?,
+            ai_provider: row.get(4)?,
+            ai_model: row.get(5)?,
+            schedule_type: row.get(6)?,
+            schedule_days: row.get(7)?,
+            schedule_time: row.get(8)?,
+            is_enabled: row.get(9)?,
+            last_run_at: row.get(10)?,
+            last_run_status: row.get(11)?,
+            created_at: row.get(12)?,
+        })
+    })?;
+
+    rows.next().transpose()
+}
+
+pub fn get_enabled_competitor_tasks() -> Result<Vec<CompetitorTask>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, name, marketplace, my_asin, ai_provider, ai_model, schedule_type, schedule_days, schedule_time,
+                is_enabled, last_run_at, last_run_status, created_at
+         FROM competitor_tasks
+         WHERE is_enabled = 1
+         ORDER BY created_at DESC"
+    )?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok(CompetitorTask {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            marketplace: row.get(2)?,
+            my_asin: row.get(3)?,
+            ai_provider: row.get(4)?,
+            ai_model: row.get(5)?,
+            schedule_type: row.get(6)?,
+            schedule_days: row.get(7)?,
+            schedule_time: row.get(8)?,
+            is_enabled: row.get(9)?,
+            last_run_at: row.get(10)?,
+            last_run_status: row.get(11)?,
+            created_at: row.get(12)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+pub fn update_competitor_task_status(id: i64, status: &str) -> Result<()> {
+    let conn = get_db().lock();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    conn.execute(
+        "UPDATE competitor_tasks SET last_run_at = ?2, last_run_status = ?3 WHERE id = ?1",
+        rusqlite::params![id, now, status],
+    )?;
+    Ok(())
+}
+
+// ============ 竞品 ASIN CRUD ============
+
+pub fn add_competitor_asin(task_id: i64, asin: &str, title: Option<&str>, tags: Option<&str>) -> Result<i64> {
+    let conn = get_db().lock();
+    conn.execute(
+        "INSERT OR REPLACE INTO competitor_asins (task_id, asin, title, tags) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![task_id, asin, title, tags],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn remove_competitor_asin(task_id: i64, asin: &str) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "DELETE FROM competitor_asins WHERE task_id = ?1 AND asin = ?2",
+        rusqlite::params![task_id, asin],
+    )?;
+    Ok(())
+}
+
+pub fn get_competitor_asins(task_id: i64) -> Result<Vec<CompetitorAsin>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, task_id, asin, title, tags, created_at
+         FROM competitor_asins WHERE task_id = ?1 ORDER BY created_at"
+    )?;
+
+    let rows = stmt.query_map([task_id], |row| {
+        Ok(CompetitorAsin {
+            id: row.get(0)?,
+            task_id: row.get(1)?,
+            asin: row.get(2)?,
+            title: row.get(3)?,
+            tags: row.get(4)?,
+            created_at: row.get(5)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+// ============ 竞品快照 CRUD ============
+
+pub fn save_competitor_snapshot(
+    asin_id: i64,
+    price: Option<f64>,
+    bsr_rank: Option<i64>,
+    rating: Option<f64>,
+    review_count: Option<i64>,
+    availability: Option<&str>,
+) -> Result<i64> {
+    let conn = get_db().lock();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+    conn.execute(
+        "INSERT OR REPLACE INTO competitor_snapshots
+         (asin_id, snapshot_date, price, bsr_rank, rating, review_count, availability)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![asin_id, today, price, bsr_rank, rating, review_count, availability],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn get_competitor_snapshots(asin_id: i64, limit: i32) -> Result<Vec<CompetitorSnapshot>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, asin_id, snapshot_date, price, bsr_rank, rating, review_count, availability, created_at
+         FROM competitor_snapshots
+         WHERE asin_id = ?1
+         ORDER BY snapshot_date DESC
+         LIMIT ?2"
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![asin_id, limit], |row| {
+        Ok(CompetitorSnapshot {
+            id: row.get(0)?,
+            asin_id: row.get(1)?,
+            snapshot_date: row.get(2)?,
+            price: row.get(3)?,
+            bsr_rank: row.get(4)?,
+            rating: row.get(5)?,
+            review_count: row.get(6)?,
+            availability: row.get(7)?,
+            created_at: row.get(8)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+// ============ 竞品执行记录 CRUD ============
+
+pub fn create_competitor_run(task_id: i64) -> Result<i64> {
+    let conn = get_db().lock();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    conn.execute(
+        "INSERT INTO competitor_runs (task_id, started_at, status) VALUES (?1, ?2, 'running')",
+        rusqlite::params![task_id, now],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn update_competitor_run(
+    run_id: i64,
+    status: &str,
+    report_summary: Option<&str>,
+    report_content: Option<&str>,
+) -> Result<()> {
+    let conn = get_db().lock();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    // 获取 task_id
+    let task_id: i64 = conn.query_row(
+        "SELECT task_id FROM competitor_runs WHERE id = ?1",
+        [run_id],
+        |row| row.get(0),
+    )?;
+
+    // 更新 run 记录
+    conn.execute(
+        "UPDATE competitor_runs
+         SET ended_at = ?2, status = ?3, report_summary = ?4, report_content = ?5
+         WHERE id = ?1",
+        rusqlite::params![run_id, now, status, report_summary, report_content],
+    )?;
+
+    // 同时更新 task 的 last_run_at 和 last_run_status
+    conn.execute(
+        "UPDATE competitor_tasks SET last_run_at = ?2, last_run_status = ?3 WHERE id = ?1",
+        rusqlite::params![task_id, now, status],
+    )?;
+
+    Ok(())
+}
+
+pub fn fail_competitor_run(run_id: i64, error_message: &str) -> Result<()> {
+    let conn = get_db().lock();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    // 获取 task_id
+    let task_id: i64 = conn.query_row(
+        "SELECT task_id FROM competitor_runs WHERE id = ?1",
+        [run_id],
+        |row| row.get(0),
+    )?;
+
+    // 更新 run 记录
+    conn.execute(
+        "UPDATE competitor_runs SET ended_at = ?2, status = 'failed', error_message = ?3 WHERE id = ?1",
+        rusqlite::params![run_id, now, error_message],
+    )?;
+
+    // 同时更新 task 的 last_run_at 和 last_run_status
+    conn.execute(
+        "UPDATE competitor_tasks SET last_run_at = ?2, last_run_status = 'failed' WHERE id = ?1",
+        rusqlite::params![task_id, now],
+    )?;
+
+    Ok(())
+}
+
+pub fn get_latest_competitor_runs(limit: i32) -> Result<Vec<CompetitorRun>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, task_id, started_at, ended_at, status, report_summary, report_content, error_message, created_at
+         FROM competitor_runs
+         ORDER BY started_at DESC
+         LIMIT ?1"
+    )?;
+
+    let rows = stmt.query_map([limit], |row| {
+        Ok(CompetitorRun {
+            id: row.get(0)?,
+            task_id: row.get(1)?,
+            started_at: row.get(2)?,
+            ended_at: row.get(3)?,
+            status: row.get(4)?,
+            report_summary: row.get(5)?,
+            report_content: row.get(6)?,
+            error_message: row.get(7)?,
+            created_at: row.get(8)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+pub fn get_competitor_runs_by_task(task_id: i64, limit: i32) -> Result<Vec<CompetitorRun>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, task_id, started_at, ended_at, status, report_summary, report_content, error_message, created_at
+         FROM competitor_runs
+         WHERE task_id = ?1
+         ORDER BY started_at DESC
+         LIMIT ?2"
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![task_id, limit], |row| {
+        Ok(CompetitorRun {
+            id: row.get(0)?,
+            task_id: row.get(1)?,
+            started_at: row.get(2)?,
+            ended_at: row.get(3)?,
+            status: row.get(4)?,
+            report_summary: row.get(5)?,
+            report_content: row.get(6)?,
+            error_message: row.get(7)?,
+            created_at: row.get(8)?,
         })
     })?;
 

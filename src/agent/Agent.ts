@@ -31,6 +31,7 @@ export class Agent {
   private toolExecutor: ToolExecutor;
   private state: AgentState;
   private eventListeners: ((event: AgentEvent) => void)[] = [];
+  private lastToolResults: Map<string, any> = new Map();
 
   constructor(config: AgentConfig) {
     this.role = config.role;
@@ -132,6 +133,7 @@ ${toolDescriptions || '（无可用工具）'}
   async execute(task: TaskConfig, signal?: AbortSignal): Promise<TaskResult> {
     // 重置状态
     this.state = this.createInitialState();
+    this.lastToolResults.clear();
     const toolsUsed: string[] = [];
 
     try {
@@ -206,6 +208,18 @@ ${toolDescriptions || '（无可用工具）'}
             // 执行工具
             const result = await this.toolExecutor.execute(toolCall);
 
+            // 保存 generate_weekly_report 的报告内容，用于直接输出
+            if (toolCall.name === 'generate_weekly_report') {
+              if (result.result?.report_content) {
+                this.lastToolResults.set('report_content', result.result.report_content);
+                console.log('[Agent] 已捕获报告内容，长度:', result.result.report_content.length);
+              } else if (result.error) {
+                console.error('[Agent] generate_weekly_report 执行失败:', result.error);
+              } else {
+                console.warn('[Agent] generate_weekly_report 返回结果中没有 report_content', result.result);
+              }
+            }
+
             this.emit('tool_call_end', {
               toolName: toolCall.name,
               result: result.result,
@@ -230,9 +244,23 @@ ${toolDescriptions || '（无可用工具）'}
         } else {
           // 任务完成（没有更多工具调用）
           this.state.status = 'completed';
-          const finalOutput = response.content || '';
 
-          this.emit('thinking_end', { content: finalOutput });
+          // 优先使用工具返回的报告内容（避免 AI 重复输出被截断）
+          const reportContent = this.lastToolResults.get('report_content');
+          const finalOutput = reportContent || response.content || '';
+
+          // 日志：检查最终输出
+          if (!finalOutput || finalOutput.trim().length === 0) {
+            console.warn('[Agent] 任务完成但输出为空', {
+              hasReportContent: !!reportContent,
+              hasResponseContent: !!response.content,
+              toolsUsed,
+            });
+          } else {
+            console.log('[Agent] 任务完成，输出长度:', finalOutput.length, '来源:', reportContent ? 'tool' : 'response');
+          }
+
+          this.emit('thinking_end', { content: response.content || '' });
 
           const taskResult: TaskResult = {
             success: true,

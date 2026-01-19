@@ -153,7 +153,7 @@ async function chatWithToolsOpenAI(
   tools: Tool[],
   options: ChatWithToolsOptions
 ): Promise<ChatWithToolsResponse> {
-  const { provider, model, temperature = 0.7, maxTokens = 4000, signal } = options;
+  const { provider, model, temperature = 0.7, maxTokens = 8000, signal } = options;
   const apiKey = await getProviderApiKey(provider);
   const endpoint = API_ENDPOINTS[provider];
   const actualModel = model || AI_PROVIDERS[provider].defaultModel;
@@ -247,7 +247,7 @@ async function chatWithToolsGemini(
   tools: Tool[],
   options: ChatWithToolsOptions
 ): Promise<ChatWithToolsResponse> {
-  const { model, temperature = 0.7, maxTokens = 4000, signal } = options;
+  const { model, temperature = 0.7, maxTokens = 8000, signal } = options;
   const apiKey = await getProviderApiKey('gemini');
   const actualModel = model || AI_PROVIDERS.gemini.defaultModel;
   const endpoint = `${API_ENDPOINTS.gemini}/${actualModel}:generateContent?key=${apiKey}`;

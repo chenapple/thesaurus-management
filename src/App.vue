@@ -188,7 +188,7 @@ const helpSections = [
   { id: 'monitoring', title: '排名监控', icon: 'TrendCharts', keywords: ['排名', '监控', '追踪', '变化', '调度', '定时', '通知'] },
   { id: 'smartcopy', title: '智能文案', icon: 'EditPen', keywords: ['文案', '标题', '五点', 'listing', 'AI', '竞品', '分析', '新品', '老品'] },
   { id: 'ads', title: '智能广告', icon: 'Promotion', keywords: ['广告', 'ACOS', 'CPC', '否词', '优化', '预算', '投放'] },
-  { id: 'knowledge', title: '知识库', icon: 'FolderOpened', keywords: ['知识', '文档', 'AI问答', '向量', '搜索', 'RAG'] },
+  { id: 'knowledge', title: '知识库', icon: 'FolderOpened', keywords: ['知识', '文档', 'AI问答', '向量', '搜索', 'RAG', '分类', '双向链接', '知识图谱', 'Callout', '大纲', '保存笔记', 'Obsidian'] },
 ];
 
 // 搜索过滤后的菜单项
@@ -3703,10 +3703,12 @@ onUnmounted(() => {
           <div v-show="activeHelpTab === 'knowledge'">
           <div class="help-content">
             <h4>功能说明</h4>
-            <p>上传产品相关文档，构建企业专属知识库。通过向量检索 + 关键词搜索的混合检索技术，实现基于文档内容的精准 AI 问答。</p>
+            <p>上传产品相关文档，构建企业专属知识库。通过向量检索 + 关键词搜索的混合检索技术，实现基于文档内容的精准 AI 问答。支持 Obsidian 风格的多分类管理、双向链接和知识图谱。</p>
             <ul>
               <li><strong>文档管理：</strong>支持 PDF、Word、Excel、PPT、Markdown、TXT 等格式，批量上传带进度显示</li>
-              <li><strong>分类整理：</strong>创建分类管理文档，支持颜色标识和拖拽排序</li>
+              <li><strong>分类整理：</strong>创建分类管理文档，支持颜色标识、拖拽排序，一个文档可归属多个分类</li>
+              <li><strong>双向链接：</strong>文档间建立关联，支持反向链接查看</li>
+              <li><strong>知识图谱：</strong>可视化展示文档之间的关联关系</li>
               <li><strong>智能问答：</strong>三种对话模式，支持流式输出和来源引用</li>
               <li><strong>图片识别：</strong>自动提取文档中的图片并用 AI 识别内容</li>
             </ul>
@@ -3737,6 +3739,150 @@ onUnmounted(() => {
                     <li><strong>智能分块：</strong>将长文档切分为适合检索的文本块</li>
                     <li><strong>向量化：</strong>为每个文本块生成向量索引（需配置 DeepSeek 或通义千问）</li>
                     <li><strong>图片处理：</strong>提取图片并用 AI Vision 识别内容（需配置通义千问或 Gemini）</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="categorySystem">
+                <template #title>
+                  <span class="agent-title">多分类管理</span>
+                  <span class="agent-subtitle">灵活组织文档</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>分类管理</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>创建分类：</strong>点击左侧分类面板的"+"按钮创建新分类</li>
+                      <li><strong>颜色设置：</strong>为每个分类设置不同颜色，便于视觉区分</li>
+                      <li><strong>编辑/删除：</strong>右键点击分类可编辑或删除</li>
+                      <li><strong>拖拽排序：</strong>拖拽分类可调整显示顺序</li>
+                    </ul>
+                  </div>
+                  <h5>文档分类</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>多分类支持：</strong>一个文档可以归属于多个分类</li>
+                      <li><strong>添加分类：</strong>在文档预览面板中，点击"添加分类"选择要归入的分类</li>
+                      <li><strong>移除分类：</strong>点击分类标签上的关闭按钮可移除</li>
+                      <li><strong>按分类筛选：</strong>点击侧边栏的分类可快速筛选该分类下的所有文档</li>
+                    </ul>
+                  </div>
+                  <h5>使用场景</h5>
+                  <ul>
+                    <li>同一文档可属于多个分类，实现多维度管理</li>
+                    <li>比单一文件夹更灵活，避免文档重复存储</li>
+                    <li>分类颜色直观标识，快速识别文档归属</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="biLinks">
+                <template #title>
+                  <span class="agent-title">双向链接与知识图谱</span>
+                  <span class="agent-subtitle">构建知识网络</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>双向链接</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>添加链接：</strong>在文档预览面板点击"添加链接"，选择要关联的文档</li>
+                      <li><strong>出链：</strong>当前文档主动引用的其他文档</li>
+                      <li><strong>反向链接：</strong>其他文档中引用当前文档的列表</li>
+                      <li><strong>快速跳转：</strong>点击链接可直接打开目标文档</li>
+                    </ul>
+                  </div>
+                  <h5>知识图谱</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>打开图谱：</strong>点击工具栏的"知识图谱"按钮查看</li>
+                      <li><strong>节点显示：</strong>每个文档显示为一个节点</li>
+                      <li><strong>连线关系：</strong>有链接关系的文档之间会显示连线</li>
+                      <li><strong>节点交互：</strong>点击节点可直接跳转到对应文档</li>
+                    </ul>
+                  </div>
+                  <h5>使用场景</h5>
+                  <ul>
+                    <li>产品文档关联到竞品分析、用户反馈等文档</li>
+                    <li>通过反向链接发现哪些文档引用了当前内容</li>
+                    <li>知识图谱直观展示知识体系的关联结构</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="callouts">
+                <template #title>
+                  <span class="agent-title">Callouts 提示框</span>
+                  <span class="agent-subtitle">Obsidian 风格高亮块</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>语法格式</h5>
+                  <div class="prompt-block">
+                    <p>在 Markdown 文档中使用以下语法创建提示框：</p>
+                    <pre style="background: var(--el-fill-color-light); padding: 12px; border-radius: 6px; margin: 8px 0; font-size: 13px;">&gt; [!note] 标题
+&gt; 内容文字
+
+&gt; [!warning] 警告标题
+&gt; 警告内容</pre>
+                  </div>
+                  <h5>支持的类型</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>note（笔记）：</strong>蓝色，用于一般性说明</li>
+                      <li><strong>tip（提示）：</strong>绿色，用于技巧和建议</li>
+                      <li><strong>warning（警告）：</strong>橙色，用于注意事项</li>
+                      <li><strong>danger（危险）：</strong>红色，用于重要警示</li>
+                      <li><strong>info（信息）：</strong>蓝色，用于补充信息</li>
+                      <li><strong>quote（引用）：</strong>灰色，用于引用内容</li>
+                      <li><strong>success（成功）：</strong>绿色，用于正面信息</li>
+                      <li><strong>question（疑问）：</strong>紫色，用于问题提示</li>
+                    </ul>
+                  </div>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="outline">
+                <template #title>
+                  <span class="agent-title">大纲导航</span>
+                  <span class="agent-subtitle">快速定位长文档</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>功能说明</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>自动提取：</strong>系统自动解析文档中的标题（# ## ### 等）</li>
+                      <li><strong>层级展示：</strong>大纲按标题层级缩进显示</li>
+                      <li><strong>快速跳转：</strong>点击大纲项可滚动到对应位置</li>
+                      <li><strong>位置显示：</strong>在文档预览面板右侧展示</li>
+                    </ul>
+                  </div>
+                  <h5>使用场景</h5>
+                  <ul>
+                    <li>快速浏览长文档的结构</li>
+                    <li>在文档各章节之间快速跳转</li>
+                    <li>了解文档的内容组织方式</li>
+                  </ul>
+                </div>
+              </el-collapse-item>
+
+              <el-collapse-item name="saveAsNote">
+                <template #title>
+                  <span class="agent-title">保存 AI 回答为笔记</span>
+                  <span class="agent-subtitle">知识沉淀闭环</span>
+                </template>
+                <div class="prompt-section">
+                  <h5>功能说明</h5>
+                  <div class="prompt-block">
+                    <ul>
+                      <li><strong>保存按钮：</strong>AI 回答后，悬停消息可见"保存为笔记"按钮</li>
+                      <li><strong>自动关联：</strong>保存时自动将引用的来源文档建立双向链接</li>
+                      <li><strong>编辑内容：</strong>保存前可编辑笔记标题和内容</li>
+                    </ul>
+                  </div>
+                  <h5>使用场景</h5>
+                  <ul>
+                    <li>将 AI 分析的结论保存为知识库文档</li>
+                    <li>整理 AI 回答，形成结构化的知识积累</li>
+                    <li>通过双向链接追溯知识的来源</li>
                   </ul>
                 </div>
               </el-collapse-item>
@@ -3824,8 +3970,11 @@ onUnmounted(() => {
               <li>配置 AI 服务 API Key（建议配置 DeepSeek + 通义千问）</li>
               <li>点击"添加文档"或拖拽文件上传文档</li>
               <li>等待文档处理完成（解析 → 分块 → 向量化）</li>
+              <li>为文档添加标签，方便后续筛选和管理</li>
+              <li>建立文档间的双向链接，构建知识网络</li>
               <li>在对话界面输入问题，AI 会基于知识库内容回答</li>
               <li>点击"来源"展开查看回答的参考文档</li>
+              <li>将有价值的 AI 回答保存为笔记，沉淀知识</li>
             </ol>
 
             <h4>注意事项</h4>
@@ -3835,6 +3984,8 @@ onUnmounted(() => {
               <li><strong>处理时间：</strong>大文档的向量化需要一定时间，上传时可查看进度</li>
               <li><strong>向量化状态：</strong>文档列表显示向量化进度，未完成向量化的文档检索效果会受影响</li>
               <li><strong>对话上下文：</strong>保留最近 15 轮对话作为上下文，长对话建议新建会话</li>
+              <li><strong>标签与分类：</strong>分类是文件夹式的单一归属，标签支持多维度打标，两者可配合使用</li>
+              <li><strong>双向链接：</strong>链接是双向的，删除一个方向会同时删除另一方向的关联</li>
             </ul>
           </div>
           </div>

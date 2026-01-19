@@ -44,6 +44,7 @@ export function createMarketResearchAgent(
 
 /**
  * 生成周报任务配置
+ * 使用固定模板生成报告，确保输出格式一致
  */
 export function createWeeklyReportTask(
   marketplace: string,
@@ -53,36 +54,13 @@ export function createWeeklyReportTask(
   return {
     description: `请为 ${marketplace} 站点的 "${categoryName}" 类目生成本周的市场调研周报。
 
-请按以下步骤进行：
+**操作步骤：**
+1. 调用 generate_weekly_report 工具，参数：marketplace="${marketplace}", category_id="${categoryId}", category_name="${categoryName}"
+2. 工具会自动获取数据、生成 HTML 报告、保存到数据库
 
-1. **获取当前 BSR 数据**
-   - 使用 fetch_bsr_data 工具获取该类目 Top 100 产品数据
+**完成后：** 简要说明报告已生成即可，不需要输出报告内容。`,
 
-2. **分析排名变化**
-   - 使用 compare_bsr_history 工具对比上周数据
-   - 识别快速上升（排名提升 >20 位）和快速下降的产品
-
-3. **识别新品**
-   - 使用 identify_new_products 工具找出本周新进入 Top 100 的产品
-   - 评估这些新品的潜力（基于价格、评论数、评分）
-
-4. **分析价格趋势**
-   - 使用 analyze_price_trends 工具分析价格变动
-   - 标注显著降价/涨价的产品
-
-5. **生成周报**
-   - 整合以上数据，生成结构化的 Markdown 周报
-   - 包含：BSR 变化概览、新品观察、价格动态、行动建议
-
-6. **保存报告**
-   - 使用 save_report 工具保存周报到数据库`,
-
-    expectedOutput: `一份完整的 Markdown 格式周报，包含：
-- 标题和日期
-- BSR 变化 Top 10（上升/下降）
-- 本周新品列表及潜力评估
-- 价格变动分析
-- 具体可行的行动建议`,
+    expectedOutput: `简短的完成确认信息`,
 
     context: {
       marketplace,

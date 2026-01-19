@@ -3,6 +3,11 @@
 import { createTool } from '../Tool';
 import type { Tool } from '../types';
 import { invoke } from '@tauri-apps/api/core';
+import {
+  generateWeeklyReport,
+  buildReportDataFromTools,
+  type ToolResults,
+} from '../report-template';
 
 // ==================== BSR 数据获取工具 ====================
 
@@ -109,6 +114,7 @@ interface BsrProduct {
   price?: string;
   rating?: number;
   reviews: number;
+  image_url?: string;
 }
 
 export const compareBsrHistoryTool: Tool = createTool(
@@ -163,8 +169,8 @@ export const compareBsrHistoryTool: Tool = createTool(
       const oldestRanks = new Map(oldestProducts.map(p => [p.asin, p.rank]));
 
       // 分析排名变化
-      const rankChanges: { asin: string; oldRank: number; newRank: number; change: number; title?: string }[] = [];
-      const newEntries: { asin: string; rank: number; title?: string }[] = [];
+      const rankChanges: { asin: string; oldRank: number; newRank: number; change: number; title?: string; image_url?: string }[] = [];
+      const newEntries: { asin: string; rank: number; title?: string; image_url?: string }[] = [];
       const droppedOut: { asin: string; oldRank: number; title?: string }[] = [];
 
       // 检查当前产品
@@ -180,6 +186,7 @@ export const compareBsrHistoryTool: Tool = createTool(
               newRank: product.rank,
               change,
               title: product.title,
+              image_url: product.image_url,
             });
           }
         } else {
@@ -187,6 +194,7 @@ export const compareBsrHistoryTool: Tool = createTool(
             asin: product.asin,
             rank: product.rank,
             title: product.title,
+            image_url: product.image_url,
           });
         }
       }
@@ -292,6 +300,7 @@ export const identifyNewProductsTool: Tool = createTool(
           price: p.price,
           rating: p.rating,
           reviews: p.reviews,
+          image_url: p.image_url,
         }));
 
       return {
@@ -426,49 +435,250 @@ export const analyzePriceTrendsTool: Tool = createTool(
   }
 );
 
-// ==================== 生成周报工具 ====================
+// ==================== 生成周报工具（一键生成，自动获取所有数据）====================
 
 export const generateWeeklyReportTool: Tool = createTool(
   'generate_weekly_report',
-  '基于分析数据生成结构化的周报内容',
+  '一键生成完整的市场调研周报。返回 report_content 字段包含 HTML 格式报告（以 <div 开头），请直接原样输出该字段内容',
   {
     type: 'object',
     properties: {
       marketplace: {
         type: 'string',
-        description: 'Amazon 站点代码',
+        description: 'Amazon 站点代码（如 US, UK, DE, FR, JP 等）',
+        enum: ['US', 'CA', 'MX', 'BR', 'UK', 'DE', 'FR', 'IT', 'ES', 'NL', 'SE', 'PL', 'JP', 'AU'],
+      },
+      category_id: {
+        type: 'string',
+        description: '类目 ID',
       },
       category_name: {
         type: 'string',
         description: '类目名称',
       },
-      bsr_changes: {
-        type: 'object',
-        description: 'BSR 变化数据',
-      },
-      new_products: {
-        type: 'array',
-        description: '新品列表',
-      },
-      price_trends: {
-        type: 'object',
-        description: '价格趋势数据',
-      },
     },
-    required: ['marketplace', 'category_name'],
+    required: ['marketplace', 'category_id', 'category_name'],
   },
   async (params) => {
-    // 这个工具主要是让 Agent 整理数据，不需要后端调用
-    const report = {
-      title: `市场调研周报 - ${params.category_name} (${params.marketplace})`,
-      generated_at: new Date().toISOString(),
-      sections: {
-        bsr_overview: params.bsr_changes || '数据待获取',
-        new_products: params.new_products || [],
-        price_trends: params.price_trends || '数据待获取',
+    const { marketplace, category_id, category_name } = params;
+
+    // 0. 先爬取最新的 BSR 数据（确保有新数据）
+    try {
+      const bsrResult = await invoke<{ products: BsrProduct[]; error?: string }>('fetch_category_bsr', {
+        marketplace,
+        categoryId: category_id,
+      });
+      // 保存爬取结果到数据库
+      if (!bsrResult.error && bsrResult.products && bsrResult.products.length > 0) {
+        await invoke('save_bsr_snapshot', {
+          marketplace,
+          categoryId: category_id,
+          categoryName: category_name,
+          productsJson: JSON.stringify(bsrResult.products),
+          productCount: bsrResult.products.length,
+        }).catch(() => {}); // 忽略保存错误
+      }
+    } catch {
+      // 爬取失败时使用历史数据
+    }
+
+    // 1. 获取 BSR 对比数据（包含刚爬取的新数据）
+    let bsrComparison: any = null;
+    try {
+      const history = await invoke<BsrSnapshot[]>('get_bsr_history', {
+        marketplace,
+        categoryId: category_id,
+        days: 7,
+      });
+
+      if (history.length >= 2) {
+        const latestSnapshot = history[0];
+        const oldestSnapshot = history[history.length - 1];
+        const latestProducts: BsrProduct[] = JSON.parse(latestSnapshot.products_json);
+        const oldestProducts: BsrProduct[] = JSON.parse(oldestSnapshot.products_json);
+
+        const latestRanks = new Map(latestProducts.map(p => [p.asin, p.rank]));
+        const oldestRanks = new Map(oldestProducts.map(p => [p.asin, p.rank]));
+
+        const rankChanges: any[] = [];
+        const newEntries: any[] = [];
+        const droppedOut: any[] = [];
+
+        for (const product of latestProducts) {
+          if (!product.asin) continue;
+          const oldRank = oldestRanks.get(product.asin);
+          if (oldRank !== undefined) {
+            const change = oldRank - product.rank;
+            if (Math.abs(change) >= 5) {
+              rankChanges.push({
+                asin: product.asin,
+                oldRank,
+                newRank: product.rank,
+                change,
+                title: product.title,
+                image_url: product.image_url,
+              });
+            }
+          } else {
+            newEntries.push({
+              asin: product.asin,
+              rank: product.rank,
+              title: product.title,
+              image_url: product.image_url,
+              price: product.price,
+              rating: product.rating,
+              reviews: product.reviews,
+            });
+          }
+        }
+
+        for (const product of oldestProducts) {
+          if (!product.asin) continue;
+          if (!latestRanks.has(product.asin)) {
+            droppedOut.push({ asin: product.asin, oldRank: product.rank, title: product.title });
+          }
+        }
+
+        rankChanges.sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
+
+        bsrComparison = {
+          status: 'success',
+          comparison_period: { from: oldestSnapshot.snapshot_date, to: latestSnapshot.snapshot_date },
+          summary: {
+            total_products: latestProducts.length,
+            significant_rank_changes: rankChanges.length,
+            new_entries: newEntries.length,
+            dropped_out: droppedOut.length,
+          },
+          top_rank_improvements: rankChanges.filter(c => c.change > 0).slice(0, 10),
+          top_rank_declines: rankChanges.filter(c => c.change < 0).slice(0, 10),
+          new_entries: newEntries.slice(0, 10),
+        };
+      } else {
+        bsrComparison = { status: 'insufficient_data', message: '历史数据不足' };
+      }
+    } catch (error) {
+      bsrComparison = { status: 'error', message: String(error) };
+    }
+
+    // 2. 获取新品数据
+    let newProductsData: any = null;
+    try {
+      const history = await invoke<BsrSnapshot[]>('get_bsr_history', {
+        marketplace,
+        categoryId: category_id,
+        days: 7,
+      });
+
+      if (history.length >= 2) {
+        const latestSnapshot = history[0];
+        const oldestSnapshot = history[history.length - 1];
+        const latestProducts: BsrProduct[] = JSON.parse(latestSnapshot.products_json);
+        const oldestAsins = new Set(
+          JSON.parse(oldestSnapshot.products_json).map((p: BsrProduct) => p.asin).filter(Boolean)
+        );
+
+        const newProducts = latestProducts
+          .filter(p => p.asin && !oldestAsins.has(p.asin))
+          .map(p => ({
+            asin: p.asin,
+            rank: p.rank,
+            title: p.title,
+            image_url: p.image_url,
+            price: p.price,
+            rating: p.rating,
+            reviews: p.reviews,
+          }));
+
+        newProductsData = {
+          status: 'success',
+          period: { from: oldestSnapshot.snapshot_date, to: latestSnapshot.snapshot_date },
+          new_products: newProducts,
+        };
+      } else {
+        newProductsData = { status: 'insufficient_data', new_products: [] };
+      }
+    } catch (error) {
+      newProductsData = { status: 'error', new_products: [] };
+    }
+
+    // 3. 获取价格趋势
+    let priceTrendsData: any = null;
+    try {
+      const history = await invoke<BsrSnapshot[]>('get_bsr_history', {
+        marketplace,
+        categoryId: category_id,
+        days: 7,
+      });
+
+      if (history.length >= 2) {
+        const parsePrice = (priceStr?: string): number | null => {
+          if (!priceStr) return null;
+          const match = priceStr.match(/[\d.]+/);
+          return match ? parseFloat(match[0]) : null;
+        };
+
+        const latestSnapshot = history[0];
+        const oldestSnapshot = history[history.length - 1];
+
+        const latestProducts: BsrProduct[] = JSON.parse(latestSnapshot.products_json);
+        const oldestProducts: BsrProduct[] = JSON.parse(oldestSnapshot.products_json);
+
+        const latestPrices = latestProducts.map(p => parsePrice(p.price)).filter((p): p is number => p !== null);
+        const oldestPrices = oldestProducts.map(p => parsePrice(p.price)).filter((p): p is number => p !== null);
+
+        const latestAvg = latestPrices.length > 0 ? latestPrices.reduce((a, b) => a + b, 0) / latestPrices.length : null;
+        const oldestAvg = oldestPrices.length > 0 ? oldestPrices.reduce((a, b) => a + b, 0) / oldestPrices.length : null;
+
+        let priceChange = null;
+        let priceChangePercent = null;
+        let trend = 'unknown';
+
+        if (latestAvg && oldestAvg) {
+          priceChange = latestAvg - oldestAvg;
+          priceChangePercent = (priceChange / oldestAvg) * 100;
+          trend = priceChange > 0 ? 'increasing' : priceChange < 0 ? 'decreasing' : 'stable';
+        }
+
+        priceTrendsData = {
+          status: 'success',
+          summary: {
+            current_avg_price: latestAvg?.toFixed(2),
+            current_min_price: latestPrices.length > 0 ? Math.min(...latestPrices).toFixed(2) : null,
+            current_max_price: latestPrices.length > 0 ? Math.max(...latestPrices).toFixed(2) : null,
+            price_change: priceChange?.toFixed(2),
+            price_change_percent: priceChangePercent?.toFixed(2),
+            trend,
+          },
+        };
+      } else {
+        priceTrendsData = { status: 'insufficient_data', summary: {} };
+      }
+    } catch (error) {
+      priceTrendsData = { status: 'error', summary: {} };
+    }
+
+    // 4. 使用固定模板生成报告
+    const toolResults: ToolResults = {
+      bsrComparison,
+      newProducts: newProductsData,
+      priceTrends: priceTrendsData,
+    };
+
+    const reportData = buildReportDataFromTools(marketplace, category_id, category_name, toolResults);
+    const reportContent = generateWeeklyReport(reportData);
+
+    // 5. 报告由 AgentTab.vue 保存，这里直接返回
+    return {
+      success: true,
+      report_content: reportContent,
+      summary: {
+        total_products: reportData.totalProducts,
+        significant_changes: reportData.significantChanges,
+        new_entries: reportData.newEntries,
+        has_enough_data: reportData.hasEnoughData,
       },
     };
-    return report;
   }
 );
 
@@ -495,18 +705,9 @@ export const saveReportTool: Tool = createTool(
     },
     required: ['marketplace', 'category_id', 'report_content'],
   },
-  async (params) => {
-    try {
-      const result = await invoke('save_market_research_report', {
-        marketplace: params.marketplace,
-        categoryId: params.category_id,
-        content: params.report_content,
-      }) as Record<string, any>;
-      return { success: true, ...result };
-    } catch (error) {
-      console.warn('保存报告失败:', error);
-      return { success: false, error: String(error) };
-    }
+  async () => {
+    // 报告由 AgentTab.vue 自动保存，此工具仅作兼容
+    return { success: true, message: '报告已通过系统自动保存' };
   }
 );
 

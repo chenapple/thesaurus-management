@@ -444,6 +444,25 @@ export interface KbMessage {
   created_at: string;
 }
 
+// 文档链接（双向链接）
+export interface KbDocumentLink {
+  id: number;
+  source_doc_id: number;
+  target_doc_id: number;
+  source_title: string;
+  target_title: string;
+  link_text: string | null;
+  created_at: string;
+}
+
+// 文档分类关联（多对多）
+export interface KbDocumentCategory {
+  document_id: number;
+  category_id: number;
+  category_name: string;
+  category_color: string;
+}
+
 // 消息来源（解析后的）
 export interface MessageSource {
   document_id: number;
@@ -910,5 +929,94 @@ export interface AdAnalysisRecord {
   result_json: string;
   ai_provider: string | null;
   ai_model: string | null;
+  created_at: string;
+}
+
+// ==================== 市场调研任务与执行记录 ====================
+
+// 市场调研任务
+export interface MarketResearchTask {
+  id: number;
+  name: string;
+  marketplace: string;
+  category_id: string;
+  category_name?: string;
+  ai_provider: string;
+  ai_model?: string;
+  schedule_type: string;
+  schedule_days?: string;
+  schedule_time: string;
+  is_enabled: boolean;
+  last_run_at?: string;
+  last_run_status?: string;
+  created_at: string;
+}
+
+// 市场调研执行记录
+export interface MarketResearchRun {
+  id: number;
+  task_id: number;
+  started_at: string;
+  ended_at?: string;
+  status: 'running' | 'completed' | 'failed';
+  report_summary?: string;
+  report_content?: string;
+  snapshot_id?: number;
+  error_message?: string;
+  created_at: string;
+}
+
+// ==================== 竞品情报 ====================
+
+// 竞品监控任务
+export interface CompetitorTask {
+  id: number;
+  name: string;
+  marketplace: string;
+  my_asin?: string;
+  ai_provider: string;
+  ai_model?: string;
+  schedule_type: string;
+  schedule_days?: string;  // JSON 数组字符串，例如 "[1,2,3,4,5]"
+  schedule_time: string;
+  is_enabled: boolean;
+  last_run_at?: string;
+  last_run_status?: string;
+  created_at: string;
+}
+
+// 监控的竞品 ASIN
+export interface CompetitorAsin {
+  id: number;
+  task_id: number;
+  asin: string;
+  title?: string;
+  tags?: string;
+  created_at: string;
+}
+
+// 竞品快照
+export interface CompetitorSnapshot {
+  id: number;
+  asin_id: number;
+  snapshot_date: string;
+  price?: number;
+  bsr_rank?: number;
+  rating?: number;
+  review_count?: number;
+  availability?: string;
+  created_at: string;
+}
+
+// 竞品监控执行记录
+export interface CompetitorRun {
+  id: number;
+  task_id: number;
+  started_at: string;
+  ended_at?: string;
+  status: 'running' | 'completed' | 'failed';
+  report_summary?: string;
+  report_content?: string;
+  error_message?: string;
   created_at: string;
 }

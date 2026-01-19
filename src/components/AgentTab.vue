@@ -6,7 +6,6 @@ import {
   CircleCheck,
   Warning,
   Loading,
-  QuestionFilled,
   Setting,
   Refresh,
   Tools,
@@ -18,15 +17,25 @@ import {
   Delete,
   Clock,
   VideoPlay,
+  Close,
+  DataBoard,
+  Aim,
 } from '@element-plus/icons-vue';
 import MarketResearchTaskDialog from './MarketResearchTaskDialog.vue';
+import MarketResearchDashboard from './MarketResearchDashboard.vue';
+import CompetitorTaskDialog from './CompetitorTaskDialog.vue';
+import CompetitorDashboard from './CompetitorDashboard.vue';
 import type { MarketResearchTask } from './MarketResearchTaskDialog.vue';
+import type { CompetitorTask } from '../types';
 import { ElMessage } from 'element-plus';
 import { invoke } from '@tauri-apps/api/core';
 import {
   createMarketResearchAgent,
   createWeeklyReportTask,
   createQuickScanTask,
+  createCompetitorIntelligenceAgent,
+  createCompetitorMonitorTask,
+  createQuickCompetitorAnalysisTask,
 } from '../agent';
 import type { AgentEvent, TaskResult } from '../agent';
 import type { AIProvider } from '../types';
@@ -46,10 +55,20 @@ interface CategoryLevel {
   subcategories: SubcategoryInfo[];
 }
 
-// Emits
-const emit = defineEmits<{
-  (e: 'showHelp', tab: string): void;
-}>();
+// ==================== Agent 类型与视图模式 ====================
+type AgentType = 'market-research' | 'competitor-intelligence';
+type ViewMode = 'dashboard' | 'execute';
+
+const agentType = ref<AgentType>('market-research');
+const viewMode = ref<ViewMode>('dashboard');
+const dashboardRef = ref<InstanceType<typeof MarketResearchDashboard> | null>(null);
+const competitorDashboardRef = ref<InstanceType<typeof CompetitorDashboard> | null>(null);
+
+// Agent 类型配置
+const AGENT_TYPES = [
+  { value: 'market-research', label: '市场调研' },
+  { value: 'competitor-intelligence', label: '竞品情报' },
+] as const;
 
 // ==================== 配置状态 ====================
 
@@ -59,6 +78,82 @@ const customCategoryId = ref('');
 const customCategoryName = ref('');
 const useCustomCategory = ref(false);
 const selectedProvider = ref<AIProvider>('deepseek');
+
+// ==================== 最近使用记录 ====================
+interface RecentSelection {
+  marketplace: string;
+  categoryId: string;
+  categoryName: string;
+  timestamp: number;
+}
+
+const RECENT_SELECTIONS_KEY = 'agent_recent_selections';
+const MAX_RECENT_SELECTIONS = 8;
+
+const recentSelections = ref<RecentSelection[]>([]);
+
+// 加载最近使用记录
+function loadRecentSelections() {
+  try {
+    const saved = localStorage.getItem(RECENT_SELECTIONS_KEY);
+    if (saved) {
+      recentSelections.value = JSON.parse(saved);
+    }
+  } catch (e) {
+    console.error('加载最近使用记录失败:', e);
+  }
+}
+
+// 保存最近使用记录
+function saveRecentSelection(marketplace: string, categoryId: string, categoryName: string) {
+  if (!categoryId) return;
+
+  // 移除重复项
+  const filtered = recentSelections.value.filter(
+    r => !(r.marketplace === marketplace && r.categoryId === categoryId)
+  );
+
+  // 添加到开头
+  filtered.unshift({
+    marketplace,
+    categoryId,
+    categoryName: categoryName || categoryId,
+    timestamp: Date.now(),
+  });
+
+  // 限制数量
+  recentSelections.value = filtered.slice(0, MAX_RECENT_SELECTIONS);
+
+  // 保存到 localStorage
+  try {
+    localStorage.setItem(RECENT_SELECTIONS_KEY, JSON.stringify(recentSelections.value));
+  } catch (e) {
+    console.error('保存最近使用记录失败:', e);
+  }
+}
+
+// 快速选择
+function quickSelect(selection: RecentSelection) {
+  selectedMarketplace.value = selection.marketplace;
+  customCategoryId.value = selection.categoryId;
+  customCategoryName.value = selection.categoryName;
+}
+
+// 删除最近使用记录
+function removeRecentSelection(index: number) {
+  recentSelections.value.splice(index, 1);
+  try {
+    localStorage.setItem(RECENT_SELECTIONS_KEY, JSON.stringify(recentSelections.value));
+  } catch (e) {
+    console.error('保存失败:', e);
+  }
+}
+
+// 获取站点 flag
+function getMarketplaceFlag(marketplace: string): string {
+  const country = COUNTRY_OPTIONS.find(c => c.value === marketplace);
+  return country?.flag || '';
+}
 
 // ==================== 类目浏览器状态 ====================
 
@@ -180,9 +275,358 @@ function formatSchedule(task: MarketResearchTask): string {
   }
 }
 
+// 从仪表盘运行任务
+function handleDashboardRunTask(task: MarketResearchTask) {
+  viewMode.value = 'execute';
+  runTaskNow(task);
+}
+
+// 从仪表盘编辑任务
+function handleDashboardEditTask(task: MarketResearchTask) {
+  openEditTaskDialog(task);
+}
+
+// 任务对话框成功回调（刷新数据）
+async function handleTaskDialogSuccess() {
+  await loadMonitoringTasks();
+  // 同时刷新仪表盘数据
+  if (dashboardRef.value) {
+    dashboardRef.value.refresh();
+  }
+}
+
+// ==================== 竞品情报任务管理 ====================
+
+const showCompetitorTaskDialog = ref(false);
+const showCompetitorTaskListDialog = ref(false);  // 任务列表弹窗
+const editingCompetitorTask = ref<CompetitorTask | null>(null);
+const runningCompetitorTask = ref<CompetitorTask | null>(null);
+const competitorResult = ref<TaskResult | null>(null);
+const competitorRunId = ref<number | null>(null);
+const competitorTasks = ref<CompetitorTask[]>([]);
+const loadingCompetitorTasks = ref(false);
+
+// 竞品情报配置状态（用于快速执行）
+const competitorMarketplace = ref('US');
+const competitorMyAsin = ref('');
+const competitorProvider = ref<AIProvider>('deepseek');
+const competitorModel = ref('');
+
+// 竞品 ASIN 列表
+interface CompetitorAsinItem {
+  asin: string;
+  title?: string;
+}
+const competitorAsins = ref<CompetitorAsinItem[]>([]);
+const newCompetitorAsin = ref('');
+
+// 添加竞品 ASIN
+function addCompetitorAsin() {
+  const input = newCompetitorAsin.value.trim();
+  if (!input) return;
+
+  // 支持多种分隔符
+  const asins = input
+    .split(/[\n,\s]+/)
+    .map(s => s.trim().toUpperCase())
+    .filter(s => s && /^[A-Z0-9]{10}$/.test(s));
+
+  if (asins.length === 0) {
+    ElMessage.warning('请输入有效的 ASIN（10位字母数字）');
+    return;
+  }
+
+  for (const asin of asins) {
+    if (!competitorAsins.value.find(a => a.asin === asin)) {
+      competitorAsins.value.push({ asin });
+    }
+  }
+
+  newCompetitorAsin.value = '';
+}
+
+// 移除竞品 ASIN
+function removeCompetitorAsin(index: number) {
+  competitorAsins.value.splice(index, 1);
+}
+
+// 竞品情报可用模型
+const competitorAvailableModels = computed(() => {
+  const config = AI_PROVIDERS[competitorProvider.value];
+  return config?.models || [];
+});
+
+// 监听 provider 变化，重置 model
+watch(competitorProvider, (newProvider) => {
+  const config = AI_PROVIDERS[newProvider];
+  competitorModel.value = config?.defaultModel || '';
+});
+
+// 竞品情报是否可运行（需要我的 ASIN 或竞品 ASIN）
+const canRunCompetitor = computed(() => {
+  return competitorMyAsin.value.trim().length > 0 || competitorAsins.value.length > 0;
+});
+
+// 快速运行竞品监控
+async function runCompetitorQuick() {
+  if (isRunning.value) {
+    ElMessage.warning('有任务正在执行中');
+    return;
+  }
+
+  // 检查是否有输入
+  const hasMyAsin = competitorMyAsin.value.trim().length > 0;
+  const hasCompetitorAsins = competitorAsins.value.length > 0;
+
+  if (!hasMyAsin && !hasCompetitorAsins) {
+    ElMessage.warning('请输入我的 ASIN 或添加竞品 ASIN');
+    return;
+  }
+
+  // 重置状态
+  isRunning.value = true;
+  currentPhase.value = 'thinking';
+  currentIteration.value = 0;
+  thinkingContent.value = '';
+  toolCallHistory.value = [];
+  competitorResult.value = null;
+  runningCompetitorTask.value = null;
+
+  // 创建 AbortController
+  abortController.value = new AbortController();
+
+  try {
+    // 创建 Agent
+    const provider = competitorProvider.value;
+    const model = competitorModel.value || AI_PROVIDERS[provider].defaultModel;
+    const agent = createCompetitorIntelligenceAgent(provider, model);
+
+    // 监听事件
+    const unsubscribe = agent.onEvent((event: AgentEvent) => {
+      handleAgentEvent(event);
+    });
+
+    // 创建快速分析任务（直接传入 ASIN 列表）
+    const agentTask = createQuickCompetitorAnalysisTask(
+      competitorMarketplace.value,
+      hasMyAsin ? competitorMyAsin.value.trim() : undefined,
+      competitorAsins.value.map(a => a.asin)
+    );
+
+    // 执行任务
+    const result = await agent.execute(agentTask, abortController.value.signal);
+    competitorResult.value = result;
+    finalResult.value = result;
+    currentPhase.value = result.success ? 'completed' : 'error';
+
+    // 取消订阅
+    unsubscribe();
+
+    if (result.success) {
+      ElMessage.success('竞品分析完成');
+    } else {
+      ElMessage.error(`任务失败: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('Agent 执行错误:', error);
+    currentPhase.value = 'error';
+    const errorResult: TaskResult = {
+      success: false,
+      output: '',
+      error: error instanceof Error ? error.message : String(error),
+      toolsUsed: [],
+      iterations: currentIteration.value,
+    };
+    competitorResult.value = errorResult;
+    finalResult.value = errorResult;
+    ElMessage.error('Agent 执行出错');
+  } finally {
+    isRunning.value = false;
+    abortController.value = null;
+  }
+}
+
+// 从仪表盘创建任务
+function handleCompetitorCreateTask() {
+  editingCompetitorTask.value = null;
+  showCompetitorTaskDialog.value = true;
+}
+
+// 从仪表盘编辑任务
+function handleCompetitorEditTask(task: CompetitorTask) {
+  editingCompetitorTask.value = task;
+  showCompetitorTaskDialog.value = true;
+}
+
+// 从仪表盘运行任务
+async function handleCompetitorRunTask(task: CompetitorTask) {
+  if (isRunning.value) {
+    ElMessage.warning('有任务正在执行中');
+    return;
+  }
+
+  // 切换到执行视图
+  viewMode.value = 'execute';
+  runningCompetitorTask.value = task;
+
+  // 重置状态
+  isRunning.value = true;
+  currentPhase.value = 'thinking';
+  currentIteration.value = 0;
+  thinkingContent.value = '';
+  toolCallHistory.value = [];
+  competitorResult.value = null;
+
+  // 创建 AbortController
+  abortController.value = new AbortController();
+
+  // 创建执行记录
+  try {
+    competitorRunId.value = await invoke<number>('create_competitor_run', {
+      taskId: task.id,
+    });
+  } catch (error) {
+    console.error('创建执行记录失败:', error);
+  }
+
+  try {
+    // 创建 Agent
+    const provider = (task.ai_provider || 'deepseek') as AIProvider;
+    const model = task.ai_model || AI_PROVIDERS[provider].defaultModel;
+    const agent = createCompetitorIntelligenceAgent(provider, model);
+
+    // 监听事件
+    const unsubscribe = agent.onEvent((event: AgentEvent) => {
+      handleAgentEvent(event);
+    });
+
+    // 创建任务
+    const agentTask = createCompetitorMonitorTask(
+      task.id,
+      task.name,
+      task.marketplace,
+      task.my_asin
+    );
+
+    // 执行任务
+    const result = await agent.execute(agentTask, abortController.value.signal);
+    competitorResult.value = result;
+    finalResult.value = result;
+    currentPhase.value = result.success ? 'completed' : 'error';
+
+    // 取消订阅
+    unsubscribe();
+
+    // 更新执行记录
+    if (competitorRunId.value) {
+      if (result.success) {
+        const summary = result.output.slice(0, 200).replace(/[#\n]/g, ' ').trim();
+        await invoke('update_competitor_run', {
+          runId: competitorRunId.value,
+          status: 'completed',
+          reportSummary: summary,
+          reportContent: result.output,
+        });
+      } else {
+        await invoke('fail_competitor_run', {
+          runId: competitorRunId.value,
+          errorMessage: result.error || '未知错误',
+        });
+      }
+    }
+
+    if (result.success) {
+      ElMessage.success('竞品监控任务完成');
+    } else {
+      ElMessage.error(`任务失败: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('Agent 执行错误:', error);
+    currentPhase.value = 'error';
+    const errorResult: TaskResult = {
+      success: false,
+      output: '',
+      error: error instanceof Error ? error.message : String(error),
+      toolsUsed: [],
+      iterations: currentIteration.value,
+    };
+    competitorResult.value = errorResult;
+    finalResult.value = errorResult;
+
+    // 更新执行记录
+    if (competitorRunId.value) {
+      await invoke('fail_competitor_run', {
+        runId: competitorRunId.value,
+        errorMessage: errorResult.error || '未知错误',
+      });
+    }
+
+    ElMessage.error('Agent 执行出错');
+  } finally {
+    isRunning.value = false;
+    abortController.value = null;
+  }
+}
+
+// 加载竞品监控任务列表
+async function loadCompetitorTasks() {
+  loadingCompetitorTasks.value = true;
+  try {
+    const tasks = await invoke<CompetitorTask[]>('get_competitor_tasks');
+    competitorTasks.value = tasks;
+  } catch (error) {
+    console.error('加载竞品监控任务失败:', error);
+  } finally {
+    loadingCompetitorTasks.value = false;
+  }
+}
+
+// 立即运行竞品任务
+async function runCompetitorTaskNow(task: CompetitorTask) {
+  showCompetitorTaskListDialog.value = false;
+  await handleCompetitorRunTask(task);
+}
+
+// 编辑竞品任务（从列表弹窗）
+function openEditCompetitorTaskDialog(task: CompetitorTask) {
+  editingCompetitorTask.value = task;
+  showCompetitorTaskDialog.value = true;
+}
+
+// 删除竞品任务
+async function deleteCompetitorTask(task: CompetitorTask) {
+  try {
+    await invoke('delete_competitor_task', { id: task.id });
+    ElMessage.success('任务已删除');
+    await loadCompetitorTasks();
+  } catch (error) {
+    ElMessage.error(`删除失败: ${error}`);
+  }
+}
+
+// 格式化竞品任务计划
+function formatCompetitorSchedule(task: CompetitorTask): string {
+  if (task.schedule_type === 'daily') {
+    return `每天 ${task.schedule_time}`;
+  }
+  return `每周 ${task.schedule_time}`;
+}
+
+// 竞品任务对话框成功回调
+function handleCompetitorTaskDialogSuccess() {
+  // 刷新仪表盘数据
+  if (competitorDashboardRef.value) {
+    competitorDashboardRef.value.refresh();
+  }
+  // 刷新任务列表
+  loadCompetitorTasks();
+}
+
 onMounted(() => {
   loadMonitoringTasks();
+  loadCompetitorTasks(); // 加载竞品监控任务
   loadLastResult(); // 加载上次的执行结果
+  loadRecentSelections(); // 加载最近使用记录
 });
 
 // ==================== 执行状态 ====================
@@ -411,6 +855,8 @@ async function runAgent(quickScan = false) {
 
     if (result.success) {
       ElMessage.success('Agent 任务完成');
+      // 保存到最近使用记录
+      saveRecentSelection(selectedMarketplace.value, customCategoryId.value, customCategoryName.value);
     } else {
       ElMessage.error(`任务失败: ${result.error}`);
     }
@@ -463,13 +909,20 @@ async function saveResult(result: TaskResult, runId: number | null) {
       if (result.success) {
         // 提取摘要（取前200个字符）
         const summary = result.output.slice(0, 200).replace(/[#\n]/g, ' ').trim();
+
+        // 检查报告内容是否为空
+        if (!result.output || result.output.trim().length === 0) {
+          console.warn('警告: 任务成功但报告内容为空', { runId, toolsUsed: result.toolsUsed });
+        }
+
         await invoke('update_research_run', {
           runId,
           status: 'completed',
-          summary,
+          summary: summary || '报告生成完成',
           content: result.output,
           snapshotId: null,
         });
+        console.log('市场调研报告已保存到数据库', { runId, contentLength: result.output.length });
       } else {
         await invoke('fail_research_run', {
           runId,
@@ -477,8 +930,11 @@ async function saveResult(result: TaskResult, runId: number | null) {
         });
       }
     } catch (error) {
-      console.error('更新执行记录失败:', error);
+      console.error('更新执行记录失败:', error, { runId, result });
     }
+  } else if (runningTaskId.value) {
+    // 有任务 ID 但没有 runId，说明创建执行记录失败
+    console.warn('警告: 任务执行完成但无法保存，runId 为空');
   }
 }
 
@@ -620,11 +1076,16 @@ function getPhaseText() {
   }
 }
 
-// 简单的 Markdown 渲染（仅处理基本格式）
+// Markdown 渲染（支持表格和 HTML）
 function renderMarkdown(text: string): string {
   if (!text) return '';
 
-  return text
+  // 如果内容以 <div 开头，说明是 HTML，直接返回（不处理换行）
+  if (text.trim().startsWith('<div')) {
+    return text;
+  }
+
+  let result = text
     // 代码块
     .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
     // 标题
@@ -637,9 +1098,34 @@ function renderMarkdown(text: string): string {
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     // 列表
     .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
-    // 换行
-    .replace(/\n/g, '<br>');
+    .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+
+  // 解析 Markdown 表格
+  result = result.replace(/(?:^|\n)(\|.+\|)\n(\|[-:\s|]+\|)\n((?:\|.+\|\n?)+)/g, (_match, header, _separator, body) => {
+    const headerCells = header.split('|').filter((c: string) => c.trim()).map((c: string) => `<th style="padding:10px 14px;text-align:left;font-weight:600;background:#f8fafc;border-bottom:2px solid #e5e7eb;color:#374151;font-size:13px;">${c.trim()}</th>`).join('');
+    const bodyRows = body.trim().split('\n').map((row: string) => {
+      const cells = row.split('|').filter((c: string) => c.trim()).map((c: string) => {
+        const content = c.trim();
+        // 检测变化列（包含 ↑ 或 ↓）
+        const isUp = content.includes('↑');
+        const isDown = content.includes('↓');
+        const color = isUp ? '#059669' : isDown ? '#dc2626' : '#374151';
+        const fontWeight = (isUp || isDown) ? '600' : '400';
+        return `<td style="padding:10px 14px;border-bottom:1px solid #e5e7eb;color:${color};font-weight:${fontWeight};font-size:13px;">${content}</td>`;
+      }).join('');
+      return `<tr>${cells}</tr>`;
+    }).join('');
+    return `<table style="width:100%;border-collapse:collapse;margin:12px 0;"><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+  });
+
+  // 换行：连续两个换行变成段落，单个换行变成 <br>
+  // 但先排除 HTML 标签后的换行
+  result = result
+    .replace(/>\n</g, '><')  // 去掉 HTML 标签之间的换行
+    .replace(/\n\n+/g, '</p><p>')  // 多个换行变成段落
+    .replace(/\n/g, '<br>');  // 单个换行变成 <br>
+
+  return result;
 }
 </script>
 
@@ -651,16 +1137,44 @@ function renderMarkdown(text: string): string {
         <el-icon :size="24"><Cpu /></el-icon>
         <span class="title">智能体</span>
         <el-tag size="small" type="warning">Beta</el-tag>
+
+        <!-- Agent 类型选择 -->
+        <el-radio-group v-model="agentType" size="small" class="agent-type-selector">
+          <el-radio-button
+            v-for="agent in AGENT_TYPES"
+            :key="agent.value"
+            :value="agent.value"
+          >
+            {{ agent.label }}
+          </el-radio-button>
+        </el-radio-group>
       </div>
       <div class="header-right">
-        <el-button :icon="QuestionFilled" text @click="emit('showHelp', 'agent')">
-          帮助
-        </el-button>
+        <!-- 视图模式选择 -->
+        <el-radio-group v-model="viewMode" size="small">
+          <el-radio-button value="dashboard">
+            <el-icon><DataBoard /></el-icon>
+            <span>仪表盘</span>
+          </el-radio-button>
+          <el-radio-button value="execute">
+            <el-icon><Cpu /></el-icon>
+            <span>执行</span>
+          </el-radio-button>
+        </el-radio-group>
       </div>
     </div>
 
-    <!-- 主内容区 -->
-    <div class="main-content">
+    <!-- ==================== 市场调研 Agent ==================== -->
+    <!-- 市场调研 - 仪表盘视图 -->
+    <MarketResearchDashboard
+      v-if="agentType === 'market-research' && viewMode === 'dashboard'"
+      ref="dashboardRef"
+      @run-task="handleDashboardRunTask"
+      @edit-task="handleDashboardEditTask"
+    />
+
+    <!-- 市场调研 - 执行任务视图 -->
+    <div v-if="agentType === 'market-research' && viewMode === 'execute'" class="main-content">
       <!-- 左侧：配置面板 -->
       <div class="config-panel">
         <el-card shadow="never">
@@ -682,6 +1196,23 @@ function renderMarkdown(text: string): string {
           </template>
 
           <el-form label-position="top">
+            <!-- 最近使用 -->
+            <el-form-item v-if="recentSelections.length > 0" label="快速选择">
+              <div class="recent-selections">
+                <div
+                  v-for="(item, index) in recentSelections"
+                  :key="`${item.marketplace}-${item.categoryId}`"
+                  class="recent-item"
+                  :class="{ active: selectedMarketplace === item.marketplace && customCategoryId === item.categoryId }"
+                  @click="quickSelect(item)"
+                >
+                  <span class="recent-flag" v-html="getMarketplaceFlag(item.marketplace)"></span>
+                  <span class="recent-name">{{ item.categoryName }}</span>
+                  <el-icon class="recent-remove" @click.stop="removeRecentSelection(index)"><Close /></el-icon>
+                </div>
+              </div>
+            </el-form-item>
+
             <!-- AI Provider -->
             <el-form-item label="AI 服务">
               <el-select v-model="selectedProvider" :disabled="isRunning" style="width: 100%">
@@ -875,6 +1406,256 @@ function renderMarkdown(text: string): string {
       </div>
     </div>
 
+    <!-- ==================== 竞品情报 Agent ==================== -->
+    <!-- 竞品情报 - 仪表盘视图 -->
+    <CompetitorDashboard
+      v-if="agentType === 'competitor-intelligence' && viewMode === 'dashboard'"
+      ref="competitorDashboardRef"
+      @edit-task="handleCompetitorEditTask"
+      @run-task="handleCompetitorRunTask"
+    />
+
+    <!-- 竞品情报 - 执行视图 -->
+    <div v-if="agentType === 'competitor-intelligence' && viewMode === 'execute'" class="main-content">
+      <!-- 左侧：配置面板 -->
+      <div class="config-panel">
+        <el-card shadow="never">
+          <template #header>
+            <div class="card-header">
+              <div class="header-title">
+                <el-icon><Setting /></el-icon>
+                <span>任务配置</span>
+              </div>
+              <el-button
+                :icon="Clock"
+                size="small"
+                @click="showCompetitorTaskListDialog = true"
+              >
+                监控任务
+                <el-badge v-if="competitorTasks.length > 0" :value="competitorTasks.length" class="task-badge" />
+              </el-button>
+            </div>
+          </template>
+
+          <!-- 当前任务信息（从仪表盘运行时显示） -->
+          <div v-if="runningCompetitorTask" class="competitor-task-info">
+            <div class="info-item">
+              <span class="label">任务名称</span>
+              <span class="value">{{ runningCompetitorTask.name }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">站点</span>
+              <span class="value">{{ getCountryLabel(runningCompetitorTask.marketplace) }}</span>
+            </div>
+            <div class="info-item" v-if="runningCompetitorTask.my_asin">
+              <span class="label">我的 ASIN</span>
+              <span class="value">{{ runningCompetitorTask.my_asin }}</span>
+            </div>
+            <div class="info-item">
+              <span class="label">AI 服务</span>
+              <span class="value">{{ runningCompetitorTask.ai_provider }}</span>
+            </div>
+            <!-- 停止按钮 -->
+            <div v-if="isRunning" class="action-buttons" style="margin-top: 16px;">
+              <el-button type="danger" @click="stopAgent" style="width: 100%;">
+                停止执行
+              </el-button>
+            </div>
+          </div>
+
+          <!-- 快速配置表单 -->
+          <el-form v-else label-position="top" size="default">
+            <!-- AI Provider -->
+            <el-form-item label="AI 服务">
+              <el-select v-model="competitorProvider" :disabled="isRunning" style="width: 100%">
+                <el-option
+                  v-for="(config, key) in AI_PROVIDERS"
+                  :key="key"
+                  :value="key"
+                  :label="config.name"
+                />
+              </el-select>
+            </el-form-item>
+
+            <!-- AI Model -->
+            <el-form-item label="模型">
+              <el-select v-model="competitorModel" :disabled="isRunning" style="width: 100%">
+                <el-option
+                  v-for="model in competitorAvailableModels"
+                  :key="model"
+                  :value="model"
+                  :label="model"
+                />
+              </el-select>
+            </el-form-item>
+
+            <!-- 站点选择 -->
+            <el-form-item label="Amazon 站点">
+              <el-select v-model="competitorMarketplace" :disabled="isRunning" style="width: 100%">
+                <el-option
+                  v-for="country in COUNTRY_OPTIONS"
+                  :key="country.value"
+                  :value="country.value"
+                  :label="country.label"
+                >
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span class="country-flag" v-html="country.flag"></span>
+                    <span>{{ country.label }}</span>
+                  </div>
+                </el-option>
+              </el-select>
+            </el-form-item>
+
+            <!-- 我的 ASIN -->
+            <el-form-item label="我的 ASIN">
+              <el-input
+                v-model="competitorMyAsin"
+                :disabled="isRunning"
+                placeholder="可选，用于对比分析"
+                clearable
+              />
+              <div class="category-hint">
+                填写您的产品 ASIN，用于与竞品进行对比分析
+              </div>
+            </el-form-item>
+
+            <!-- 竞品 ASIN -->
+            <el-form-item label="竞品 ASIN">
+              <el-input
+                v-model="newCompetitorAsin"
+                :disabled="isRunning"
+                placeholder="输入竞品 ASIN，按回车添加"
+                @keyup.enter="addCompetitorAsin"
+              >
+                <template #append>
+                  <el-button :disabled="isRunning" @click="addCompetitorAsin">添加</el-button>
+                </template>
+              </el-input>
+              <div class="category-hint">支持批量粘贴（每行一个或逗号分隔）</div>
+
+              <!-- 已添加的竞品列表 -->
+              <div v-if="competitorAsins.length > 0" class="competitor-asin-list">
+                <el-tag
+                  v-for="(item, index) in competitorAsins"
+                  :key="index"
+                  closable
+                  type="info"
+                  size="small"
+                  @close="removeCompetitorAsin(index)"
+                >
+                  {{ item.asin }}
+                </el-tag>
+              </div>
+            </el-form-item>
+
+            <!-- 操作按钮 -->
+            <el-form-item>
+              <div class="action-buttons">
+                <el-button
+                  type="primary"
+                  :icon="Aim"
+                  :loading="isRunning"
+                  :disabled="!canRunCompetitor"
+                  style="flex: 1;"
+                  @click="runCompetitorQuick"
+                >
+                  开始监控
+                </el-button>
+                <el-button
+                  v-if="isRunning"
+                  type="danger"
+                  @click="stopAgent"
+                >
+                  停止
+                </el-button>
+              </div>
+            </el-form-item>
+          </el-form>
+        </el-card>
+      </div>
+
+      <!-- 右侧：结果展示 -->
+      <div class="result-panel">
+        <el-card shadow="never" class="result-card">
+          <template #header>
+            <div class="card-header">
+              <div class="header-title">
+                <el-icon><DocumentCopy /></el-icon>
+                <span>执行结果</span>
+                <el-tag v-if="competitorResult" :type="competitorResult.success ? 'success' : 'danger'" size="small">
+                  {{ competitorResult.success ? '成功' : '失败' }}
+                </el-tag>
+              </div>
+            </div>
+          </template>
+
+          <!-- 空状态 -->
+          <div v-if="!competitorResult && currentPhase === 'idle'" class="empty-state">
+            <el-icon :size="48"><Aim /></el-icon>
+            <p>输入 ASIN 后点击"开始监控"分析竞品情况</p>
+          </div>
+
+          <!-- 执行中 -->
+          <div v-else-if="isRunning" class="running-state">
+            <div class="phase-status">
+              <el-icon :class="{ spinning: currentPhase === 'thinking' || currentPhase === 'tool_call' }" :size="24">
+                <component :is="getPhaseIcon()" />
+              </el-icon>
+              <span class="phase-text">{{ getPhaseText() }}</span>
+            </div>
+
+            <div v-if="toolCallHistory.length > 0" class="tool-progress">
+              <div class="tool-progress-header">
+                <el-icon><Tools /></el-icon>
+                <span>已调用 {{ toolCallHistory.length }} 个工具</span>
+              </div>
+              <div class="tool-tags">
+                <el-tooltip
+                  v-for="(call, index) in toolCallHistory"
+                  :key="index"
+                  :content="call.error || '调用成功'"
+                  placement="top"
+                >
+                  <el-tag
+                    :type="call.error ? 'danger' : 'success'"
+                    size="small"
+                    class="tool-tag"
+                  >
+                    {{ call.name }}
+                  </el-tag>
+                </el-tooltip>
+              </div>
+            </div>
+
+            <div v-if="thinkingContent" class="thinking-preview">
+              <pre>{{ thinkingContent.slice(0, 500) }}{{ thinkingContent.length > 500 ? '...' : '' }}</pre>
+            </div>
+          </div>
+
+          <!-- 结果展示 -->
+          <div v-else-if="competitorResult" class="result-content">
+            <div v-if="competitorResult.success" class="success-result">
+              <div class="result-meta">
+                <span>迭代次数: {{ competitorResult.iterations }}</span>
+                <span>使用工具: {{ competitorResult.toolsUsed.join(', ') || '无' }}</span>
+              </div>
+              <div class="markdown-content" v-html="renderMarkdown(competitorResult.output)"></div>
+            </div>
+            <div v-else class="error-result">
+              <el-alert type="error" :title="competitorResult.error" show-icon :closable="false" />
+            </div>
+          </div>
+        </el-card>
+      </div>
+    </div>
+
+    <!-- 竞品任务编辑对话框 -->
+    <CompetitorTaskDialog
+      v-model="showCompetitorTaskDialog"
+      :task="editingCompetitorTask"
+      @success="handleCompetitorTaskDialogSuccess"
+    />
+
     <!-- 类目浏览器对话框 -->
     <el-dialog
       v-model="showCategoryBrowser"
@@ -1057,8 +1838,84 @@ function renderMarkdown(text: string): string {
     <MarketResearchTaskDialog
       v-model="showTaskDialog"
       :task="editingTask"
-      @success="loadMonitoringTasks"
+      @success="handleTaskDialogSuccess"
     />
+
+    <!-- 竞品监控任务列表弹窗 -->
+    <el-dialog
+      v-model="showCompetitorTaskListDialog"
+      title="竞品监控任务"
+      width="500px"
+    >
+      <div class="task-list-dialog">
+        <div v-if="loadingCompetitorTasks" class="loading-state">
+          <el-icon class="spinning"><Loading /></el-icon>
+          <span>加载中...</span>
+        </div>
+
+        <div v-else-if="competitorTasks.length === 0" class="empty-task-state">
+          <el-icon :size="40"><Aim /></el-icon>
+          <p>暂无监控任务</p>
+          <p class="hint">创建任务后可自动定时执行竞品监控</p>
+        </div>
+
+        <div v-else class="task-list">
+          <div
+            v-for="task in competitorTasks"
+            :key="task.id"
+            class="task-item"
+            :class="{ disabled: !task.is_enabled }"
+          >
+            <div class="task-info">
+              <div class="task-name">{{ task.name }}</div>
+              <div class="task-meta">
+                <el-tag size="small" type="info">{{ getCountryLabel(task.marketplace) }}</el-tag>
+                <span class="task-schedule">{{ formatCompetitorSchedule(task) }}</span>
+              </div>
+            </div>
+            <div class="task-actions">
+              <el-tooltip content="立即运行" placement="top">
+                <el-button
+                  :icon="VideoPlay"
+                  size="small"
+                  circle
+                  :disabled="isRunning"
+                  @click="runCompetitorTaskNow(task)"
+                />
+              </el-tooltip>
+              <el-tooltip content="编辑" placement="top">
+                <el-button
+                  :icon="Edit"
+                  size="small"
+                  circle
+                  @click="openEditCompetitorTaskDialog(task)"
+                />
+              </el-tooltip>
+              <el-popconfirm
+                title="确定要删除此任务吗？"
+                @confirm="deleteCompetitorTask(task)"
+              >
+                <template #reference>
+                  <el-button
+                    :icon="Delete"
+                    size="small"
+                    circle
+                    type="danger"
+                  />
+                </template>
+              </el-popconfirm>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="showCompetitorTaskListDialog = false">关闭</el-button>
+        <el-button type="primary" :icon="Plus" @click="handleCompetitorCreateTask(); showCompetitorTaskListDialog = false">
+          添加任务
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1096,12 +1953,106 @@ function renderMarkdown(text: string): string {
 .header-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
 }
 
 .header-left .title {
   font-size: 18px;
   font-weight: 600;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+}
+
+.header-right .el-radio-button :deep(.el-radio-button__inner) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-type-selector {
+  margin-left: 8px;
+}
+
+.agent-type-selector :deep(.el-radio-button__inner) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+
+.agent-type-selector :deep(.el-radio-button.is-active .el-radio-button__inner) {
+  background: var(--el-color-primary);
+  border-color: var(--el-color-primary);
+}
+
+/* Coming Soon Placeholder */
+.coming-soon-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+}
+
+.coming-soon-card {
+  text-align: center;
+  padding: 48px 60px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 20px;
+  box-shadow: var(--glass-shadow);
+  border: 1px solid var(--glass-border);
+  max-width: 480px;
+}
+
+.coming-soon-icon {
+  color: var(--el-color-primary);
+  margin-bottom: 16px;
+}
+
+.coming-soon-card h2 {
+  margin: 0 0 12px;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+
+.coming-soon-card h3 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.coming-soon-desc {
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
+  margin-bottom: 24px;
+  line-height: 1.6;
+}
+
+.coming-soon-features {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 24px;
+  text-align: left;
+}
+
+.feature-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+
+.feature-item .el-icon {
+  color: var(--el-color-success);
 }
 
 .main-content {
@@ -1260,6 +2211,11 @@ function renderMarkdown(text: string): string {
 
 .markdown-content {
   line-height: 1.6;
+  /* 报告使用固定浅色主题，确保深色模式下也能清晰显示 */
+  background: #ffffff;
+  padding: 16px;
+  border-radius: 8px;
+  color: #1f2937;
 }
 
 .markdown-content :deep(h2) {
@@ -1311,6 +2267,64 @@ function renderMarkdown(text: string): string {
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* 最近使用快速选择 */
+.recent-selections {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.recent-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.recent-item:hover {
+  background: var(--el-fill-color);
+  border-color: var(--el-color-primary-light-5);
+}
+
+.recent-item.active {
+  background: var(--el-color-primary-light-9);
+  border-color: var(--el-color-primary);
+  color: var(--el-color-primary);
+}
+
+.recent-flag {
+  font-size: 14px;
+}
+
+.recent-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-remove {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.recent-item:hover .recent-remove {
+  opacity: 1;
+}
+
+.recent-remove:hover {
+  color: var(--el-color-danger);
 }
 
 .category-hint {
@@ -1551,5 +2565,67 @@ function renderMarkdown(text: string): string {
   display: flex;
   gap: 4px;
   flex-shrink: 0;
+}
+
+/* 竞品任务信息 */
+.competitor-task-info {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.competitor-task-info .info-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.competitor-task-info .info-item:last-child {
+  border-bottom: none;
+}
+
+.competitor-task-info .label {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.competitor-task-info .value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+}
+
+.no-task-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  color: var(--el-text-color-secondary);
+  text-align: center;
+}
+
+.no-task-hint p {
+  margin: 12px 0;
+  font-size: 13px;
+}
+
+/* 竞品 ASIN 列表 */
+.competitor-asin-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.competitor-asin-list .el-tag {
+  font-family: monospace;
 }
 </style>

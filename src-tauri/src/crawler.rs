@@ -474,7 +474,7 @@ fn call_listing_crawler(asin: &str, country: &str) -> Result<ListingResult, Stri
     cmd.arg(&script_path)
         .arg(asin)
         .arg(country)
-        .arg("false"); // 有头模式，更稳定
+        .arg("new"); // 无头模式
 
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
@@ -569,7 +569,7 @@ async fn call_listing_crawler_batch(
         let mut cmd = Command::new(&python_cmd);
         cmd.arg(&script_path)
             .arg("--batch")
-            .arg("false")
+            .arg("new")  // 无头模式
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

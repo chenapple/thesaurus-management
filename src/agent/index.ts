@@ -41,7 +41,14 @@ export {
   createQuickScanTask,
   generateMultipleCategoryReports,
   MARKET_RESEARCH_AGENT_CONFIG,
+  // 竞品情报 Agent
+  createCompetitorIntelligenceAgent,
+  createCompetitorMonitorTask,
+  createQuickCheckTask,
+  createSingleProductAnalysisTask,
+  createQuickCompetitorAnalysisTask,
+  COMPETITOR_INTELLIGENCE_AGENT_CONFIG,
 } from './agents';
 
 // Tools
-export { marketResearchTools } from './tools';
+export { marketResearchTools, competitorIntelligenceTools } from './tools';

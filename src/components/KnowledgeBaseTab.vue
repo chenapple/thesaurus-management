@@ -8,7 +8,7 @@ import draggable from 'vuedraggable';
 import * as api from '../api';
 import { chat, chatStream, buildStrictModePrompt, buildAnalysisModePrompt, buildDirectChatPrompt, parseSourceReferences, checkApiKeyConfigured, recognizeImage, getTextEmbedding, getTextEmbeddingsBatchParallel } from '../ai-service';
 import type { ChatMessage } from '../ai-service';
-import type { KbDocument, KbConversation, KbMessage, KbSearchResult, KbChunk, AIProvider, DependencyStatus, InstallProgress } from '../types';
+import type { KbDocument, KbConversation, KbMessage, KbSearchResult, KbChunk, AIProvider, DependencyStatus, InstallProgress, KbDocumentLink, KbDocumentCategory } from '../types';
 import { AI_PROVIDERS } from '../types';
 import { marked } from 'marked';
 import { QuestionFilled } from '@element-plus/icons-vue';
@@ -49,8 +49,30 @@ const CATEGORY_COLORS = [
   { name: '灰色', value: '#909399' },
 ];
 
-// 选中状态
+// 选中状态（筛选用）
 const selectedCategory = ref<number | null>(null);
+const categoryFilteredDocIds = ref<Set<number>>(new Set()); // 按分类筛选的文档 ID 集合
+const categoryDocCounts = ref<Map<number, number>>(new Map()); // 每个分类的文档数量
+
+// 文档所属分类（在预览抽屉中使用，多对多）
+const previewDocCategories = ref<KbDocumentCategory[]>([]);
+
+// 文档链接（双向链接）
+const previewDocLinks = ref<KbDocumentLink[]>([]);
+const previewDocBacklinks = ref<KbDocumentLink[]>([]);
+
+// 知识图谱
+const showGraphView = ref(false);
+const graphDocuments = ref<KbDocument[]>([]);
+const graphLinks = ref<KbDocumentLink[]>([]);
+
+// 大纲导航
+interface OutlineItem {
+  level: number;
+  text: string;
+  anchor: string;
+}
+const previewOutline = ref<OutlineItem[]>([]);
 
 // 搜索和排序
 const searchText = ref('');
@@ -182,10 +204,25 @@ async function handlePreviewDocument(doc: KbDocument) {
   loadingPreview.value = true;
 
   try {
-    previewChunks.value = await api.kbGetChunks(doc.id);
+    // 并行加载分块、分类、链接
+    const [chunks] = await Promise.all([
+      api.kbGetChunks(doc.id),
+      loadDocumentCategories(doc.id),
+      loadDocumentLinks(doc.id),
+    ]);
+    previewChunks.value = chunks;
+
+    // 从分块内容中提取大纲
+    if (chunks.length > 0) {
+      const fullContent = chunks.map(c => c.content).join('\n\n');
+      previewOutline.value = extractOutline(fullContent);
+    } else {
+      previewOutline.value = [];
+    }
   } catch (e) {
     console.error('加载分块失败:', e);
     previewChunks.value = [];
+    previewOutline.value = [];
   } finally {
     loadingPreview.value = false;
   }
@@ -260,9 +297,14 @@ const displayMessages = computed(() => {
 const displayDocuments = computed(() => {
   let result = [...documents.value];
 
-  // 1. 按分类筛选
+  // 1. 按分类筛选（多对多）
   if (selectedCategory.value !== null) {
-    result = result.filter(doc => doc.category_id === selectedCategory.value);
+    if (categoryFilteredDocIds.value.size > 0) {
+      result = result.filter(doc => categoryFilteredDocIds.value.has(doc.id));
+    } else {
+      // 分类已选择但没有匹配的文档
+      result = [];
+    }
   }
 
   // 2. 按关键词搜索
@@ -293,13 +335,28 @@ const displayDocuments = computed(() => {
   return result;
 });
 
-// 计算每个分类的文档数
+// 计算每个分类的文档数（多对多）
 const getCategoryDocCount = (categoryId: number | null) => {
   if (categoryId === null) {
     return documents.value.length;
   }
-  return documents.value.filter(doc => doc.category_id === categoryId).length;
+  return categoryDocCounts.value.get(categoryId) || 0;
 };
+
+// 加载所有分类的文档数量
+async function loadCategoryDocCounts() {
+  const counts = new Map<number, number>();
+  for (const cat of categories.value) {
+    try {
+      const docs = await api.kbGetDocumentsByCategories(cat.id);
+      counts.set(cat.id, docs.length);
+    } catch (e) {
+      console.error(`加载分类 ${cat.id} 文档数量失败:`, e);
+      counts.set(cat.id, 0);
+    }
+  }
+  categoryDocCounts.value = counts;
+}
 
 // ==================== 文档管理 ====================
 
@@ -334,6 +391,8 @@ async function loadDocuments() {
 async function loadCategories() {
   try {
     categories.value = await api.kbGetCategories();
+    // 加载分类文档数量
+    await loadCategoryDocCounts();
   } catch (e) {
     console.error('加载分类失败:', e);
   }
@@ -431,6 +490,226 @@ async function handleCategoryDragChange(evt: any) {
     console.error('更新排序失败:', e);
     ElMessage.error('更新排序失败');
     await loadCategories();
+  }
+}
+
+// ==================== 文档分类关联（多对多）====================
+
+// 加载文档的分类（多对多）
+async function loadDocumentCategories(docId: number) {
+  try {
+    previewDocCategories.value = await api.kbGetDocumentCategories(docId);
+  } catch (e) {
+    console.error('加载文档分类失败:', e);
+    previewDocCategories.value = [];
+  }
+}
+
+// 给文档添加分类
+async function handleAddDocumentCategory(docId: number, categoryId: number) {
+  try {
+    await api.kbAddDocumentCategory(docId, categoryId);
+    await loadDocumentCategories(docId);
+    // 更新分类文档计数
+    const currentCount = categoryDocCounts.value.get(categoryId) || 0;
+    categoryDocCounts.value.set(categoryId, currentCount + 1);
+    // 如果当前正在按此分类筛选，需要刷新筛选结果
+    if (selectedCategory.value === categoryId) {
+      await handleCategoryFilter(categoryId);
+    }
+    ElMessage.success('分类已添加');
+  } catch (e) {
+    console.error('添加分类失败:', e);
+    ElMessage.error('添加分类失败');
+  }
+}
+
+// 移除文档分类
+async function handleRemoveDocumentCategory(docId: number, categoryId: number) {
+  try {
+    await api.kbRemoveDocumentCategory(docId, categoryId);
+    await loadDocumentCategories(docId);
+    // 更新分类文档计数
+    const currentCount = categoryDocCounts.value.get(categoryId) || 0;
+    if (currentCount > 0) {
+      categoryDocCounts.value.set(categoryId, currentCount - 1);
+    }
+    // 如果当前正在按此分类筛选，需要刷新筛选结果
+    if (selectedCategory.value === categoryId) {
+      await handleCategoryFilter(categoryId);
+    }
+  } catch (e) {
+    console.error('移除分类失败:', e);
+  }
+}
+
+// 按分类筛选文档（多对多版本）
+async function handleCategoryFilter(categoryId: number | null) {
+  selectedCategory.value = categoryId;
+
+  if (categoryId !== null) {
+    try {
+      const docs = await api.kbGetDocumentsByCategories(categoryId);
+      categoryFilteredDocIds.value = new Set(docs.map(d => d.id));
+    } catch (e) {
+      console.error('按分类筛选文档失败:', e);
+      categoryFilteredDocIds.value = new Set();
+    }
+  } else {
+    categoryFilteredDocIds.value = new Set();
+  }
+}
+
+// ==================== 文档链接（双向链接）====================
+
+async function loadDocumentLinks(docId: number) {
+  try {
+    previewDocLinks.value = await api.kbGetDocumentLinks(docId);
+    previewDocBacklinks.value = await api.kbGetDocumentBacklinks(docId);
+  } catch (e) {
+    console.error('加载文档链接失败:', e);
+    previewDocLinks.value = [];
+    previewDocBacklinks.value = [];
+  }
+}
+
+async function handleAddDocumentLink(sourceId: number, targetId: number) {
+  try {
+    await api.kbAddDocumentLink(sourceId, targetId);
+    await loadDocumentLinks(sourceId);
+    ElMessage.success('链接已创建');
+  } catch (e) {
+    console.error('创建链接失败:', e);
+    ElMessage.error('创建链接失败');
+  }
+}
+
+async function handleRemoveDocumentLink(sourceId: number, targetId: number) {
+  try {
+    await api.kbRemoveDocumentLink(sourceId, targetId);
+    await loadDocumentLinks(sourceId);
+    ElMessage.success('链接已移除');
+  } catch (e) {
+    console.error('移除链接失败:', e);
+  }
+}
+
+function handleNavigateToDocument(docId: number) {
+  const doc = documents.value.find(d => d.id === docId);
+  if (doc) {
+    handlePreviewDocument(doc);
+  }
+}
+
+// ==================== 知识图谱 ====================
+
+async function openGraphView() {
+  try {
+    graphDocuments.value = documents.value.filter(d => d.status === 'completed');
+    graphLinks.value = await api.kbGetAllLinks();
+    showGraphView.value = true;
+  } catch (e) {
+    console.error('加载图谱数据失败:', e);
+    ElMessage.error('加载图谱数据失败');
+  }
+}
+
+function getNodePosition(docId: number, axis: 'x' | 'y'): number {
+  const index = graphDocuments.value.findIndex(d => d.id === docId);
+  if (index === -1) return 0;
+  if (axis === 'x') {
+    return 25 + (index % 5) * 18;
+  } else {
+    return 20 + Math.floor(index / 5) * 20;
+  }
+}
+
+// ==================== 大纲导航 ====================
+
+function extractOutline(content: string): OutlineItem[] {
+  const lines = content.split('\n');
+  const outline: OutlineItem[] = [];
+  let anchorIndex = 0;
+
+  for (const line of lines) {
+    const match = line.match(/^(#{1,6})\s+(.+)$/);
+    if (match) {
+      const level = match[1].length;
+      const text = match[2].trim();
+      const anchor = `outline-${anchorIndex++}`;
+      outline.push({ level, text, anchor });
+    }
+  }
+
+  return outline;
+}
+
+function scrollToOutlineItem(anchor: string) {
+  const element = document.getElementById(anchor);
+  if (element) {
+    element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+// ==================== AI 回答保存为笔记 ====================
+
+async function handleSaveAsNote(msg: KbMessage) {
+  try {
+    const { value: title } = await ElMessageBox.prompt('请输入笔记标题', '保存为笔记', {
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValue: '来自 AI 的回答',
+      inputPattern: /\S+/,
+      inputErrorMessage: '标题不能为空',
+    });
+
+    if (!title) return;
+
+    // 创建 Markdown 内容
+    let content = `# ${title}\n\n`;
+    content += `> 创建时间：${new Date().toLocaleString('zh-CN')}\n\n`;
+    content += msg.content;
+
+    // 如果有来源引用，添加引用链接
+    if (msg.sources) {
+      const sources = JSON.parse(msg.sources);
+      if (sources.length > 0) {
+        content += '\n\n---\n\n## 参考来源\n\n';
+        for (const source of sources) {
+          content += `- [[${source.document_title}]]\n`;
+        }
+      }
+    }
+
+    // 创建临时文件并添加文档
+    const docId = await api.kbAddDocument(
+      selectedCategory.value,
+      title.trim(),
+      `${title.trim()}.md`,
+      '', // 将在后端生成
+      'md',
+      content.length
+    );
+
+    // 添加分块
+    await api.kbAddChunk(docId, 0, content);
+    await api.kbUpdateDocumentStatus(docId, 'completed', 1);
+
+    // 建立与引用文档的链接
+    if (msg.sources) {
+      const sources = JSON.parse(msg.sources);
+      for (const source of sources) {
+        await api.kbAddDocumentLink(docId, source.document_id);
+      }
+    }
+
+    await loadDocuments();
+    ElMessage.success('已保存为笔记');
+  } catch (e) {
+    if (e !== 'cancel') {
+      console.error('保存笔记失败:', e);
+      ElMessage.error('保存失败');
+    }
   }
 }
 
@@ -1028,6 +1307,8 @@ async function handleDeleteDocument(doc: KbDocument) {
 
     await api.kbDeleteDocument(doc.id);
     await loadDocuments();
+    // 刷新分类文档计数
+    await loadCategoryDocCounts();
     ElMessage.success('文档已删除');
   } catch (e) {
     if (e !== 'cancel') {
@@ -1039,9 +1320,11 @@ async function handleDeleteDocument(doc: KbDocument) {
 
 async function handleMoveToCategory(doc: KbDocument, categoryId: number | null) {
   try {
-    await api.kbUpdateDocumentCategory(doc.id, categoryId);
-    // 更新本地数据
-    doc.category_id = categoryId;
+    // 使用多对多 API：设置文档的分类（会替换所有现有分类）
+    const categoryIds = categoryId === null ? [] : [categoryId];
+    await api.kbSetDocumentCategories(doc.id, categoryIds);
+    // 刷新分类文档计数
+    await loadCategoryDocCounts();
     const catName = categoryId === null ? '未分类' : categories.value.find(c => c.id === categoryId)?.name || '未知';
     ElMessage.success(`已移动到 "${catName}"`);
   } catch (e) {
@@ -1482,10 +1765,60 @@ function stopGeneration() {
 }
 
 // Markdown 渲染
+// Callout 类型配置
+const CALLOUT_TYPES: Record<string, { icon: string; color: string; label: string }> = {
+  note: { icon: '📝', color: '#409EFF', label: '笔记' },
+  tip: { icon: '💡', color: '#67C23A', label: '提示' },
+  warning: { icon: '⚠️', color: '#E6A23C', label: '警告' },
+  danger: { icon: '❌', color: '#F56C6C', label: '危险' },
+  info: { icon: 'ℹ️', color: '#409EFF', label: '信息' },
+  quote: { icon: '💬', color: '#909399', label: '引用' },
+  example: { icon: '📋', color: '#00BCD4', label: '示例' },
+  question: { icon: '❓', color: '#9C27B0', label: '问题' },
+  success: { icon: '✅', color: '#67C23A', label: '成功' },
+  failure: { icon: '❎', color: '#F56C6C', label: '失败' },
+};
+
 function renderMarkdown(content: string): string {
-  let html = marked(content, { breaks: true }) as string;
+  // 预处理 Callouts: > [!type] 标题
+  let processedContent = content;
+
+  // 分割内容为块（按 Obsidian Callout 语法分割）
+  const blocks = processedContent.split(/\n(?=>\s*\[!)/);
+  const processedBlocks = blocks.map(block => {
+    const calloutMatch = block.match(/^>\s*\[!(\w+)\]\s*(.*?)(?:\n|$)/);
+    if (calloutMatch) {
+      const type = calloutMatch[1].toLowerCase();
+      const title = calloutMatch[2] || '';
+      const config = CALLOUT_TYPES[type] || CALLOUT_TYPES['note'];
+
+      // 提取 callout 内容（去掉首行和 > 前缀）
+      const lines = block.split('\n');
+      const contentLines = lines.slice(1).map(line => {
+        return line.replace(/^>\s?/, '');
+      }).join('\n');
+
+      return `<div class="callout callout-${type}" style="--callout-color: ${config.color}">
+        <div class="callout-header">
+          <span class="callout-icon">${config.icon}</span>
+          <span class="callout-title">${title || config.label}</span>
+        </div>
+        <div class="callout-content">${marked(contentLines, { breaks: true })}</div>
+      </div>`;
+    }
+    return block;
+  });
+
+  processedContent = processedBlocks.join('\n');
+
+  let html = marked(processedContent, { breaks: true }) as string;
+
   // 将 [来源X] 包裹在 span 中以便样式化
   html = html.replace(/\[来源(\d+)\]/g, '<span class="source-ref">[来源$1]</span>');
+
+  // 处理 [[文档标题]] 双向链接语法
+  html = html.replace(/\[\[([^\]]+)\]\]/g, '<span class="wiki-link">$1</span>');
+
   return html;
 }
 
@@ -1591,11 +1924,11 @@ onMounted(async () => {
         <div
           class="category-item"
           :class="{ active: selectedCategory === null }"
-          @click="selectedCategory = null"
+          @click="handleCategoryFilter(null)"
         >
           <el-icon><Folder /></el-icon>
           <span class="category-name">全部文档</span>
-          <span class="category-count">{{ getCategoryDocCount(null) }}</span>
+          <span class="category-count">{{ documents.length }}</span>
         </div>
         <draggable
           v-model="categories"
@@ -1610,7 +1943,7 @@ onMounted(async () => {
             <div
               class="category-item"
               :class="{ active: selectedCategory === cat.id }"
-              @click="selectedCategory = cat.id"
+              @click="handleCategoryFilter(cat.id)"
             >
               <el-icon class="drag-handle"><Rank /></el-icon>
               <el-icon class="folder-filled" :style="{ '--folder-color': cat.color }"><FolderOpened /></el-icon>
@@ -1622,24 +1955,15 @@ onMounted(async () => {
                   <el-dropdown-menu>
                     <el-dropdown-item command="rename">重命名</el-dropdown-item>
                     <el-dropdown-item divided>
-                      <el-dropdown trigger="hover" placement="right-start" @command="(color: string) => handleCategoryColor(cat.id, color)">
-                        <span class="color-menu-trigger">设置颜色 <el-icon style="margin-left: 4px"><ArrowRight /></el-icon></span>
-                        <template #dropdown>
-                          <el-dropdown-menu>
-                            <div class="color-palette">
-                              <span
-                                v-for="colorOpt in CATEGORY_COLORS"
-                                :key="colorOpt.value"
-                                class="color-dot"
-                                :style="{ backgroundColor: colorOpt.value }"
-                                :class="{ active: cat.color === colorOpt.value }"
-                                :title="colorOpt.name"
-                                @click.stop="handleCategoryColor(cat.id, colorOpt.value)"
-                              ></span>
-                            </div>
-                          </el-dropdown-menu>
-                        </template>
-                      </el-dropdown>
+                      <div class="color-picker-wrapper" @click.stop>
+                        <span style="margin-right: 8px;">设置颜色</span>
+                        <el-color-picker
+                          :model-value="cat.color"
+                          :predefine="CATEGORY_COLORS.map(c => c.value)"
+                          size="small"
+                          @change="(color: string | null) => color && handleCategoryColor(cat.id, color)"
+                        />
+                      </div>
                     </el-dropdown-item>
                     <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
                   </el-dropdown-menu>
@@ -1651,6 +1975,14 @@ onMounted(async () => {
         <div class="add-category" @click="handleAddCategory">
           <el-icon><Plus /></el-icon>
           <span>新建分类</span>
+        </div>
+
+        <!-- 知识图谱按钮 -->
+        <div class="graph-btn-container">
+          <el-button type="primary" plain size="small" @click="openGraphView" class="graph-btn">
+            <el-icon><Share /></el-icon>
+            知识图谱
+          </el-button>
         </div>
       </div>
     </div>
@@ -1743,21 +2075,17 @@ onMounted(async () => {
               </div>
             </div>
           </div>
-          <!-- 移动到分类 -->
-          <el-dropdown v-if="categories.length > 0" trigger="click" @command="(catId: number | null) => handleMoveToCategory(doc, catId)">
-            <el-button type="primary" text size="small" @click.stop title="移动到分类">
+          <!-- 添加分类（多对多，可添加多个分类） -->
+          <el-dropdown v-if="categories.length > 0" trigger="click" @command="(catId: number) => handleAddDocumentCategory(doc.id, catId)">
+            <el-button type="primary" text size="small" @click.stop title="添加分类">
               <el-icon><FolderOpened /></el-icon>
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item :command="null" :disabled="doc.category_id === null">
-                  未分类
-                </el-dropdown-item>
                 <el-dropdown-item
                   v-for="cat in categories"
                   :key="cat.id"
                   :command="cat.id"
-                  :disabled="doc.category_id === cat.id"
                 >
                   <span class="category-dropdown-item">
                     <span class="category-color-dot" :style="{ backgroundColor: cat.color }"></span>
@@ -1925,6 +2253,20 @@ onMounted(async () => {
                 </div>
               </div>
             </div>
+
+            <!-- 保存为笔记按钮（仅 AI 回复显示，不包括流式输出） -->
+            <div v-if="msg.role === 'assistant' && !('isStreaming' in msg)" class="message-actions">
+              <el-button
+                type="primary"
+                text
+                size="small"
+                @click="handleSaveAsNote(msg as KbMessage)"
+                title="保存为知识库笔记"
+              >
+                <el-icon><DocumentAdd /></el-icon>
+                保存为笔记
+              </el-button>
+            </div>
           </div>
         </div>
       </div>
@@ -2070,45 +2412,160 @@ onMounted(async () => {
       v-model="showDocPreview"
       :title="previewDoc?.title || '文档预览'"
       direction="rtl"
-      size="420px"
+      size="500px"
     >
       <template v-if="previewDoc">
-        <!-- 文档信息 -->
-        <div class="preview-info">
-          <p><strong>文件名：</strong>{{ previewDoc.file_name }}</p>
-          <p><strong>类型：</strong>{{ previewDoc.file_type.toUpperCase() }}</p>
-          <p><strong>大小：</strong>{{ formatFileSize(previewDoc.file_size) }}</p>
-          <p><strong>上传时间：</strong>{{ formatDate(previewDoc.created_at) }}</p>
-          <p><strong>分块数：</strong>{{ previewDoc.chunk_count }}</p>
-          <p v-if="previewDoc.embedding_total">
-            <strong>向量化：</strong>
-            <el-tag :type="previewDoc.embedding_count === previewDoc.embedding_total ? 'success' : 'warning'" size="small">
-              {{ previewDoc.embedding_count }}/{{ previewDoc.embedding_total }}
-            </el-tag>
-          </p>
-        </div>
+        <div class="preview-drawer-content">
+          <!-- 左侧：主要内容 -->
+          <div class="preview-main">
+            <!-- 文档信息 -->
+            <div class="preview-info">
+              <p><strong>文件名：</strong>{{ previewDoc.file_name }}</p>
+              <p><strong>类型：</strong>{{ previewDoc.file_type.toUpperCase() }}</p>
+              <p><strong>大小：</strong>{{ formatFileSize(previewDoc.file_size) }}</p>
+              <p><strong>上传时间：</strong>{{ formatDate(previewDoc.created_at) }}</p>
+              <p><strong>分块数：</strong>{{ previewDoc.chunk_count }}</p>
+              <p v-if="previewDoc.embedding_total">
+                <strong>向量化：</strong>
+                <el-tag :type="previewDoc.embedding_count === previewDoc.embedding_total ? 'success' : 'warning'" size="small">
+                  {{ previewDoc.embedding_count }}/{{ previewDoc.embedding_total }}
+                </el-tag>
+              </p>
+            </div>
 
-        <el-divider content-position="left">分块内容</el-divider>
+            <!-- 所属分类（多对多） -->
+            <el-divider content-position="left">所属分类</el-divider>
+            <div class="preview-categories">
+              <el-tag
+                v-for="cat in previewDocCategories"
+                :key="cat.category_id"
+                :color="cat.category_color"
+                closable
+                @close="handleRemoveDocumentCategory(previewDoc!.id, cat.category_id)"
+                class="doc-category-tag"
+              >
+                {{ cat.category_name }}
+              </el-tag>
+              <el-dropdown trigger="click" v-if="categories.filter(c => !previewDocCategories.some(pc => pc.category_id === c.id)).length > 0" @command="(catId: number) => handleAddDocumentCategory(previewDoc!.id, catId)">
+                <el-button type="primary" text size="small">
+                  <el-icon><Plus /></el-icon> 添加分类
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item
+                      v-for="cat in categories.filter(c => !previewDocCategories.some(pc => pc.category_id === c.id))"
+                      :key="cat.id"
+                      :command="cat.id"
+                    >
+                      <span class="category-color-dot" :style="{ backgroundColor: cat.color }"></span>
+                      {{ cat.name }}
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+              <span v-if="previewDocCategories.length === 0 && categories.length === 0" class="no-categories-hint">
+                暂无分类，请先在侧边栏创建
+              </span>
+            </div>
 
-        <!-- 分块列表 -->
-        <div v-loading="loadingPreview" class="chunk-list">
-          <el-empty v-if="!loadingPreview && previewChunks.length === 0" description="暂无分块" />
-          <el-collapse v-else>
-            <el-collapse-item
-              v-for="chunk in previewChunks"
-              :key="chunk.id"
-              :name="chunk.id"
-            >
-              <template #title>
-                <span class="chunk-title">
-                  分块 {{ chunk.chunk_index + 1 }}
-                  <el-tag v-if="chunk.page_number" size="small" type="info">第{{ chunk.page_number }}页</el-tag>
-                  <el-tag v-if="chunk.image_path" size="small" type="warning">含图片</el-tag>
+            <!-- 反向链接 -->
+            <el-divider content-position="left">
+              反向链接 ({{ previewDocBacklinks.length }})
+            </el-divider>
+            <div class="preview-backlinks">
+              <div v-if="previewDocBacklinks.length === 0" class="empty-hint">
+                暂无反向链接
+              </div>
+              <div
+                v-for="link in previewDocBacklinks"
+                :key="link.id"
+                class="backlink-item"
+                @click="handleNavigateToDocument(link.source_doc_id)"
+              >
+                <el-icon><Link /></el-icon>
+                <span>{{ link.source_title }}</span>
+              </div>
+            </div>
+
+            <!-- 出链 -->
+            <el-divider content-position="left">
+              出链 ({{ previewDocLinks.length }})
+            </el-divider>
+            <div class="preview-outlinks">
+              <div v-if="previewDocLinks.length === 0" class="empty-hint">
+                暂无出链
+              </div>
+              <div
+                v-for="link in previewDocLinks"
+                :key="link.id"
+                class="outlink-item"
+              >
+                <span class="link-title" @click="handleNavigateToDocument(link.target_doc_id)">
+                  <el-icon><Link /></el-icon>
+                  {{ link.target_title }}
                 </span>
-              </template>
-              <div class="chunk-content">{{ chunk.content }}</div>
-            </el-collapse-item>
-          </el-collapse>
+                <el-button type="danger" text size="small" @click="handleRemoveDocumentLink(previewDoc!.id, link.target_doc_id)">
+                  <el-icon><Delete /></el-icon>
+                </el-button>
+              </div>
+              <!-- 添加链接 -->
+              <el-dropdown trigger="click" v-if="documents.filter(d => d.id !== previewDoc?.id && !previewDocLinks.some(l => l.target_doc_id === d.id)).length > 0">
+                <el-button type="primary" text size="small">
+                  <el-icon><Plus /></el-icon> 添加链接
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu class="link-dropdown">
+                    <el-dropdown-item
+                      v-for="doc in documents.filter(d => d.id !== previewDoc?.id && !previewDocLinks.some(l => l.target_doc_id === d.id)).slice(0, 20)"
+                      :key="doc.id"
+                      @click="handleAddDocumentLink(previewDoc!.id, doc.id)"
+                    >
+                      {{ doc.title }}
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+
+            <el-divider content-position="left">分块内容</el-divider>
+
+            <!-- 分块列表 -->
+            <div v-loading="loadingPreview" class="chunk-list">
+              <el-empty v-if="!loadingPreview && previewChunks.length === 0" description="暂无分块" />
+              <el-collapse v-else>
+                <el-collapse-item
+                  v-for="chunk in previewChunks"
+                  :key="chunk.id"
+                  :name="chunk.id"
+                >
+                  <template #title>
+                    <span class="chunk-title">
+                      分块 {{ chunk.chunk_index + 1 }}
+                      <el-tag v-if="chunk.page_number" size="small" type="info">第{{ chunk.page_number }}页</el-tag>
+                      <el-tag v-if="chunk.image_path" size="small" type="warning">含图片</el-tag>
+                    </span>
+                  </template>
+                  <div class="chunk-content">{{ chunk.content }}</div>
+                </el-collapse-item>
+              </el-collapse>
+            </div>
+          </div>
+
+          <!-- 右侧：大纲导航 -->
+          <div v-if="previewOutline.length > 0" class="preview-outline">
+            <div class="outline-header">大纲</div>
+            <div class="outline-items">
+              <div
+                v-for="item in previewOutline"
+                :key="item.anchor"
+                class="outline-item"
+                :style="{ paddingLeft: (item.level - 1) * 12 + 'px' }"
+                @click="scrollToOutlineItem(item.anchor)"
+              >
+                {{ item.text }}
+              </div>
+            </div>
+          </div>
         </div>
       </template>
     </el-drawer>
@@ -2224,6 +2681,62 @@ onMounted(async () => {
           </el-button>
         </div>
       </template>
+    </el-dialog>
+
+    <!-- 知识图谱对话框 -->
+    <el-dialog
+      v-model="showGraphView"
+      title="知识图谱"
+      width="90%"
+      class="graph-dialog"
+    >
+      <div class="knowledge-graph">
+        <div class="graph-stats">
+          <span>{{ graphDocuments.length }} 个文档</span>
+          <span>{{ graphLinks.length }} 条链接</span>
+        </div>
+        <div class="graph-container">
+          <!-- 简易图谱视图（使用 CSS 力导向布局模拟） -->
+          <div class="graph-nodes">
+            <div
+              v-for="(doc, index) in graphDocuments"
+              :key="doc.id"
+              class="graph-node"
+              :style="{
+                left: (20 + (index % 5) * 18) + '%',
+                top: (15 + Math.floor(index / 5) * 20) + '%'
+              }"
+              @click="handleNavigateToDocument(doc.id); showGraphView = false"
+              :title="doc.title"
+            >
+              <div class="node-circle" :class="{ 'has-links': graphLinks.some(l => l.source_doc_id === doc.id || l.target_doc_id === doc.id) }"></div>
+              <div class="node-label">{{ doc.title.length > 15 ? doc.title.slice(0, 15) + '...' : doc.title }}</div>
+            </div>
+          </div>
+          <!-- SVG 连线 -->
+          <svg class="graph-edges" v-if="graphDocuments.length > 0">
+            <line
+              v-for="link in graphLinks"
+              :key="link.id"
+              :x1="getNodePosition(link.source_doc_id, 'x') + '%'"
+              :y1="getNodePosition(link.source_doc_id, 'y') + '%'"
+              :x2="getNodePosition(link.target_doc_id, 'x') + '%'"
+              :y2="getNodePosition(link.target_doc_id, 'y') + '%'"
+              class="graph-edge"
+            />
+          </svg>
+        </div>
+        <div class="graph-legend">
+          <div class="legend-item">
+            <span class="legend-dot has-links"></span>
+            <span>有链接的文档</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-dot"></span>
+            <span>独立文档</span>
+          </div>
+        </div>
+      </div>
     </el-dialog>
   </div>
 </template>
@@ -2411,36 +2924,11 @@ onMounted(async () => {
   background: var(--el-color-primary-light-9);
 }
 
-/* 颜色选择面板 */
-.color-menu-trigger {
+/* 颜色选择器 */
+.color-picker-wrapper {
   display: flex;
   align-items: center;
-}
-
-.color-palette {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px;
-  width: 136px;
-}
-
-.color-dot {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  cursor: pointer;
-  border: 2px solid transparent;
-  transition: all 0.2s;
-}
-
-.color-dot:hover {
-  transform: scale(1.1);
-}
-
-.color-dot.active {
-  border-color: var(--el-color-primary);
-  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.3);
+  padding: 4px 0;
 }
 
 /* 拖拽手柄 */
@@ -3289,5 +3777,302 @@ onMounted(async () => {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
+}
+
+/* ==================== 知识图谱按钮 ==================== */
+.graph-btn-container {
+  padding: 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
+  margin-top: auto;
+}
+
+.graph-btn {
+  width: 100%;
+}
+
+/* ==================== 文档预览抽屉增强 ==================== */
+.preview-drawer-content {
+  display: flex;
+  height: 100%;
+}
+
+.preview-main {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 12px;
+}
+
+/* 文档所属分类（多对多） */
+.preview-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+}
+
+.doc-category-tag {
+  color: white !important;
+}
+
+.category-color-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+  margin-right: 6px;
+}
+
+.no-categories-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.preview-backlinks,
+.preview-outlinks {
+  padding: 8px 0;
+}
+
+.backlink-item,
+.outlink-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.2s;
+}
+
+.backlink-item:hover,
+.outlink-item:hover {
+  background: var(--el-fill-color-light);
+}
+
+.outlink-item {
+  justify-content: space-between;
+}
+
+.link-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.link-title:hover {
+  color: var(--el-color-primary);
+}
+
+.link-dropdown {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* 大纲导航 */
+.preview-outline {
+  width: 150px;
+  border-left: 1px solid var(--el-border-color-lighter);
+  padding-left: 12px;
+  overflow-y: auto;
+}
+
+.outline-header {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--el-text-color-secondary);
+  padding: 4px 0 8px;
+}
+
+.outline-items {
+  font-size: 12px;
+}
+
+.outline-item {
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.2s;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outline-item:hover {
+  background: var(--el-fill-color-light);
+  color: var(--el-color-primary);
+}
+
+/* ==================== 知识图谱 ==================== */
+.knowledge-graph {
+  height: 60vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.graph-stats {
+  display: flex;
+  gap: 16px;
+  padding: 8px 0;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.graph-container {
+  flex: 1;
+  position: relative;
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.graph-nodes {
+  position: absolute;
+  inset: 0;
+}
+
+.graph-node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  text-align: center;
+  transition: transform 0.2s;
+}
+
+.graph-node:hover {
+  transform: translate(-50%, -50%) scale(1.1);
+  z-index: 10;
+}
+
+.node-circle {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--el-color-info-light-3);
+  margin: 0 auto 4px;
+  transition: all 0.2s;
+}
+
+.node-circle.has-links {
+  background: var(--el-color-primary);
+  box-shadow: 0 0 8px var(--el-color-primary-light-5);
+}
+
+.node-label {
+  font-size: 11px;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.8);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.graph-edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.graph-edge {
+  stroke: var(--el-color-primary-light-5);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.graph-legend {
+  display: flex;
+  gap: 16px;
+  padding: 12px 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--el-color-info-light-3);
+}
+
+.legend-dot.has-links {
+  background: var(--el-color-primary);
+}
+
+/* ==================== Callouts 样式 ==================== */
+:deep(.callout) {
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 12px 0;
+  border-left: 4px solid var(--callout-color, #409EFF);
+  background: color-mix(in srgb, var(--callout-color, #409EFF) 10%, transparent);
+}
+
+:deep(.callout-header) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+:deep(.callout-icon) {
+  font-size: 16px;
+}
+
+:deep(.callout-title) {
+  color: var(--callout-color, #409EFF);
+}
+
+:deep(.callout-content) {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+:deep(.callout-content p:last-child) {
+  margin-bottom: 0;
+}
+
+/* Wiki 链接样式 */
+:deep(.wiki-link) {
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+:deep(.wiki-link:hover) {
+  background: var(--el-color-primary-light-7);
+}
+
+/* ==================== 消息操作按钮 ==================== */
+.message-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.message-actions .el-button {
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.message-actions .el-button:hover {
+  opacity: 1;
 }
 </style>

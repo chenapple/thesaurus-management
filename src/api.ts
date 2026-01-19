@@ -969,6 +969,93 @@ export async function kbGetMessages(conversationId: number): Promise<KbMessage[]
   return await invoke("kb_get_messages", { conversationId });
 }
 
+// ==================== 文档链接 ====================
+
+import type { KbDocumentLink, KbDocumentCategory } from "./types";
+
+/**
+ * 添加文档链接
+ */
+export async function kbAddDocumentLink(
+  sourceId: number,
+  targetId: number,
+  linkText?: string
+): Promise<number> {
+  return await invoke("kb_add_document_link", {
+    sourceId,
+    targetId,
+    linkText: linkText || null,
+  });
+}
+
+/**
+ * 移除文档链接
+ */
+export async function kbRemoveDocumentLink(
+  sourceId: number,
+  targetId: number
+): Promise<void> {
+  return await invoke("kb_remove_document_link", { sourceId, targetId });
+}
+
+/**
+ * 获取文档的出链
+ */
+export async function kbGetDocumentLinks(docId: number): Promise<KbDocumentLink[]> {
+  return await invoke("kb_get_document_links", { docId });
+}
+
+/**
+ * 获取文档的反向链接
+ */
+export async function kbGetDocumentBacklinks(docId: number): Promise<KbDocumentLink[]> {
+  return await invoke("kb_get_document_backlinks", { docId });
+}
+
+/**
+ * 获取所有链接（用于知识图谱）
+ */
+export async function kbGetAllLinks(): Promise<KbDocumentLink[]> {
+  return await invoke("kb_get_all_links");
+}
+
+// ==================== 文档分类关联（多对多）====================
+
+/**
+ * 给文档添加分类
+ */
+export async function kbAddDocumentCategory(docId: number, categoryId: number): Promise<void> {
+  return await invoke("kb_add_document_category", { docId, categoryId });
+}
+
+/**
+ * 移除文档分类
+ */
+export async function kbRemoveDocumentCategory(docId: number, categoryId: number): Promise<void> {
+  return await invoke("kb_remove_document_category", { docId, categoryId });
+}
+
+/**
+ * 获取文档的所有分类
+ */
+export async function kbGetDocumentCategories(docId: number): Promise<KbDocumentCategory[]> {
+  return await invoke("kb_get_document_categories", { docId });
+}
+
+/**
+ * 按分类筛选文档（多对多版本）
+ */
+export async function kbGetDocumentsByCategories(categoryId: number): Promise<KbDocument[]> {
+  return await invoke("kb_get_documents_by_categories", { categoryId });
+}
+
+/**
+ * 设置文档的分类（替换所有现有分类）
+ */
+export async function kbSetDocumentCategories(docId: number, categoryIds: number[]): Promise<void> {
+  return await invoke("kb_set_document_categories", { docId, categoryIds });
+}
+
 // ==================== 智能文案 ====================
 
 import type { ScProject } from "./types";

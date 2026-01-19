@@ -6,7 +6,7 @@ mod installer;
 mod knowledge_base;
 
 use db::{BackupInfo, Category, KeywordData, KeywordMonitoring, MonitoringSparkline, MonitoringStats, Product, RankingHistory, RankingSnapshot, RootWithCategories, TrafficLevelStats, UncategorizedKeyword, WorkflowStatus};
-use db::{KbCategory, KbDocument, KbChunk, KbSearchResult, KbConversation, KbMessage};
+use db::{KbCategory, KbDocument, KbChunk, KbSearchResult, KbConversation, KbMessage, KbDocumentLink, KbDocumentCategory};
 use db::ScProject;
 use scheduler::{SchedulerSettings, SchedulerStatus, SCHEDULER, MARKET_RESEARCH_SCHEDULER};
 use crawler::{BsrResult, SubcategoryResult};
@@ -857,6 +857,60 @@ fn kb_get_messages(conversation_id: i64) -> Result<Vec<KbMessage>, String> {
     db::kb_get_messages(conversation_id).map_err(|e| e.to_string())
 }
 
+// ==================== 文档链接 ====================
+
+#[tauri::command]
+fn kb_add_document_link(source_id: i64, target_id: i64, link_text: Option<String>) -> Result<i64, String> {
+    db::kb_add_document_link(source_id, target_id, link_text).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_remove_document_link(source_id: i64, target_id: i64) -> Result<(), String> {
+    db::kb_remove_document_link(source_id, target_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_get_document_links(doc_id: i64) -> Result<Vec<KbDocumentLink>, String> {
+    db::kb_get_document_links(doc_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_get_document_backlinks(doc_id: i64) -> Result<Vec<KbDocumentLink>, String> {
+    db::kb_get_document_backlinks(doc_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_get_all_links() -> Result<Vec<KbDocumentLink>, String> {
+    db::kb_get_all_links().map_err(|e| e.to_string())
+}
+
+// ==================== 文档分类关联（多对多）====================
+
+#[tauri::command]
+fn kb_add_document_category(doc_id: i64, category_id: i64) -> Result<(), String> {
+    db::kb_add_document_category(doc_id, category_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_remove_document_category(doc_id: i64, category_id: i64) -> Result<(), String> {
+    db::kb_remove_document_category(doc_id, category_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_get_document_categories(doc_id: i64) -> Result<Vec<KbDocumentCategory>, String> {
+    db::kb_get_document_categories(doc_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_get_documents_by_categories(category_id: i64) -> Result<Vec<KbDocument>, String> {
+    db::kb_get_documents_by_categories(category_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kb_set_document_categories(doc_id: i64, category_ids: Vec<i64>) -> Result<(), String> {
+    db::kb_set_document_categories(doc_id, category_ids).map_err(|e| e.to_string())
+}
+
 /// 处理上传的文档：解析 + 分块 + 存储
 #[tauri::command]
 fn kb_process_document(document_id: i64, file_path: String) -> Result<i64, String> {
@@ -1351,6 +1405,14 @@ async fn discover_subcategories(marketplace: String, parent_category: String) ->
     Ok(result)
 }
 
+#[tauri::command]
+async fn fetch_listing_info(asin: String, country: String) -> Result<crawler::ListingResult, String> {
+    eprintln!("[fetch_listing_info] 开始爬取: asin={}, country={}", asin, country);
+    let result = crawler::fetch_listing_info(asin, country).await;
+    eprintln!("[fetch_listing_info] 爬取完成: title={:?}, error={:?}", result.title, result.error);
+    Ok(result)
+}
+
 // ==================== 市场调研监控任务 ====================
 
 #[tauri::command]
@@ -1492,6 +1554,245 @@ fn get_latest_research_runs(limit: i32) -> Result<Vec<db::MarketResearchRun>, St
 #[tauri::command]
 fn get_research_runs_by_task(task_id: i64, limit: i32) -> Result<Vec<db::MarketResearchRun>, String> {
     db::get_research_runs_by_task(task_id, limit).map_err(|e| e.to_string())
+}
+
+// ==================== 竞品情报 ====================
+
+#[tauri::command]
+fn get_competitor_tasks() -> Result<Vec<db::CompetitorTask>, String> {
+    db::get_competitor_tasks().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_competitor_task(id: i64) -> Result<Option<db::CompetitorTask>, String> {
+    db::get_competitor_task(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_competitor_task(
+    name: String,
+    marketplace: String,
+    my_asin: Option<String>,
+    ai_provider: String,
+    ai_model: Option<String>,
+    schedule_type: String,
+    schedule_days: Option<String>,
+    schedule_time: String,
+) -> Result<i64, String> {
+    db::create_competitor_task(
+        &name,
+        &marketplace,
+        my_asin.as_deref(),
+        &ai_provider,
+        ai_model.as_deref(),
+        &schedule_type,
+        schedule_days.as_deref(),
+        &schedule_time,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_competitor_task(
+    id: i64,
+    name: String,
+    marketplace: String,
+    my_asin: Option<String>,
+    ai_provider: String,
+    ai_model: Option<String>,
+    schedule_type: String,
+    schedule_days: Option<String>,
+    schedule_time: String,
+    is_enabled: bool,
+) -> Result<(), String> {
+    db::update_competitor_task(
+        id,
+        &name,
+        &marketplace,
+        my_asin.as_deref(),
+        &ai_provider,
+        ai_model.as_deref(),
+        &schedule_type,
+        schedule_days.as_deref(),
+        &schedule_time,
+        is_enabled,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_competitor_task(id: i64) -> Result<(), String> {
+    db::delete_competitor_task(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_competitor_asins(task_id: i64) -> Result<Vec<db::CompetitorAsin>, String> {
+    db::get_competitor_asins(task_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn add_competitor_asin(
+    task_id: i64,
+    asin: String,
+    title: Option<String>,
+    tags: Option<String>,
+) -> Result<i64, String> {
+    db::add_competitor_asin(task_id, &asin, title.as_deref(), tags.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn remove_competitor_asin(task_id: i64, asin: String) -> Result<(), String> {
+    db::remove_competitor_asin(task_id, &asin).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_competitor_snapshot(
+    asin_id: i64,
+    _asin: String,
+    price: Option<String>,
+    rating: Option<String>,
+    review_count: Option<i64>,
+    bsr_rank: Option<String>,
+    _title: Option<String>,
+    _image_url: Option<String>,
+) -> Result<i64, String> {
+    // Parse string values to numeric types
+    let price_value: Option<f64> = price.and_then(|p| {
+        // Extract number from price string like "$19.99" or "19.99"
+        let cleaned: String = p.chars().filter(|c| c.is_numeric() || *c == '.').collect();
+        cleaned.parse().ok()
+    });
+
+    let rating_value: Option<f64> = rating.and_then(|r| r.parse().ok());
+
+    let bsr_value: Option<i64> = bsr_rank.and_then(|b| {
+        // Extract number from BSR string like "#1,234 in Category"
+        let cleaned: String = b.chars().filter(|c| c.is_numeric()).collect();
+        cleaned.parse().ok()
+    });
+
+    db::save_competitor_snapshot(
+        asin_id,
+        price_value,
+        bsr_value,
+        rating_value,
+        review_count,
+        None, // availability - not provided by crawler
+    ).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_competitor_snapshots(asin_id: i64, days: i32) -> Result<Vec<db::CompetitorSnapshot>, String> {
+    db::get_competitor_snapshots(asin_id, days).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_competitor_run(task_id: i64) -> Result<i64, String> {
+    db::create_competitor_run(task_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_competitor_run(
+    run_id: i64,
+    status: String,
+    report_summary: Option<String>,
+    report_content: Option<String>,
+) -> Result<(), String> {
+    db::update_competitor_run(
+        run_id,
+        &status,
+        report_summary.as_deref(),
+        report_content.as_deref(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn fail_competitor_run(run_id: i64, error_message: String) -> Result<(), String> {
+    db::fail_competitor_run(run_id, &error_message).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_latest_competitor_runs(limit: i32) -> Result<Vec<db::CompetitorRun>, String> {
+    db::get_latest_competitor_runs(limit).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_competitor_runs_by_task(task_id: i64, limit: i32) -> Result<Vec<db::CompetitorRun>, String> {
+    db::get_competitor_runs_by_task(task_id, limit).map_err(|e| e.to_string())
+}
+
+// 批量爬取竞品 Listing 信息（一次浏览器获取所有 ASIN）
+#[tauri::command]
+async fn fetch_competitor_listings_batch(
+    task_id: i64,
+    marketplace: String,
+    app: tauri::AppHandle,
+) -> Result<Vec<crawler::ListingResult>, String> {
+    // 获取任务下的所有 ASIN
+    let asins = db::get_competitor_asins(task_id).map_err(|e| e.to_string())?;
+
+    if asins.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    eprintln!("[fetch_competitor_listings_batch] 开始批量爬取: task_id={}, {} 个 ASIN", task_id, asins.len());
+
+    // 构建批量请求数据
+    let items: Vec<(i64, String, String)> = asins.iter()
+        .map(|a| (a.id, a.asin.clone(), marketplace.clone()))
+        .collect();
+
+    let app_clone = app.clone();
+    let results = crawler::fetch_listings_batch(
+        items,
+        move |current, total, info| {
+            eprintln!("[fetch_competitor_listings_batch] 进度: {}/{} - {}", current, total, info);
+            let _ = app_clone.emit("competitor-batch-progress", serde_json::json!({
+                "current": current,
+                "total": total,
+                "info": info
+            }));
+        }
+    ).await;
+
+    // 保存快照到数据库
+    for (asin_id, result) in &results {
+        if result.error.is_none() {
+            // 解析价格
+            let price_value: Option<f64> = result.price.as_ref().and_then(|p| {
+                let cleaned: String = p.chars().filter(|c| c.is_numeric() || *c == '.').collect();
+                cleaned.parse().ok()
+            });
+            // 解析评分
+            let rating_value: Option<f64> = result.rating.as_ref().and_then(|r| r.parse().ok());
+            // 解析 BSR
+            let bsr_value: Option<i64> = result.bsr_rank.as_ref().and_then(|b| {
+                let cleaned: String = b.chars().filter(|c| c.is_numeric()).collect();
+                cleaned.parse().ok()
+            });
+
+            if let Err(e) = db::save_competitor_snapshot(
+                *asin_id,
+                price_value,
+                bsr_value,
+                rating_value,
+                result.review_count,
+                None,
+            ) {
+                eprintln!("[fetch_competitor_listings_batch] 保存快照失败 asin_id={}: {:?}", asin_id, e);
+            }
+        }
+    }
+
+    // 返回结果（只返回 ListingResult）
+    let listing_results: Vec<crawler::ListingResult> = results.into_iter()
+        .map(|(_, result)| result)
+        .collect();
+
+    eprintln!("[fetch_competitor_listings_batch] 批量爬取完成: {} 个结果", listing_results.len());
+    Ok(listing_results)
 }
 
 // ==================== AI 分析 ====================
@@ -1794,6 +2095,18 @@ pub fn run() {
             kb_delete_conversation,
             kb_add_message,
             kb_get_messages,
+            // 文档链接
+            kb_add_document_link,
+            kb_remove_document_link,
+            kb_get_document_links,
+            kb_get_document_backlinks,
+            kb_get_all_links,
+            // 文档分类关联（多对多）
+            kb_add_document_category,
+            kb_remove_document_category,
+            kb_get_document_categories,
+            kb_get_documents_by_categories,
+            kb_set_document_categories,
             kb_process_document,
             kb_extract_images,
             kb_read_file_base64,
@@ -1829,6 +2142,7 @@ pub fn run() {
             // BSR 爬虫
             fetch_category_bsr,
             discover_subcategories,
+            fetch_listing_info,
             // 市场调研监控任务
             get_market_research_tasks,
             get_market_research_task,
@@ -1843,6 +2157,23 @@ pub fn run() {
             fail_research_run,
             get_latest_research_runs,
             get_research_runs_by_task,
+            // 竞品情报
+            get_competitor_tasks,
+            get_competitor_task,
+            create_competitor_task,
+            update_competitor_task,
+            delete_competitor_task,
+            get_competitor_asins,
+            add_competitor_asin,
+            remove_competitor_asin,
+            save_competitor_snapshot,
+            get_competitor_snapshots,
+            create_competitor_run,
+            update_competitor_run,
+            fail_competitor_run,
+            get_latest_competitor_runs,
+            get_competitor_runs_by_task,
+            fetch_competitor_listings_batch,
             // AI 分析
             sc_save_analysis,
             sc_get_analysis,
