@@ -1,7 +1,16 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue';
-import { TrendCharts, Document, Monitor, Folder, Top, Bottom, Timer, Refresh } from '@element-plus/icons-vue';
+import { TrendCharts, Document, Monitor, Folder, Top, Bottom, Timer, Refresh, FullScreen } from '@element-plus/icons-vue';
+import BigScreenView from './BigScreenView.vue';
 import * as api from '../api';
+
+// 视图模式
+const viewMode = ref<'normal' | 'bigscreen'>('normal');
+
+// 切换到大屏模式
+function switchToBigScreen() {
+  viewMode.value = 'bigscreen';
+}
 import type { MonitoringStats, TrafficLevelStats, OptimizationEvent, Product, SchedulerSettings, SchedulerStatus } from '../types';
 import { EXCHANGE_RATE_CURRENCIES } from '../types';
 
@@ -426,6 +435,27 @@ loadCachedRates().then(() => {
 
 <template>
   <div class="dashboard-container" v-loading="loading">
+    <!-- 大屏视图 -->
+    <BigScreenView
+      v-if="viewMode === 'bigscreen'"
+      :selectedProduct="selectedProduct"
+      :stats="stats"
+      :monitoringStats="monitoringStats"
+      :trafficStats="trafficStats"
+      :kbStats="kbStats"
+      :recentEvents="recentEvents"
+      :topRisers="topRisers"
+      :topFallers="topFallers"
+      :schedulerSettings="schedulerSettings"
+      :schedulerStatus="schedulerStatus"
+      :isInWindow="isInWindow"
+      :countdownHours="countdownHours"
+      :countdownMinutes="countdownMinutes"
+      :countdownSeconds="countdownSeconds"
+      @exit="viewMode = 'normal'"
+      @refresh="loadDashboardData"
+    />
+
     <!-- 未选择产品时的提示 -->
     <div v-if="!selectedProduct" class="no-product-state">
       <el-empty description="请先选择或创建一个产品">
@@ -444,6 +474,15 @@ loadCachedRates().then(() => {
           <span class="product-badge" v-if="selectedProduct">{{ selectedProduct.name }}</span>
         </div>
         <div class="header-right">
+          <!-- 大屏模式切换 -->
+          <el-button
+            class="bigscreen-btn"
+            type="primary"
+            :icon="FullScreen"
+            @click="switchToBigScreen"
+          >
+            智慧大屏
+          </el-button>
           <!-- 汇率显示 -->
           <div class="exchange-rates" v-if="exchangeRates.size > 0">
             <span
@@ -747,6 +786,20 @@ loadCachedRates().then(() => {
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+
+/* 大屏模式按钮 */
+.bigscreen-btn {
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  border: 1px solid rgba(0, 212, 255, 0.3);
+  color: #00d4ff;
+  font-weight: 600;
+}
+
+.bigscreen-btn:hover {
+  background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+  border-color: #00d4ff;
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
 }
 
 .product-badge {
