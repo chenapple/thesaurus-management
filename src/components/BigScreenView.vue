@@ -57,11 +57,11 @@ function updateTime() {
 
 // 数字滚动动画
 function animateNumber(target: number, current: ReturnType<typeof ref<number>>, duration: number = 1500) {
-  const startValue = current.value;
+  const startValue = current.value ?? 0;
   const startTime = performance.now();
 
-  function update(currentTime: number) {
-    const elapsed = currentTime - startTime;
+  function update(time: number) {
+    const elapsed = time - startTime;
     const progress = Math.min(elapsed / duration, 1);
     const easeProgress = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
     current.value = Math.round(startValue + (target - startValue) * easeProgress);
