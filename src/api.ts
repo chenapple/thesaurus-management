@@ -1460,3 +1460,83 @@ export async function adGetAnalysis(
 export async function adGetAllAnalysis(projectId: number): Promise<AdAnalysisRecord[]> {
   return await invoke("ad_get_all_analysis", { projectId });
 }
+
+// ==================== 快捷备忘录 ====================
+
+import type { QuickNote, ExchangeRateCache } from './types';
+
+/**
+ * 添加快捷备忘
+ */
+export async function addQuickNote(content: string): Promise<number> {
+  return await invoke("add_quick_note", { content });
+}
+
+/**
+ * 获取快捷备忘列表
+ * @param filter - 筛选条件: 'pending' | 'completed' | undefined (全部)
+ */
+export async function getQuickNotes(filter?: string): Promise<QuickNote[]> {
+  return await invoke("get_quick_notes", { filter: filter || null });
+}
+
+/**
+ * 更新快捷备忘内容
+ */
+export async function updateQuickNote(id: number, content: string): Promise<void> {
+  return await invoke("update_quick_note", { id, content });
+}
+
+/**
+ * 切换快捷备忘完成状态
+ * @returns 新的完成状态
+ */
+export async function toggleQuickNote(id: number): Promise<boolean> {
+  return await invoke("toggle_quick_note", { id });
+}
+
+/**
+ * 删除快捷备忘
+ */
+export async function deleteQuickNote(id: number): Promise<void> {
+  return await invoke("delete_quick_note", { id });
+}
+
+/**
+ * 获取快捷备忘统计
+ * @returns [总数, 待完成数]
+ */
+export async function getQuickNotesCount(): Promise<[number, number]> {
+  return await invoke("get_quick_notes_count");
+}
+
+/**
+ * 更新快捷备忘截止日期
+ */
+export async function updateQuickNoteDueDate(id: number, dueDate: string | null): Promise<void> {
+  return await invoke("update_quick_note_due_date", { id, dueDate });
+}
+
+/**
+ * 批量更新快捷备忘排序
+ * @param ids 按顺序排列的备忘ID数组
+ */
+export async function reorderQuickNotes(ids: number[]): Promise<void> {
+  return await invoke("reorder_quick_notes", { ids });
+}
+
+// ==================== 汇率 ====================
+
+/**
+ * 保存汇率到缓存
+ */
+export async function saveExchangeRates(rates: [string, number][]): Promise<void> {
+  return await invoke("save_exchange_rates", { rates });
+}
+
+/**
+ * 获取缓存的汇率
+ */
+export async function getExchangeRates(): Promise<ExchangeRateCache[]> {
+  return await invoke("get_exchange_rates");
+}

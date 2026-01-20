@@ -8,6 +8,7 @@ mod knowledge_base;
 use db::{BackupInfo, Category, KeywordData, KeywordMonitoring, MonitoringSparkline, MonitoringStats, Product, RankingHistory, RankingSnapshot, RootWithCategories, TrafficLevelStats, UncategorizedKeyword, WorkflowStatus};
 use db::{KbCategory, KbDocument, KbChunk, KbSearchResult, KbConversation, KbMessage, KbDocumentLink, KbDocumentCategory};
 use db::ScProject;
+use db::{QuickNote, ExchangeRateCache};
 use scheduler::{SchedulerSettings, SchedulerStatus, SCHEDULER, MARKET_RESEARCH_SCHEDULER};
 use crawler::{BsrResult, SubcategoryResult};
 use tauri::Manager;
@@ -1912,6 +1913,60 @@ fn ad_get_all_analysis(project_id: i64) -> Result<Vec<db::AdAnalysisResult>, Str
         .map_err(|e| e.to_string())
 }
 
+// ==================== 快捷备忘录 ====================
+
+#[tauri::command]
+fn add_quick_note(content: String) -> Result<i64, String> {
+    db::add_quick_note(content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_quick_notes(filter: Option<String>) -> Result<Vec<QuickNote>, String> {
+    db::get_quick_notes(filter).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_quick_note(id: i64, content: String) -> Result<(), String> {
+    db::update_quick_note(id, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn toggle_quick_note(id: i64) -> Result<bool, String> {
+    db::toggle_quick_note(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_quick_note(id: i64) -> Result<(), String> {
+    db::delete_quick_note(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_quick_notes_count() -> Result<(i64, i64), String> {
+    db::get_quick_notes_count().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_quick_note_due_date(id: i64, due_date: Option<String>) -> Result<(), String> {
+    db::update_quick_note_due_date(id, due_date).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn reorder_quick_notes(ids: Vec<i64>) -> Result<(), String> {
+    db::reorder_quick_notes(ids).map_err(|e| e.to_string())
+}
+
+// ==================== 汇率 ====================
+
+#[tauri::command]
+fn save_exchange_rates(rates: Vec<(String, f64)>) -> Result<(), String> {
+    db::save_exchange_rates(rates).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_exchange_rates() -> Result<Vec<ExchangeRateCache>, String> {
+    db::get_exchange_rates().map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2192,6 +2247,18 @@ pub fn run() {
             ad_save_analysis,
             ad_get_analysis,
             ad_get_all_analysis,
+            // 快捷备忘录
+            add_quick_note,
+            get_quick_notes,
+            update_quick_note,
+            toggle_quick_note,
+            delete_quick_note,
+            get_quick_notes_count,
+            update_quick_note_due_date,
+            reorder_quick_notes,
+            // 汇率
+            save_exchange_rates,
+            get_exchange_rates,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1020,3 +1020,37 @@ export interface CompetitorRun {
   error_message?: string;
   created_at: string;
 }
+
+// ==================== 快捷备忘录 ====================
+
+export interface QuickNote {
+  id: number;
+  content: string;
+  completed: boolean;
+  created_at: string;
+  completed_at?: string;
+  due_date?: string;
+  sort_order: number;
+}
+
+// ==================== 汇率缓存 ====================
+
+export interface ExchangeRateCache {
+  currency: string;
+  rate: number;
+  updated_at: string;
+}
+
+// 汇率显示配置
+export const EXCHANGE_RATE_CURRENCIES: Array<{
+  code: string;
+  symbol: string;
+  flag: string;
+  name: string;
+  multiplier?: number;
+}> = [
+  { code: 'USD', symbol: '$', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="#B22234"/><rect y="1.54" width="30" height="1.54" fill="white"/><rect y="4.62" width="30" height="1.54" fill="white"/><rect y="7.69" width="30" height="1.54" fill="white"/><rect y="10.77" width="30" height="1.54" fill="white"/><rect y="13.85" width="30" height="1.54" fill="white"/><rect y="16.92" width="30" height="1.54" fill="white"/><rect width="12" height="10.77" fill="#3C3B6E"/></svg>`, name: '美元' },
+  { code: 'EUR', symbol: '€', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="#003399"/><g fill="#FFCC00"><polygon points="15,2 15.9,4.8 18.8,4.8 16.5,6.5 17.4,9.3 15,7.6 12.6,9.3 13.5,6.5 11.2,4.8 14.1,4.8"/><polygon points="15,11 15.9,13.8 18.8,13.8 16.5,15.5 17.4,18.3 15,16.6 12.6,18.3 13.5,15.5 11.2,13.8 14.1,13.8"/><polygon points="6,6.5 6.9,9.3 9.8,9.3 7.5,11 8.4,13.8 6,12.1 3.6,13.8 4.5,11 2.2,9.3 5.1,9.3"/><polygon points="24,6.5 24.9,9.3 27.8,9.3 25.5,11 26.4,13.8 24,12.1 21.6,13.8 22.5,11 20.2,9.3 23.1,9.3"/></g></svg>`, name: '欧元' },
+  { code: 'GBP', symbol: '£', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="#012169"/><path d="M0,0 L30,20 M30,0 L0,20" stroke="white" stroke-width="4"/><path d="M0,0 L30,20 M30,0 L0,20" stroke="#C8102E" stroke-width="2.5"/><path d="M15,0 V20 M0,10 H30" stroke="white" stroke-width="6"/><path d="M15,0 V20 M0,10 H30" stroke="#C8102E" stroke-width="3.5"/></svg>`, name: '英镑' },
+  { code: 'JPY', symbol: '¥', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="white"/><circle cx="15" cy="10" r="6" fill="#BC002D"/></svg>`, name: '日元', multiplier: 100 },
+];

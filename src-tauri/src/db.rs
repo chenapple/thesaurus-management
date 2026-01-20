@@ -376,6 +376,12 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
     // 初始化竞品情报监控表
     init_competitor_tables(&conn)?;
 
+    // 初始化快捷备忘录表
+    init_quick_notes_table(&conn)?;
+
+    // 初始化汇率缓存表
+    init_exchange_rate_table(&conn)?;
+
     DB.set(Mutex::new(conn))
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
@@ -6420,6 +6426,234 @@ pub fn get_competitor_runs_by_task(task_id: i64, limit: i32) -> Result<Vec<Compe
             report_content: row.get(6)?,
             error_message: row.get(7)?,
             created_at: row.get(8)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+// ==================== 快捷备忘录 ====================
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct QuickNote {
+    pub id: i64,
+    pub content: String,
+    pub completed: bool,
+    pub created_at: String,
+    pub completed_at: Option<String>,
+    pub due_date: Option<String>,
+    pub sort_order: i64,
+}
+
+pub fn init_quick_notes_table(conn: &Connection) -> Result<()> {
+    // 创建表（如果不存在）
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS quick_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content TEXT NOT NULL,
+            completed INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            completed_at DATETIME,
+            due_date TEXT,
+            sort_order INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_quick_notes_completed ON quick_notes(completed);
+        CREATE INDEX IF NOT EXISTS idx_quick_notes_created ON quick_notes(created_at);
+        "
+    )?;
+
+    // 迁移：为现有表添加新列
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(quick_notes)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if !columns.contains(&"due_date".to_string()) {
+        conn.execute("ALTER TABLE quick_notes ADD COLUMN due_date TEXT", [])?;
+    }
+    if !columns.contains(&"sort_order".to_string()) {
+        conn.execute("ALTER TABLE quick_notes ADD COLUMN sort_order INTEGER DEFAULT 0", [])?;
+    }
+
+    // 迁移后创建 sort_order 索引
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_quick_notes_sort_order ON quick_notes(sort_order)",
+        [],
+    )?;
+
+    Ok(())
+}
+
+pub fn add_quick_note(content: String) -> Result<i64> {
+    let conn = get_db().lock();
+    // 获取当前最大的 sort_order
+    let max_order: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), 0) FROM quick_notes",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    conn.execute(
+        "INSERT INTO quick_notes (content, sort_order) VALUES (?1, ?2)",
+        rusqlite::params![content, max_order + 1],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn get_quick_notes(filter: Option<String>) -> Result<Vec<QuickNote>> {
+    let conn = get_db().lock();
+
+    let sql = match filter.as_deref() {
+        Some("pending") => "SELECT id, content, completed, created_at, completed_at, due_date, sort_order FROM quick_notes WHERE completed = 0 ORDER BY sort_order ASC, created_at DESC",
+        Some("completed") => "SELECT id, content, completed, created_at, completed_at, due_date, sort_order FROM quick_notes WHERE completed = 1 ORDER BY completed_at DESC",
+        _ => "SELECT id, content, completed, created_at, completed_at, due_date, sort_order FROM quick_notes ORDER BY completed ASC, sort_order ASC, created_at DESC",
+    };
+
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([], |row| {
+        Ok(QuickNote {
+            id: row.get(0)?,
+            content: row.get(1)?,
+            completed: row.get::<_, i32>(2)? == 1,
+            created_at: row.get(3)?,
+            completed_at: row.get(4)?,
+            due_date: row.get(5)?,
+            sort_order: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+        })
+    })?;
+
+    rows.collect()
+}
+
+pub fn update_quick_note(id: i64, content: String) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE quick_notes SET content = ?2 WHERE id = ?1",
+        rusqlite::params![id, content],
+    )?;
+    Ok(())
+}
+
+pub fn toggle_quick_note(id: i64) -> Result<bool> {
+    let conn = get_db().lock();
+
+    // 获取当前状态
+    let current: i32 = conn.query_row(
+        "SELECT completed FROM quick_notes WHERE id = ?1",
+        [id],
+        |row| row.get(0),
+    )?;
+
+    let new_completed = current == 0;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    if new_completed {
+        conn.execute(
+            "UPDATE quick_notes SET completed = 1, completed_at = ?2 WHERE id = ?1",
+            rusqlite::params![id, now],
+        )?;
+    } else {
+        conn.execute(
+            "UPDATE quick_notes SET completed = 0, completed_at = NULL WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+    }
+
+    Ok(new_completed)
+}
+
+pub fn delete_quick_note(id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("DELETE FROM quick_notes WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+pub fn get_quick_notes_count() -> Result<(i64, i64)> {
+    let conn = get_db().lock();
+    let total: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM quick_notes",
+        [],
+        |row| row.get(0),
+    )?;
+    let pending: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM quick_notes WHERE completed = 0",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok((total, pending))
+}
+
+pub fn update_quick_note_due_date(id: i64, due_date: Option<String>) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE quick_notes SET due_date = ?2 WHERE id = ?1",
+        rusqlite::params![id, due_date],
+    )?;
+    Ok(())
+}
+
+pub fn reorder_quick_notes(ids: Vec<i64>) -> Result<()> {
+    let conn = get_db().lock();
+    for (index, id) in ids.iter().enumerate() {
+        conn.execute(
+            "UPDATE quick_notes SET sort_order = ?2 WHERE id = ?1",
+            rusqlite::params![id, index as i64],
+        )?;
+    }
+    Ok(())
+}
+
+// ==================== 汇率缓存 ====================
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExchangeRateCache {
+    pub currency: String,
+    pub rate: f64,
+    pub updated_at: String,
+}
+
+pub fn init_exchange_rate_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS exchange_rates (
+            currency TEXT PRIMARY KEY,
+            rate REAL NOT NULL,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        "
+    )?;
+    Ok(())
+}
+
+pub fn save_exchange_rates(rates: Vec<(String, f64)>) -> Result<()> {
+    let conn = get_db().lock();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    for (currency, rate) in rates {
+        conn.execute(
+            "INSERT OR REPLACE INTO exchange_rates (currency, rate, updated_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![currency, rate, now],
+        )?;
+    }
+
+    Ok(())
+}
+
+pub fn get_exchange_rates() -> Result<Vec<ExchangeRateCache>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT currency, rate, updated_at FROM exchange_rates"
+    )?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok(ExchangeRateCache {
+            currency: row.get(0)?,
+            rate: row.get(1)?,
+            updated_at: row.get(2)?,
         })
     })?;
 

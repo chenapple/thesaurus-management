@@ -34,6 +34,7 @@ const SmartCopyTab = defineAsyncComponent(() => import("./components/SmartCopyTa
 const AdOptimizerTab = defineAsyncComponent(() => import("./components/AdOptimizerTab.vue"));
 const AgentTab = defineAsyncComponent(() => import("./components/AgentTab.vue"));
 const GlobalNotification = defineAsyncComponent(() => import("./components/GlobalNotification.vue"));
+const QuickNotes = defineAsyncComponent(() => import("./components/QuickNotes.vue"));
 
 // ==================== 产品相关状态 ====================
 const products = ref<Product[]>([]);
@@ -4046,6 +4047,9 @@ onUnmounted(() => {
 
     <!-- 全局通知弹窗 -->
     <GlobalNotification @view-details="handleNotificationDetails" />
+
+    <!-- 快捷备忘录浮动按钮 -->
+    <QuickNotes />
   </div>
 </template>
 

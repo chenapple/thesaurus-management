@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue';
-import { TrendCharts, Document, Monitor, Folder, Top, Bottom, Timer, QuestionFilled } from '@element-plus/icons-vue';
+import { TrendCharts, Document, Monitor, Folder, Top, Bottom, Timer, Refresh } from '@element-plus/icons-vue';
 import * as api from '../api';
 import type { MonitoringStats, TrafficLevelStats, OptimizationEvent, Product, SchedulerSettings, SchedulerStatus } from '../types';
+import { EXCHANGE_RATE_CURRENCIES } from '../types';
 
 // Props
 const props = defineProps<{
@@ -15,7 +16,6 @@ type ViewMode = 'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' 
 // Emits
 const emit = defineEmits<{
   (e: 'switchView', view: ViewMode): void;
-  (e: 'showHelp', tab: string): void;
 }>();
 
 // 加载状态
@@ -340,6 +340,88 @@ function formatDateTime(dateStr: string | null): string {
   if (isNaN(date.getTime())) return '-';
   return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
 }
+
+// ==================== 汇率相关 ====================
+const exchangeRates = ref<Map<string, number>>(new Map());
+const exchangeRatesLoading = ref(false);
+const exchangeRatesUpdatedAt = ref<string | null>(null);
+
+// 加载缓存的汇率
+async function loadCachedRates() {
+  try {
+    const cached = await api.getExchangeRates();
+    if (cached.length > 0) {
+      cached.forEach(item => {
+        exchangeRates.value.set(item.currency, item.rate);
+      });
+      exchangeRatesUpdatedAt.value = cached[0]?.updated_at || null;
+    }
+  } catch (e) {
+    console.error('加载缓存汇率失败:', e);
+  }
+}
+
+// 从网络获取最新汇率
+async function fetchExchangeRates() {
+  exchangeRatesLoading.value = true;
+  try {
+    // 使用免费的汇率 API
+    const response = await fetch('https://api.exchangerate-api.com/v4/latest/CNY');
+    const data = await response.json();
+
+    if (data && data.rates) {
+      const ratesToSave: [string, number][] = [];
+
+      EXCHANGE_RATE_CURRENCIES.forEach(currency => {
+        // API 返回的是 1 CNY = X 外币，我们需要 1 外币 = X CNY
+        const rate = data.rates[currency.code];
+        if (rate) {
+          const cnyRate = 1 / rate;
+          exchangeRates.value.set(currency.code, cnyRate);
+          ratesToSave.push([currency.code, cnyRate]);
+        }
+      });
+
+      // 保存到缓存
+      if (ratesToSave.length > 0) {
+        await api.saveExchangeRates(ratesToSave);
+        exchangeRatesUpdatedAt.value = new Date().toISOString();
+      }
+    }
+  } catch (e) {
+    console.error('获取汇率失败:', e);
+  } finally {
+    exchangeRatesLoading.value = false;
+  }
+}
+
+// 格式化汇率显示
+function formatRate(currency: string): string {
+  const rate = exchangeRates.value.get(currency);
+  if (!rate) return '-';
+
+  const config = EXCHANGE_RATE_CURRENCIES.find(c => c.code === currency);
+  const multiplier = config?.multiplier || 1;
+
+  if (multiplier > 1) {
+    return (rate * multiplier).toFixed(2);
+  }
+  return rate.toFixed(2);
+}
+
+// 初始化时加载汇率
+loadCachedRates().then(() => {
+  // 如果缓存为空或超过1小时，自动刷新
+  if (exchangeRates.value.size === 0) {
+    fetchExchangeRates();
+  } else if (exchangeRatesUpdatedAt.value) {
+    const lastUpdate = new Date(exchangeRatesUpdatedAt.value);
+    const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    if (lastUpdate < hourAgo) {
+      fetchExchangeRates();
+    }
+  }
+});
 </script>
 
 <template>
@@ -362,9 +444,28 @@ function formatDateTime(dateStr: string | null): string {
           <span class="product-badge" v-if="selectedProduct">{{ selectedProduct.name }}</span>
         </div>
         <div class="header-right">
-          <el-button circle size="small" class="help-btn" @click="emit('showHelp', 'dashboard')" title="查看帮助">
-            <el-icon><QuestionFilled /></el-icon>
-          </el-button>
+          <!-- 汇率显示 -->
+          <div class="exchange-rates" v-if="exchangeRates.size > 0">
+            <span
+              v-for="currency in EXCHANGE_RATE_CURRENCIES.slice(0, 3)"
+              :key="currency.code"
+              class="rate-item"
+              :title="`1 ${currency.code} = ${formatRate(currency.code)} CNY${currency.multiplier ? ` (×${currency.multiplier})` : ''}`"
+            >
+              <span class="rate-flag" v-html="currency.flag"></span>
+              <span class="rate-code">{{ currency.code }}</span>
+              <span class="rate-value">{{ formatRate(currency.code) }}</span>
+            </span>
+            <el-button
+              class="rate-refresh"
+              :icon="Refresh"
+              link
+              size="small"
+              :loading="exchangeRatesLoading"
+              @click="fetchExchangeRates"
+              title="刷新汇率"
+            />
+          </div>
           <span class="current-date">{{ new Date().toLocaleDateString('zh-CN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) }}</span>
         </div>
       </div>
@@ -672,17 +773,61 @@ function formatDateTime(dateStr: string | null): string {
 .header-right {
   display: flex;
   align-items: center;
+  gap: 16px;
+}
+
+/* 汇率显示 */
+.exchange-rates {
+  display: flex;
+  align-items: center;
   gap: 12px;
+  padding: 6px 12px;
+  background: var(--glass-bg);
+  border-radius: 20px;
+  border: 1px solid var(--glass-border);
 }
 
-.help-btn {
+.rate-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  cursor: default;
+}
+
+.rate-flag {
+  display: inline-flex;
+  align-items: center;
+  width: 18px;
+  height: 12px;
+  border-radius: 2px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
+
+.rate-flag :deep(svg) {
+  width: 100%;
+  height: 100%;
+}
+
+.rate-code {
   color: var(--el-text-color-secondary);
-  border-color: var(--el-border-color-light);
+  font-weight: 500;
 }
 
-.help-btn:hover {
-  color: var(--el-color-primary);
-  border-color: var(--el-color-primary-light-5);
+.rate-value {
+  font-family: 'Poppins', sans-serif;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.rate-refresh {
+  padding: 2px;
+  margin-left: 4px;
+}
+
+.rate-refresh :deep(.el-icon) {
+  font-size: 14px;
 }
 
 /* Card Utility - Glassmorphism */
