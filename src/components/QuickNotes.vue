@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { EditPen, Delete, Check, Close, Rank, Calendar } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
@@ -32,14 +32,6 @@ const urgentNotes = computed(() => {
 
 const urgentCount = computed(() => urgentNotes.value.length);
 
-// 即将到期（明天到期）
-const soonNotes = computed(() => {
-  return notes.value.filter(n => {
-    if (n.completed || !n.due_date) return false;
-    const days = getDueDays(n);
-    return days === 1; // 明天到期
-  });
-});
 
 const filteredNotes = computed(() => {
   if (filter.value === 'pending') {
