@@ -1056,7 +1056,7 @@ loadCachedRates().then(() => {
             :class="{
               'is-empty': !cell,
               'is-today': cell?.isToday,
-              'has-holiday': cell?.holidays.length > 0
+              'has-holiday': cell?.holidays?.length && cell.holidays.length > 0
             }"
           >
             <template v-if="cell">
