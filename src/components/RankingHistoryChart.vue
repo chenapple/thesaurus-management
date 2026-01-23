@@ -28,9 +28,9 @@
       </div>
       <el-empty v-else description="暂无排名历史数据" />
 
-      <!-- 数据表格 -->
-      <div class="history-table" v-if="history.length">
-        <el-table :data="history" size="small" border max-height="200">
+      <!-- 数据表格（只显示有实际数据的行） -->
+      <div class="history-table" v-if="historyWithData.length">
+        <el-table :data="historyWithData" size="small" border max-height="200">
           <el-table-column label="日期" prop="check_date" width="100" />
           <el-table-column v-if="props.displayType !== 'sponsored'" label="自然排名" align="center">
             <template #default="{ row }">
@@ -146,13 +146,64 @@ const dialogTitle = computed(() => {
   return `排名历史 - ${keyword}`;
 });
 
+// 获取今天的日期（北京时间 YYYY-MM-DD）
+function getTodayDate(): string {
+  const now = new Date();
+  // 转换为北京时间 (UTC+8)
+  const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  return beijingTime.toISOString().split('T')[0];
+}
+
+// 填充日期范围内的所有日期（包括没有数据的日期）
+function fillMissingDates(data: RankingHistory[], daysCount: number): RankingHistory[] {
+  const today = getTodayDate();
+  const startDate = new Date(today);
+  startDate.setDate(startDate.getDate() - daysCount + 1);
+
+  // 构建日期到数据的映射
+  const dateMap = new Map<string, RankingHistory>();
+  for (const item of data) {
+    dateMap.set(item.check_date, item);
+  }
+
+  // 生成完整的日期序列
+  const result: RankingHistory[] = [];
+  const currentDate = new Date(startDate);
+  const endDate = new Date(today);
+
+  while (currentDate <= endDate) {
+    const dateStr = currentDate.toISOString().split('T')[0];
+    const existing = dateMap.get(dateStr);
+    if (existing) {
+      result.push(existing);
+    } else {
+      // 补充空数据占位
+      result.push({
+        id: 0,
+        monitoring_id: 0,
+        check_date: dateStr,
+        organic_rank: null,
+        organic_page: null,
+        sponsored_rank: null,
+        sponsored_page: null,
+        checked_at: '',
+      });
+    }
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+
+  return result;
+}
+
 // 加载历史数据
 async function loadHistory() {
   if (!props.monitoring) return;
 
   loading.value = true;
   try {
-    history.value = await getRankingHistory(props.monitoring.id, days.value);
+    const rawHistory = await getRankingHistory(props.monitoring.id, days.value);
+    // 填充缺失的日期，确保包含今天
+    history.value = fillMissingDates(rawHistory, days.value);
   } catch (e) {
     console.error('加载历史数据失败:', e);
     history.value = [];
@@ -160,6 +211,11 @@ async function loadHistory() {
     loading.value = false;
   }
 }
+
+// 过滤出有实际数据的历史记录（用于表格显示）
+const historyWithData = computed(() => {
+  return history.value.filter(h => h.checked_at); // 有 checked_at 表示有实际数据
+});
 
 // 格式化日期为短格式 (MM-DD)
 function formatDateShort(dateStr: string): string {
@@ -192,41 +248,88 @@ function getSubTypeLabel(mainType: string, subType?: string): string {
 // 判断事件是否应该显示（基于三级范围匹配）
 function shouldShowEvent(event: OptimizationEvent, monitoring: KeywordMonitoring): boolean {
   // 1. 产品级别：target_asin 为空 → 所有监控项都显示
-  if (!event.target_asin) return true;
-
-  // 2. ASIN 级别：target_asin 匹配，且无关联关键词 → 该 ASIN 下所有关键词都显示
-  if (event.target_asin === monitoring.asin && !event.affected_keywords) return true;
-
-  // 3. 关键词级别：target_asin 匹配 + 关键词匹配 → 只有该组合显示
-  if (event.target_asin === monitoring.asin && event.affected_keywords) {
-    try {
-      const keywords: string[] = JSON.parse(event.affected_keywords);
-      return keywords.includes(monitoring.keyword);
-    } catch {
-      return false;
-    }
+  if (!event.target_asin) {
+    return true;
   }
 
-  return false;
+  // 解析 target_asin（可能是单个 ASIN 或 JSON 数组）
+  let targetAsins: string[] = [];
+  if (event.target_asin.startsWith('[')) {
+    try {
+      targetAsins = JSON.parse(event.target_asin);
+    } catch {
+      targetAsins = [event.target_asin];
+    }
+  } else {
+    targetAsins = [event.target_asin];
+  }
+
+  // 检查当前监控的 ASIN 是否在目标列表中
+  const asinMatch = targetAsins.includes(monitoring.asin);
+  if (!asinMatch) {
+    return false;
+  }
+
+  // 2. ASIN 级别：ASIN 匹配，且无关联关键词 → 该 ASIN 下所有关键词都显示
+  if (!event.affected_keywords || event.affected_keywords === 'null') {
+    return true;
+  }
+
+  // 3. 关键词级别：ASIN 匹配 + 关键词匹配 → 只有该组合显示
+  try {
+    const keywords: string[] = JSON.parse(event.affected_keywords);
+    return keywords.includes(monitoring.keyword);
+  } catch {
+    return false;
+  }
 }
 
 // 生成事件标记线数据
 function getEventMarkLines() {
-  if (!props.events?.length || !props.monitoring) return [];
+  if (!props.events?.length || !props.monitoring || !history.value.length) {
+    return [];
+  }
 
-  const dates = history.value.map(h => h.check_date);
+  // 获取历史数据的日期范围
+  const historyDates = history.value.map(h => h.check_date);
+  const minDate = historyDates[0]; // 已按日期升序排列
+  const maxDate = historyDates[historyDates.length - 1];
 
-  // 过滤出符合条件的事件
-  const filteredEvents = props.events.filter(event =>
-    dates.includes(event.event_date) &&
-    shouldShowEvent(event, props.monitoring!)
-  );
+  // 过滤出符合条件的事件：
+  // 1. 事件日期在历史数据的日期范围内
+  // 2. 事件目标匹配当前监控项
+  const filteredEvents = props.events.filter(event => {
+    const dateInRange = event.event_date >= minDate && event.event_date <= maxDate;
+    const eventMatch = shouldShowEvent(event, props.monitoring!);
+    return dateInRange && eventMatch;
+  });
+
+  // 找到事件日期对应的X轴位置（精确匹配或最近的日期）
+  function findXAxisPosition(eventDate: string): string {
+    // 先尝试精确匹配
+    if (historyDates.includes(eventDate)) {
+      return formatDateShort(eventDate);
+    }
+    // 找最近的日期
+    let closestDate = historyDates[0];
+    let minDiff = Math.abs(new Date(eventDate).getTime() - new Date(closestDate).getTime());
+    for (const d of historyDates) {
+      const diff = Math.abs(new Date(eventDate).getTime() - new Date(d).getTime());
+      if (diff < minDiff) {
+        minDiff = diff;
+        closestDate = d;
+      }
+    }
+    return formatDateShort(closestDate);
+  }
 
   // 按日期分组，计算每个事件在当天的索引（用于垂直错开）
   const dateIndexMap: Record<string, number> = {};
 
   return filteredEvents.map(event => {
-    const dateKey = event.event_date;
+    const xAxisPos = findXAxisPosition(event.event_date);
+
+    const dateKey = xAxisPos; // 使用实际显示的位置来分组
     const indexInDay = dateIndexMap[dateKey] || 0;
     dateIndexMap[dateKey] = indexInDay + 1;
 
@@ -238,7 +341,7 @@ function getEventMarkLines() {
     const verticalOffset = indexInDay * 16;
 
     return {
-      xAxis: formatDateShort(event.event_date),
+      xAxis: xAxisPos,
       label: {
         show: true,
         formatter: displayLabel,

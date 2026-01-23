@@ -833,6 +833,7 @@ function getRateDirection(currency: string): number | null {
 
 // 汇率轮播相关
 const currentRateIndex = ref(0);
+const rateSlideDirection = ref<'up' | 'down'>('up'); // 滑动方向
 let rateCarouselTimer: ReturnType<typeof setInterval> | null = null;
 const RATE_CAROUSEL_INTERVAL = 3000; // 3秒切换一次
 
@@ -848,6 +849,7 @@ function startRateCarousel() {
   stopRateCarousel();
   if (displayCurrencies.value.length > 1) {
     rateCarouselTimer = setInterval(() => {
+      rateSlideDirection.value = 'up'; // 自动轮播向上滑动
       currentRateIndex.value = (currentRateIndex.value + 1) % displayCurrencies.value.length;
     }, RATE_CAROUSEL_INTERVAL);
   }
@@ -871,8 +873,10 @@ function handleRateWheel(event: WheelEvent) {
   stopRateCarousel();
 
   if (event.deltaY > 0) {
+    rateSlideDirection.value = 'up'; // 向下滚动 = 下一个 = 向上滑出
     currentRateIndex.value = (currentRateIndex.value + 1) % len;
   } else {
+    rateSlideDirection.value = 'down'; // 向上滚动 = 上一个 = 向下滑出
     currentRateIndex.value = (currentRateIndex.value - 1 + len) % len;
   }
 
@@ -1046,22 +1050,24 @@ loadCachedRates().then(() => {
             @wheel="handleRateWheel"
             :title="`1 ${currentDisplayCurrency.code} = ${formatRate(currentDisplayCurrency.code)} CNY${currentDisplayCurrency.multiplier ? ` (×${currentDisplayCurrency.multiplier})` : ''} (滚轮切换货币)`"
           >
-            <span class="rate-item">
-              <span class="rate-flag" v-html="currentDisplayCurrency.flag"></span>
-              <span class="rate-code">{{ currentDisplayCurrency.code }}</span>
-              <span class="rate-value">{{ formatRate(currentDisplayCurrency.code) }}</span>
-              <span
-                v-if="getRateDirection(currentDisplayCurrency.code) !== null"
-                class="rate-direction"
-                :class="{
-                  up: getRateDirection(currentDisplayCurrency.code) === 1,
-                  down: getRateDirection(currentDisplayCurrency.code) === -1,
-                  equal: getRateDirection(currentDisplayCurrency.code) === 0
-                }"
-              >
-                {{ getRateDirection(currentDisplayCurrency.code) === 1 ? '↑' : getRateDirection(currentDisplayCurrency.code) === -1 ? '↓' : '—' }}
+            <transition :name="rateSlideDirection === 'up' ? 'rate-slide-up' : 'rate-slide-down'" mode="out-in">
+              <span class="rate-item" :key="currentDisplayCurrency.code">
+                <span class="rate-flag" v-html="currentDisplayCurrency.flag"></span>
+                <span class="rate-code">{{ currentDisplayCurrency.code }}</span>
+                <span class="rate-value">{{ formatRate(currentDisplayCurrency.code) }}</span>
+                <span
+                  v-if="getRateDirection(currentDisplayCurrency.code) !== null"
+                  class="rate-direction"
+                  :class="{
+                    up: getRateDirection(currentDisplayCurrency.code) === 1,
+                    down: getRateDirection(currentDisplayCurrency.code) === -1,
+                    equal: getRateDirection(currentDisplayCurrency.code) === 0
+                  }"
+                >
+                  {{ getRateDirection(currentDisplayCurrency.code) === 1 ? '↑' : getRateDirection(currentDisplayCurrency.code) === -1 ? '↓' : '—' }}
+                </span>
               </span>
-            </span>
+            </transition>
           </div>
           <!-- 大屏模式切换 -->
           <el-button
@@ -1730,6 +1736,8 @@ loadCachedRates().then(() => {
   background: var(--glass-bg);
   border-radius: 20px;
   border: 1px solid var(--glass-border);
+  overflow: hidden;
+  min-width: 120px; /* 避免切换时宽度跳动 */
 }
 
 .rate-item {
@@ -1782,6 +1790,38 @@ loadCachedRates().then(() => {
 
 .rate-direction.equal {
   color: var(--el-text-color-secondary);
+}
+
+/* 汇率轮播滑动动画 - 向上滑动 */
+.rate-slide-up-enter-active,
+.rate-slide-up-leave-active {
+  transition: all 0.3s ease-out;
+}
+
+.rate-slide-up-enter-from {
+  opacity: 0;
+  transform: translateY(12px);
+}
+
+.rate-slide-up-leave-to {
+  opacity: 0;
+  transform: translateY(-12px);
+}
+
+/* 汇率轮播滑动动画 - 向下滑动 */
+.rate-slide-down-enter-active,
+.rate-slide-down-leave-active {
+  transition: all 0.3s ease-out;
+}
+
+.rate-slide-down-enter-from {
+  opacity: 0;
+  transform: translateY(-12px);
+}
+
+.rate-slide-down-leave-to {
+  opacity: 0;
+  transform: translateY(12px);
 }
 
 /* Card Utility - Glassmorphism */

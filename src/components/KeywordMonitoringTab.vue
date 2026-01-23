@@ -406,7 +406,7 @@
 
         <el-table-column width="130" align="center">
           <template #header>
-            <el-tooltip content="最近7天自然排名趋势" placement="top">
+            <el-tooltip content="最近7天自然排名趋势（需至少2天数据）" placement="top">
               <span class="header-with-tip">自然位趋势</span>
             </el-tooltip>
           </template>
@@ -440,7 +440,7 @@
 
         <el-table-column width="130" align="center">
           <template #header>
-            <el-tooltip content="最近7天广告排名趋势" placement="top">
+            <el-tooltip content="最近7天广告排名趋势（需至少2天数据）" placement="top">
               <span class="header-with-tip">广告位趋势</span>
             </el-tooltip>
           </template>
