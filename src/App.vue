@@ -199,8 +199,8 @@ function loadExchangeRateSettings() {
 
 // 保存汇率显示设置
 function saveExchangeRateSettings() {
-  if (selectedCurrencies.value.length !== 3) {
-    ElMessage.warning('请选择 3 个货币');
+  if (selectedCurrencies.value.length < 1 || selectedCurrencies.value.length > 5) {
+    ElMessage.warning('请选择 1-5 个货币');
     return;
   }
   localStorage.setItem('exchange_rate_currencies', JSON.stringify(selectedCurrencies.value));
@@ -222,10 +222,10 @@ function toggleCurrencySelection(code: string) {
     }
   } else {
     // 如果未选中，添加选择
-    if (selectedCurrencies.value.length < 3) {
+    if (selectedCurrencies.value.length < 5) {
       selectedCurrencies.value.push(code);
     } else {
-      ElMessage.warning('最多只能选择 3 个货币');
+      ElMessage.warning('最多只能选择 5 个货币');
     }
   }
 }
@@ -2912,7 +2912,7 @@ onUnmounted(() => {
       destroy-on-close
     >
       <div class="exchange-rate-settings">
-        <p class="settings-tip">选择要在概览页面显示的 3 种货币汇率</p>
+        <p class="settings-tip">选择要在概览页面轮播显示的货币汇率（最多 5 种）</p>
         <div class="currency-options">
           <div
             v-for="currency in EXCHANGE_RATE_CURRENCIES"
@@ -2928,12 +2928,12 @@ onUnmounted(() => {
           </div>
         </div>
         <p class="settings-counter">
-          已选择 {{ selectedCurrencies.length }} / 3 种货币
+          已选择 {{ selectedCurrencies.length }} / 5 种货币
         </p>
       </div>
       <template #footer>
         <el-button @click="showExchangeRateSettings = false">取消</el-button>
-        <el-button type="primary" @click="saveExchangeRateSettings" :disabled="selectedCurrencies.length !== 3">保存</el-button>
+        <el-button type="primary" @click="saveExchangeRateSettings" :disabled="selectedCurrencies.length < 1 || selectedCurrencies.length > 5">保存</el-button>
       </template>
     </el-dialog>
 
@@ -3046,7 +3046,7 @@ onUnmounted(() => {
               <li><strong>监控概览：</strong>显示正在监控的关键词数量和排名变化趋势</li>
               <li><strong>排名变化榜：</strong>展示排名上升/下降最多的关键词</li>
               <li><strong>待办提醒：</strong>提示需要关注的事项，如未分类关键词等</li>
-              <li><strong>汇率显示：</strong>实时显示主要货币对人民币汇率，支持美元、欧元、英镑、日元，点击齿轮图标可自定义选择显示哪3个</li>
+              <li><strong>汇率显示：</strong>实时轮播显示主要货币对人民币汇率，支持多种货币，点击齿轮图标可自定义选择显示哪些（最多5个）</li>
             </ul>
 
             <h4>智慧大屏</h4>

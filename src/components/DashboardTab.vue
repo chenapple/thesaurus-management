@@ -327,6 +327,9 @@ watch(() => props.selectedProduct, () => {
 // 监听汇率设置变更事件
 function handleExchangeRateSettingsChanged() {
   loadCurrencyPreference();
+  // 重置轮播索引并重启轮播
+  currentRateIndex.value = 0;
+  startRateCarousel();
 }
 
 onMounted(() => {
@@ -335,6 +338,8 @@ onMounted(() => {
   // 加载市场时钟偏好并启动
   loadMarketClockPreference();
   startClock();
+  // 启动汇率轮播
+  startRateCarousel();
   // 监听汇率设置变更
   window.addEventListener('exchange-rate-settings-changed', handleExchangeRateSettingsChanged);
 });
@@ -346,6 +351,8 @@ onUnmounted(() => {
   }
   // 停止市场时钟
   stopClock();
+  // 停止汇率轮播
+  stopRateCarousel();
   // 移除事件监听
   window.removeEventListener('exchange-rate-settings-changed', handleExchangeRateSettingsChanged);
 });
@@ -618,11 +625,73 @@ function getHolidayTypeLabel(type: HolidayType): string {
 
 // ==================== 汇率相关 ====================
 const exchangeRates = ref<Map<string, number>>(new Map());
+const previousExchangeRates = ref<Map<string, number>>(new Map()); // 上次汇率用于比较涨跌
 const exchangeRatesLoading = ref(false);
 const exchangeRatesUpdatedAt = ref<string | null>(null);
 
 // 用户选择的显示货币（默认前3个）
 const selectedCurrencies = ref<string[]>(['USD', 'EUR', 'GBP']);
+
+// 获取汇率涨跌方向: 1=上涨, -1=下跌, 0=持平, null=无数据
+function getRateDirection(currency: string): number | null {
+  const current = exchangeRates.value.get(currency);
+  const previous = previousExchangeRates.value.get(currency);
+  if (!current || !previous) return null;
+  if (current > previous) return 1;
+  if (current < previous) return -1;
+  return 0;
+}
+
+// 汇率轮播相关
+const currentRateIndex = ref(0);
+let rateCarouselTimer: ReturnType<typeof setInterval> | null = null;
+const RATE_CAROUSEL_INTERVAL = 3000; // 3秒切换一次
+
+// 获取当前显示的货币
+const currentDisplayCurrency = computed(() => {
+  const currencies = displayCurrencies.value;
+  if (currencies.length === 0) return null;
+  return currencies[currentRateIndex.value % currencies.length];
+});
+
+// 开始汇率自动轮播
+function startRateCarousel() {
+  stopRateCarousel();
+  if (displayCurrencies.value.length > 1) {
+    rateCarouselTimer = setInterval(() => {
+      currentRateIndex.value = (currentRateIndex.value + 1) % displayCurrencies.value.length;
+    }, RATE_CAROUSEL_INTERVAL);
+  }
+}
+
+// 停止汇率自动轮播
+function stopRateCarousel() {
+  if (rateCarouselTimer) {
+    clearInterval(rateCarouselTimer);
+    rateCarouselTimer = null;
+  }
+}
+
+// 汇率滚轮切换
+function handleRateWheel(event: WheelEvent) {
+  event.preventDefault();
+  const len = displayCurrencies.value.length;
+  if (len <= 1) return;
+
+  // 用户交互时暂停自动轮播
+  stopRateCarousel();
+
+  if (event.deltaY > 0) {
+    currentRateIndex.value = (currentRateIndex.value + 1) % len;
+  } else {
+    currentRateIndex.value = (currentRateIndex.value - 1 + len) % len;
+  }
+
+  // 3秒后恢复自动轮播
+  setTimeout(() => {
+    startRateCarousel();
+  }, 3000);
+}
 
 // 加载用户汇率偏好
 function loadCurrencyPreference() {
@@ -630,7 +699,7 @@ function loadCurrencyPreference() {
     const saved = localStorage.getItem('exchange_rate_currencies');
     if (saved) {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0 && parsed.length <= 3) {
+      if (Array.isArray(parsed) && parsed.length > 0 && parsed.length <= 5) {
         selectedCurrencies.value = parsed;
       }
     }
@@ -652,6 +721,8 @@ async function loadCachedRates() {
       cached.forEach(item => {
         exchangeRates.value.set(item.currency, item.rate);
       });
+      // 初始化 previousExchangeRates，这样下次刷新时就有对比数据
+      previousExchangeRates.value = new Map(exchangeRates.value);
       exchangeRatesUpdatedAt.value = cached[0]?.updated_at || null;
     }
   } catch (e) {
@@ -671,6 +742,9 @@ async function fetchExchangeRates() {
 
     // 更新本地状态
     if (result && result.length > 0) {
+      // 保存当前汇率作为"上次汇率"用于比较涨跌
+      previousExchangeRates.value = new Map(exchangeRates.value);
+
       result.forEach(item => {
         exchangeRates.value.set(item.currency, item.rate);
       });
@@ -776,17 +850,28 @@ loadCachedRates().then(() => {
             <span class="clock-time">{{ currentTime }}</span>
           </div>
           <span class="header-divider"></span>
-          <!-- 汇率显示 -->
-          <div class="exchange-rates" v-if="exchangeRates.size > 0">
-            <span
-              v-for="currency in displayCurrencies"
-              :key="currency.code"
-              class="rate-item"
-              :title="`1 ${currency.code} = ${formatRate(currency.code)} CNY${currency.multiplier ? ` (×${currency.multiplier})` : ''}`"
-            >
-              <span class="rate-flag" v-html="currency.flag"></span>
-              <span class="rate-code">{{ currency.code }}</span>
-              <span class="rate-value">{{ formatRate(currency.code) }}</span>
+          <!-- 汇率显示（轮播） -->
+          <div
+            class="exchange-rates"
+            v-if="currentDisplayCurrency"
+            @wheel="handleRateWheel"
+            :title="`1 ${currentDisplayCurrency.code} = ${formatRate(currentDisplayCurrency.code)} CNY${currentDisplayCurrency.multiplier ? ` (×${currentDisplayCurrency.multiplier})` : ''} (滚轮切换货币)`"
+          >
+            <span class="rate-item">
+              <span class="rate-flag" v-html="currentDisplayCurrency.flag"></span>
+              <span class="rate-code">{{ currentDisplayCurrency.code }}</span>
+              <span class="rate-value">{{ formatRate(currentDisplayCurrency.code) }}</span>
+              <span
+                v-if="getRateDirection(currentDisplayCurrency.code) !== null"
+                class="rate-direction"
+                :class="{
+                  up: getRateDirection(currentDisplayCurrency.code) === 1,
+                  down: getRateDirection(currentDisplayCurrency.code) === -1,
+                  equal: getRateDirection(currentDisplayCurrency.code) === 0
+                }"
+              >
+                {{ getRateDirection(currentDisplayCurrency.code) === 1 ? '↑' : getRateDirection(currentDisplayCurrency.code) === -1 ? '↓' : '—' }}
+              </span>
             </span>
           </div>
           <!-- 大屏模式切换 -->
@@ -1426,6 +1511,24 @@ loadCachedRates().then(() => {
   font-family: 'Poppins', sans-serif;
   font-weight: 600;
   color: var(--el-text-color-primary);
+}
+
+.rate-direction {
+  margin-left: 2px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rate-direction.up {
+  color: #67c23a;
+}
+
+.rate-direction.down {
+  color: #f56c6c;
+}
+
+.rate-direction.equal {
+  color: var(--el-text-color-secondary);
 }
 
 /* Card Utility - Glassmorphism */
