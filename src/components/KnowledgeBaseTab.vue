@@ -11,12 +11,6 @@ import type { ChatMessage } from '../ai-service';
 import type { KbDocument, KbConversation, KbMessage, KbSearchResult, KbChunk, AIProvider, DependencyStatus, InstallProgress, KbDocumentLink, KbDocumentCategory } from '../types';
 import { AI_PROVIDERS } from '../types';
 import { marked } from 'marked';
-import { QuestionFilled } from '@element-plus/icons-vue';
-
-// Emits
-const emit = defineEmits<{
-  (e: 'showHelp', tab: string): void;
-}>();
 
 // ==================== 状态 ====================
 

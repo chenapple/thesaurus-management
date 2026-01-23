@@ -257,7 +257,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, MoreFilled, ArrowLeft, Search, QuestionFilled } from '@element-plus/icons-vue';
+import { Plus, MoreFilled, ArrowLeft, Search } from '@element-plus/icons-vue';
 import type { AdProject, AdSearchTerm, AdAnalysisResult, AIProvider, SearchTermsStatsResult } from '../types';
 import { AI_PROVIDERS, COUNTRY_CURRENCY_MAP, getCountryLabel } from '../types';
 import type { AnalysisSession } from '../ad-prompts';
@@ -278,11 +278,6 @@ import AdDataImport from './ad-optimizer/AdDataImport.vue';
 import AdAnalysisCanvas from './ad-optimizer/AdAnalysisCanvas.vue';
 import AdAnalysisResults from './ad-optimizer/AdAnalysisResults.vue';
 import AdCountryCard from './ad-optimizer/AdCountryCard.vue';
-
-// Emits
-const emit = defineEmits<{
-  (e: 'showHelp', tab: string): void;
-}>();
 
 // 视图模式
 const viewMode = ref<'list' | 'detail'>('list');

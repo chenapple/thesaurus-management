@@ -843,7 +843,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Search, ArrowDown, QuestionFilled } from '@element-plus/icons-vue';
+import { Search, ArrowDown } from '@element-plus/icons-vue';
 import { listen } from '@tauri-apps/api/event';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -873,10 +873,6 @@ import { getOptimizationEvents, deleteOptimizationEvent } from '../api';
 
 const props = defineProps<{
   productId: number;
-}>();
-
-const emit = defineEmits<{
-  (e: 'showHelp', tab: string): void;
 }>();
 
 // 视图模式: flat(平铺列表), product(按产品分组), keyword(按关键词分组)

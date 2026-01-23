@@ -1061,7 +1061,7 @@ loadCachedRates().then(() => {
           >
             <template v-if="cell">
               <span class="cell-day">{{ cell.day }}</span>
-              <div class="cell-holidays" v-if="cell.holidays.length > 0">
+              <div class="cell-holidays" v-if="cell.holidays && cell.holidays.length > 0">
                 <el-tooltip
                   v-for="(holiday, hIndex) in cell.holidays"
                   :key="hIndex"

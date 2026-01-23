@@ -145,8 +145,8 @@
           v-model="selectedKeywords"
           multiple
           filterable
-          :disabled="!form.targetAsin"
-          :placeholder="form.targetAsin ? '选择关联的关键词' : '请先选择 ASIN'"
+          :disabled="form.targetAsins.length === 0"
+          :placeholder="form.targetAsins.length > 0 ? '选择关联的关键词' : '请先选择 ASIN'"
           style="width: 100%"
         >
           <el-option

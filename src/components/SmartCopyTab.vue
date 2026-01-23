@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
-import { Plus, Delete, Back, Refresh, ArrowRight, CopyDocument, DataLine, Select, Search, MoreFilled, QuestionFilled } from '@element-plus/icons-vue';
+import { Plus, Delete, Back, Refresh, ArrowRight, CopyDocument, DataLine, Select, Search, MoreFilled } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   scGetProjects, scCreateProject, scDeleteProject, scGetProject, scUpdateProject,
@@ -29,11 +29,6 @@ import iconRocket from '../assets/icons/rocket_3d.png';
 import iconChart from '../assets/icons/chart_3d.png';
 import AnalysisCanvas from './analysis/AnalysisCanvas.vue';
 import type { AnalysisStatus } from './analysis/AnalysisCanvas.vue';
-
-// Emits
-const emit = defineEmits<{
-  (e: 'showHelp', tab: string): void;
-}>();
 
 // ==================== 视图状态 ====================
 const viewMode = ref<'list' | 'detail'>('list');
