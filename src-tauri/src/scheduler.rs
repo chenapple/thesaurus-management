@@ -6,6 +6,7 @@ use tauri::Emitter;
 
 use crate::crawler;
 use crate::db;
+use crate::ai;
 
 // 调度器状态
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -482,12 +483,29 @@ impl MarketResearchScheduler {
                             price_info,
                         );
 
+                        // 调用 AI 生成完整报告
+                        let category_name = task.category_name.as_deref().unwrap_or(&task.category_id);
+                        let report_content = match ai::generate_market_research_report(
+                            &task.marketplace,
+                            category_name,
+                            &products_json,
+                        ).await {
+                            Ok(content) => {
+                                println!("[MarketResearchScheduler] AI 报告生成成功，长度: {} 字符", content.len());
+                                Some(content)
+                            }
+                            Err(e) => {
+                                eprintln!("[MarketResearchScheduler] AI 报告生成失败: {}", e);
+                                None
+                            }
+                        };
+
                         // 更新执行记录
                         let _ = db::update_research_run(
                             run_id,
                             "completed",
                             Some(&summary),
-                            None, // 完整报告需要 AI 生成，暂不实现
+                            report_content.as_deref(),
                             snapshot_id,
                         );
                         let _ = db::update_task_last_run(task.id, "completed");

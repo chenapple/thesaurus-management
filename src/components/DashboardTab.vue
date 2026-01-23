@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue';
-import { TrendCharts, Document, Monitor, Folder, Top, Bottom, Timer, Refresh, FullScreen } from '@element-plus/icons-vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
+import { TrendCharts, Document, Monitor, Folder, Top, Bottom, Timer, FullScreen, Calendar, ArrowLeft, ArrowRight } from '@element-plus/icons-vue';
 import BigScreenView from './BigScreenView.vue';
 import * as api from '../api';
 
@@ -324,9 +324,19 @@ watch(() => props.selectedProduct, () => {
   loadDashboardData();
 }, { immediate: true });
 
+// 监听汇率设置变更事件
+function handleExchangeRateSettingsChanged() {
+  loadCurrencyPreference();
+}
+
 onMounted(() => {
   loadDashboardData();
   startCountdownTimer();
+  // 加载市场时钟偏好并启动
+  loadMarketClockPreference();
+  startClock();
+  // 监听汇率设置变更
+  window.addEventListener('exchange-rate-settings-changed', handleExchangeRateSettingsChanged);
 });
 
 onUnmounted(() => {
@@ -334,6 +344,10 @@ onUnmounted(() => {
     clearInterval(countdownTimer);
     countdownTimer = null;
   }
+  // 停止市场时钟
+  stopClock();
+  // 移除事件监听
+  window.removeEventListener('exchange-rate-settings-changed', handleExchangeRateSettingsChanged);
 });
 
 // 格式化时间
@@ -350,10 +364,285 @@ function formatDateTime(dateStr: string | null): string {
   return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
 }
 
+// ==================== 市场时钟相关 ====================
+const marketClocks = [
+  { code: 'US', name: '美国', timezone: 'America/New_York', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="#B22234"/><rect y="1.54" width="30" height="1.54" fill="white"/><rect y="4.62" width="30" height="1.54" fill="white"/><rect y="7.69" width="30" height="1.54" fill="white"/><rect y="10.77" width="30" height="1.54" fill="white"/><rect y="13.85" width="30" height="1.54" fill="white"/><rect y="16.92" width="30" height="1.54" fill="white"/><rect width="12" height="10.77" fill="#3C3B6E"/></svg>` },
+  { code: 'UK', name: '英国', timezone: 'Europe/London', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="#012169"/><path d="M0,0 L30,20 M30,0 L0,20" stroke="white" stroke-width="4"/><path d="M0,0 L30,20 M30,0 L0,20" stroke="#C8102E" stroke-width="2.5"/><path d="M15,0 V20 M0,10 H30" stroke="white" stroke-width="6"/><path d="M15,0 V20 M0,10 H30" stroke="#C8102E" stroke-width="3.5"/></svg>` },
+  { code: 'DE', name: '德国', timezone: 'Europe/Berlin', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="6.67" fill="#000"/><rect y="6.67" width="30" height="6.67" fill="#DD0000"/><rect y="13.33" width="30" height="6.67" fill="#FFCE00"/></svg>` },
+  { code: 'FR', name: '法国', timezone: 'Europe/Paris', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="10" height="20" fill="#002395"/><rect x="10" width="10" height="20" fill="white"/><rect x="20" width="10" height="20" fill="#ED2939"/></svg>` },
+  { code: 'JP', name: '日本', timezone: 'Asia/Tokyo', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="white"/><circle cx="15" cy="10" r="6" fill="#BC002D"/></svg>` },
+  { code: 'CN', name: '中国', timezone: 'Asia/Shanghai', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="#DE2910"/><g fill="#FFDE00"><polygon points="5,4 6,7 3,5 7,5 4,7"/></g></svg>` },
+];
+
+const currentMarketIndex = ref(0);
+const currentTime = ref('');
+let clockTimer: ReturnType<typeof setInterval> | null = null;
+
+// 当前选中的市场
+const currentMarket = computed(() => marketClocks[currentMarketIndex.value]);
+
+// 更新时钟显示
+function updateClock() {
+  const market = currentMarket.value;
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString('zh-CN', {
+    timeZone: market.timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  currentTime.value = timeStr;
+}
+
+// 滚轮切换市场
+function handleClockWheel(event: WheelEvent) {
+  event.preventDefault();
+  if (event.deltaY > 0) {
+    // 向下滚动，下一个市场
+    currentMarketIndex.value = (currentMarketIndex.value + 1) % marketClocks.length;
+  } else {
+    // 向上滚动，上一个市场
+    currentMarketIndex.value = (currentMarketIndex.value - 1 + marketClocks.length) % marketClocks.length;
+  }
+  // 立即更新时钟
+  updateClock();
+  // 保存偏好
+  localStorage.setItem('market_clock_index', currentMarketIndex.value.toString());
+}
+
+// 加载市场时钟偏好
+function loadMarketClockPreference() {
+  const saved = localStorage.getItem('market_clock_index');
+  if (saved) {
+    const index = parseInt(saved, 10);
+    if (!isNaN(index) && index >= 0 && index < marketClocks.length) {
+      currentMarketIndex.value = index;
+    }
+  }
+}
+
+// 启动时钟
+function startClock() {
+  updateClock();
+  clockTimer = setInterval(updateClock, 1000);
+}
+
+// 停止时钟
+function stopClock() {
+  if (clockTimer) {
+    clearInterval(clockTimer);
+    clockTimer = null;
+  }
+}
+
+// ==================== 电商日历相关 ====================
+const showCalendarDialog = ref(false);
+const calendarYear = ref(new Date().getFullYear());
+const calendarMonth = ref(new Date().getMonth()); // 0-11
+
+// 节日类型
+type HolidayType = 'promo' | 'western' | 'chinese' | 'japan' | 'universal';
+
+interface Holiday {
+  name: string;
+  type: HolidayType;
+  markets?: string[]; // 适用市场
+}
+
+// 节日数据 - 格式: "MM-DD" 或 "MM-DD-YYYY" 用于特定年份
+const holidayData: Record<string, Holiday[]> = {
+  // 一月
+  '01-01': [{ name: '元旦', type: 'universal' }],
+  '01-15': [{ name: 'MLK Day (美)', type: 'western', markets: ['US'] }],
+  '01-26': [{ name: '澳大利亚国庆日', type: 'western', markets: ['AU'] }],
+  // 二月
+  '02-14': [{ name: '情人节', type: 'universal' }],
+  // 三月
+  '03-08': [{ name: '妇女节', type: 'universal' }],
+  '03-17': [{ name: '圣帕特里克节', type: 'western', markets: ['US', 'UK'] }],
+  // 四月
+  '04-01': [{ name: '愚人节', type: 'western' }],
+  // 五月 - 母亲节是5月第二个周日，这里用固定日期近似
+  '05-01': [{ name: '劳动节', type: 'universal' }],
+  '05-05': [{ name: '儿童节 (日本)', type: 'japan', markets: ['JP'] }],
+  '05-11': [{ name: '母亲节', type: 'universal' }],
+  '05-31': [{ name: 'Memorial Day (美)', type: 'western', markets: ['US'] }],
+  // 六月
+  '06-01': [{ name: '儿童节', type: 'chinese', markets: ['CN'] }],
+  '06-15': [{ name: '父亲节', type: 'universal' }],
+  '06-18': [{ name: '618 大促', type: 'promo', markets: ['CN'] }],
+  // 七月
+  '07-04': [{ name: '美国独立日', type: 'western', markets: ['US'] }],
+  '07-15': [{ name: 'Prime Day (预估)', type: 'promo', markets: ['US', 'UK', 'DE', 'JP'] }],
+  '07-16': [{ name: 'Prime Day (预估)', type: 'promo', markets: ['US', 'UK', 'DE', 'JP'] }],
+  // 八月
+  '08-15': [{ name: '盂兰盆节', type: 'japan', markets: ['JP'] }],
+  // 九月
+  '09-01': [{ name: '返校季开始', type: 'promo', markets: ['US'] }],
+  '09-04': [{ name: 'Labor Day (美)', type: 'western', markets: ['US'] }],
+  // 十月
+  '10-01': [{ name: '国庆节', type: 'chinese', markets: ['CN'] }],
+  '10-09': [{ name: '感恩节 (加)', type: 'western', markets: ['CA'] }],
+  '10-31': [{ name: '万圣节', type: 'western', markets: ['US', 'UK'] }],
+  // 十一月
+  '11-11': [{ name: '双十一', type: 'promo', markets: ['CN'] }, { name: '光棍节', type: 'chinese', markets: ['CN'] }],
+  '11-23': [{ name: '感恩节 (美)', type: 'western', markets: ['US'] }],
+  '11-24': [{ name: '黑色星期五', type: 'promo' }],
+  '11-27': [{ name: '网络星期一', type: 'promo' }],
+  // 十二月
+  '12-12': [{ name: '双十二', type: 'promo', markets: ['CN'] }],
+  '12-24': [{ name: '平安夜', type: 'western' }],
+  '12-25': [{ name: '圣诞节', type: 'western' }],
+  '12-26': [{ name: 'Boxing Day', type: 'western', markets: ['UK', 'CA', 'AU'] }],
+  '12-31': [{ name: '除夕', type: 'universal' }],
+};
+
+// 2026年特定节日（农历节日等）
+const holiday2026: Record<string, Holiday[]> = {
+  '02-17': [{ name: '春节', type: 'chinese', markets: ['CN'] }],
+  '04-05': [{ name: '清明节', type: 'chinese', markets: ['CN'] }],
+  '04-05-2026': [{ name: '复活节', type: 'western' }],
+  '05-31': [{ name: '端午节', type: 'chinese', markets: ['CN'] }],
+  '10-06': [{ name: '中秋节', type: 'chinese', markets: ['CN'] }],
+};
+
+// 获取某月的天数
+function getDaysInMonth(year: number, month: number): number {
+  return new Date(year, month + 1, 0).getDate();
+}
+
+// 获取某月第一天是星期几 (0=周日)
+function getFirstDayOfMonth(year: number, month: number): number {
+  return new Date(year, month, 1).getDay();
+}
+
+// 获取某天的节日
+function getHolidaysForDate(year: number, month: number, day: number): Holiday[] {
+  const mmdd = `${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const holidays: Holiday[] = [];
+
+  // 查找固定节日
+  if (holidayData[mmdd]) {
+    holidays.push(...holidayData[mmdd]);
+  }
+
+  // 查找特定年份节日
+  if (year === 2026 && holiday2026[mmdd]) {
+    holidays.push(...holiday2026[mmdd]);
+  }
+
+  return holidays;
+}
+
+// 生成日历数据
+const calendarDays = computed(() => {
+  const year = calendarYear.value;
+  const month = calendarMonth.value;
+  const daysInMonth = getDaysInMonth(year, month);
+  const firstDay = getFirstDayOfMonth(year, month);
+
+  const days: Array<{ day: number; holidays: Holiday[]; isToday: boolean } | null> = [];
+
+  // 填充月初空白
+  for (let i = 0; i < firstDay; i++) {
+    days.push(null);
+  }
+
+  // 填充日期
+  const today = new Date();
+  for (let d = 1; d <= daysInMonth; d++) {
+    const isToday = year === today.getFullYear() && month === today.getMonth() && d === today.getDate();
+    days.push({
+      day: d,
+      holidays: getHolidaysForDate(year, month, d),
+      isToday,
+    });
+  }
+
+  return days;
+});
+
+// 月份名称
+const monthNames = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
+
+// 切换月份
+function prevMonth() {
+  if (calendarMonth.value === 0) {
+    calendarMonth.value = 11;
+    calendarYear.value--;
+  } else {
+    calendarMonth.value--;
+  }
+}
+
+function nextMonth() {
+  if (calendarMonth.value === 11) {
+    calendarMonth.value = 0;
+    calendarYear.value++;
+  } else {
+    calendarMonth.value++;
+  }
+}
+
+// 回到今天
+function goToToday() {
+  const today = new Date();
+  calendarYear.value = today.getFullYear();
+  calendarMonth.value = today.getMonth();
+}
+
+// 节日类型颜色
+function getHolidayTypeColor(type: HolidayType): string {
+  switch (type) {
+    case 'promo': return '#f56c6c';
+    case 'western': return '#409eff';
+    case 'chinese': return '#e6a23c';
+    case 'japan': return '#f472b6';
+    case 'universal': return '#67c23a';
+    default: return '#909399';
+  }
+}
+
+// 节日类型标签
+function getHolidayTypeLabel(type: HolidayType): string {
+  switch (type) {
+    case 'promo': return '🛒 大促';
+    case 'western': return '🎄 西方';
+    case 'chinese': return '🏮 中国';
+    case 'japan': return '🎌 日本';
+    case 'universal': return '🌍 通用';
+    default: return '';
+  }
+}
+
 // ==================== 汇率相关 ====================
 const exchangeRates = ref<Map<string, number>>(new Map());
 const exchangeRatesLoading = ref(false);
 const exchangeRatesUpdatedAt = ref<string | null>(null);
+
+// 用户选择的显示货币（默认前3个）
+const selectedCurrencies = ref<string[]>(['USD', 'EUR', 'GBP']);
+
+// 加载用户汇率偏好
+function loadCurrencyPreference() {
+  try {
+    const saved = localStorage.getItem('exchange_rate_currencies');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0 && parsed.length <= 3) {
+        selectedCurrencies.value = parsed;
+      }
+    }
+  } catch (e) {
+    console.error('加载汇率偏好失败:', e);
+  }
+}
+
+// 获取选中的货币配置
+const displayCurrencies = computed(() => {
+  return EXCHANGE_RATE_CURRENCIES.filter(c => selectedCurrencies.value.includes(c.code));
+});
 
 // 加载缓存的汇率
 async function loadCachedRates() {
@@ -370,32 +659,22 @@ async function loadCachedRates() {
   }
 }
 
-// 从网络获取最新汇率
+// 从网络获取最新汇率（通过后端代理）
 async function fetchExchangeRates() {
   exchangeRatesLoading.value = true;
   try {
-    // 使用免费的汇率 API
-    const response = await fetch('https://api.exchangerate-api.com/v4/latest/CNY');
-    const data = await response.json();
+    // 获取需要的货币代码列表
+    const currencies = EXCHANGE_RATE_CURRENCIES.map(c => c.code);
 
-    if (data && data.rates) {
-      const ratesToSave: [string, number][] = [];
+    // 调用后端 API 获取汇率
+    const result = await api.fetchExchangeRates(currencies);
 
-      EXCHANGE_RATE_CURRENCIES.forEach(currency => {
-        // API 返回的是 1 CNY = X 外币，我们需要 1 外币 = X CNY
-        const rate = data.rates[currency.code];
-        if (rate) {
-          const cnyRate = 1 / rate;
-          exchangeRates.value.set(currency.code, cnyRate);
-          ratesToSave.push([currency.code, cnyRate]);
-        }
+    // 更新本地状态
+    if (result && result.length > 0) {
+      result.forEach(item => {
+        exchangeRates.value.set(item.currency, item.rate);
       });
-
-      // 保存到缓存
-      if (ratesToSave.length > 0) {
-        await api.saveExchangeRates(ratesToSave);
-        exchangeRatesUpdatedAt.value = new Date().toISOString();
-      }
+      exchangeRatesUpdatedAt.value = result[0]?.updated_at || new Date().toISOString();
     }
   } catch (e) {
     console.error('获取汇率失败:', e);
@@ -417,6 +696,9 @@ function formatRate(currency: string): string {
   }
   return rate.toFixed(2);
 }
+
+// 初始化时加载用户汇率偏好
+loadCurrencyPreference();
 
 // 初始化时加载汇率
 loadCachedRates().then(() => {
@@ -474,6 +756,39 @@ loadCachedRates().then(() => {
           <span class="product-badge" v-if="selectedProduct">{{ selectedProduct.name }}</span>
         </div>
         <div class="header-right">
+          <!-- 电商日历 -->
+          <el-button
+            class="calendar-btn"
+            :icon="Calendar"
+            @click="showCalendarDialog = true"
+            title="电商日历"
+          >
+            日历
+          </el-button>
+          <span class="header-divider"></span>
+          <!-- 市场时钟 -->
+          <div
+            class="market-clock"
+            @wheel="handleClockWheel"
+            :title="`${currentMarket.name}时间 (滚轮切换市场)`"
+          >
+            <span class="clock-flag" v-html="currentMarket.flag"></span>
+            <span class="clock-time">{{ currentTime }}</span>
+          </div>
+          <span class="header-divider"></span>
+          <!-- 汇率显示 -->
+          <div class="exchange-rates" v-if="exchangeRates.size > 0">
+            <span
+              v-for="currency in displayCurrencies"
+              :key="currency.code"
+              class="rate-item"
+              :title="`1 ${currency.code} = ${formatRate(currency.code)} CNY${currency.multiplier ? ` (×${currency.multiplier})` : ''}`"
+            >
+              <span class="rate-flag" v-html="currency.flag"></span>
+              <span class="rate-code">{{ currency.code }}</span>
+              <span class="rate-value">{{ formatRate(currency.code) }}</span>
+            </span>
+          </div>
           <!-- 大屏模式切换 -->
           <el-button
             class="bigscreen-btn"
@@ -483,29 +798,6 @@ loadCachedRates().then(() => {
           >
             智慧大屏
           </el-button>
-          <!-- 汇率显示 -->
-          <div class="exchange-rates" v-if="exchangeRates.size > 0">
-            <span
-              v-for="currency in EXCHANGE_RATE_CURRENCIES.slice(0, 3)"
-              :key="currency.code"
-              class="rate-item"
-              :title="`1 ${currency.code} = ${formatRate(currency.code)} CNY${currency.multiplier ? ` (×${currency.multiplier})` : ''}`"
-            >
-              <span class="rate-flag" v-html="currency.flag"></span>
-              <span class="rate-code">{{ currency.code }}</span>
-              <span class="rate-value">{{ formatRate(currency.code) }}</span>
-            </span>
-            <el-button
-              class="rate-refresh"
-              :icon="Refresh"
-              link
-              size="small"
-              :loading="exchangeRatesLoading"
-              @click="fetchExchangeRates"
-              title="刷新汇率"
-            />
-          </div>
-          <span class="current-date">{{ new Date().toLocaleDateString('zh-CN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) }}</span>
         </div>
       </div>
 
@@ -729,6 +1021,88 @@ loadCachedRates().then(() => {
       </div>
 
     </div>
+
+    <!-- 电商日历弹窗 -->
+    <el-dialog
+      v-model="showCalendarDialog"
+      title="电商日历"
+      width="520px"
+      class="calendar-dialog"
+      destroy-on-close
+    >
+      <div class="calendar-container">
+        <!-- 月份导航 -->
+        <div class="calendar-nav">
+          <el-button :icon="ArrowLeft" text @click="prevMonth" />
+          <div class="calendar-title">
+            <span class="calendar-year">{{ calendarYear }}</span>
+            <span class="calendar-month">{{ monthNames[calendarMonth] }}</span>
+          </div>
+          <el-button :icon="ArrowRight" text @click="nextMonth" />
+          <el-button size="small" @click="goToToday" style="margin-left: 12px;">今天</el-button>
+        </div>
+
+        <!-- 星期标题 -->
+        <div class="calendar-weekdays">
+          <span v-for="day in ['日', '一', '二', '三', '四', '五', '六']" :key="day">{{ day }}</span>
+        </div>
+
+        <!-- 日历网格 -->
+        <div class="calendar-grid">
+          <div
+            v-for="(cell, index) in calendarDays"
+            :key="index"
+            class="calendar-cell"
+            :class="{
+              'is-empty': !cell,
+              'is-today': cell?.isToday,
+              'has-holiday': cell?.holidays.length > 0
+            }"
+          >
+            <template v-if="cell">
+              <span class="cell-day">{{ cell.day }}</span>
+              <div class="cell-holidays" v-if="cell.holidays.length > 0">
+                <el-tooltip
+                  v-for="(holiday, hIndex) in cell.holidays"
+                  :key="hIndex"
+                  :content="`${getHolidayTypeLabel(holiday.type)} ${holiday.name}${holiday.markets ? ' (' + holiday.markets.join(', ') + ')' : ''}`"
+                  placement="top"
+                >
+                  <span
+                    class="holiday-dot"
+                    :style="{ background: getHolidayTypeColor(holiday.type) }"
+                  ></span>
+                </el-tooltip>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- 图例 -->
+        <div class="calendar-legend">
+          <span class="legend-item">
+            <span class="legend-dot" style="background: #f56c6c;"></span>
+            大促
+          </span>
+          <span class="legend-item">
+            <span class="legend-dot" style="background: #409eff;"></span>
+            西方
+          </span>
+          <span class="legend-item">
+            <span class="legend-dot" style="background: #e6a23c;"></span>
+            中国
+          </span>
+          <span class="legend-item">
+            <span class="legend-dot" style="background: #f472b6;"></span>
+            日本
+          </span>
+          <span class="legend-item">
+            <span class="legend-dot" style="background: #67c23a;"></span>
+            通用
+          </span>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -817,16 +1191,196 @@ loadCachedRates().then(() => {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
-.current-date {
-  color: var(--el-text-color-secondary);
-  font-size: 14px;
-  font-weight: 500;
-}
-
 .header-right {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+/* 市场时钟 */
+.market-clock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s;
+}
+
+.market-clock:hover {
+  border-color: var(--el-color-primary-light-5);
+  background: var(--el-color-primary-light-9);
+}
+
+
+.clock-flag {
+  width: 20px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.clock-flag :deep(svg) {
+  width: 100%;
+  height: 100%;
+}
+
+.clock-time {
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  min-width: 70px;
+  text-align: center;
+}
+
+.header-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--el-border-color);
+  opacity: 0.6;
+}
+
+/* 日历按钮 */
+.calendar-btn {
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--glass-border);
+}
+
+.calendar-btn:hover {
+  border-color: var(--el-color-primary-light-5);
+  background: var(--el-color-primary-light-9);
+}
+
+/* 电商日历弹窗 */
+.calendar-container {
+  padding: 8px;
+}
+
+.calendar-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.calendar-title {
+  min-width: 140px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.calendar-year {
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
+  margin-right: 8px;
+}
+
+.calendar-month {
+  color: var(--el-text-color-primary);
+  font-size: 18px;
+}
+
+.calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  margin-bottom: 8px;
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.calendar-cell {
+  aspect-ratio: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  cursor: default;
+  position: relative;
+  min-height: 48px;
+}
+
+.calendar-cell.is-empty {
+  background: transparent;
+}
+
+.calendar-cell:not(.is-empty):hover {
+  background: var(--el-fill-color-light);
+}
+
+.calendar-cell.is-today {
+  background: var(--el-color-primary-light-9);
+}
+
+.calendar-cell.is-today .cell-day {
+  color: var(--el-color-primary);
+  font-weight: 700;
+}
+
+.calendar-cell.has-holiday {
+  background: var(--el-fill-color-lighter);
+}
+
+.cell-day {
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+}
+
+.cell-holidays {
+  display: flex;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.holiday-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.calendar-legend {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
 }
 
 /* 汇率显示 */
@@ -872,15 +1426,6 @@ loadCachedRates().then(() => {
   font-family: 'Poppins', sans-serif;
   font-weight: 600;
   color: var(--el-text-color-primary);
-}
-
-.rate-refresh {
-  padding: 2px;
-  margin-left: 4px;
-}
-
-.rate-refresh :deep(.el-icon) {
-  font-size: 14px;
 }
 
 /* Card Utility - Glassmorphism */

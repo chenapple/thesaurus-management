@@ -4,6 +4,7 @@ mod scheduler;
 mod notification;
 mod installer;
 mod knowledge_base;
+mod ai;
 
 use db::{BackupInfo, Category, KeywordData, KeywordMonitoring, MonitoringSparkline, MonitoringStats, Product, RankingHistory, RankingSnapshot, RootWithCategories, TrafficLevelStats, UncategorizedKeyword, WorkflowStatus};
 use db::{KbCategory, KbDocument, KbChunk, KbSearchResult, KbConversation, KbMessage, KbDocumentLink, KbDocumentCategory};
@@ -1951,6 +1952,11 @@ fn update_quick_note_due_date(id: i64, due_date: Option<String>) -> Result<(), S
 }
 
 #[tauri::command]
+fn update_quick_note_repeat(id: i64, repeat_type: Option<String>, repeat_interval: i64) -> Result<(), String> {
+    db::update_quick_note_repeat(id, repeat_type, repeat_interval).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn reorder_quick_notes(ids: Vec<i64>) -> Result<(), String> {
     db::reorder_quick_notes(ids).map_err(|e| e.to_string())
 }
@@ -1964,6 +1970,51 @@ fn save_exchange_rates(rates: Vec<(String, f64)>) -> Result<(), String> {
 
 #[tauri::command]
 fn get_exchange_rates() -> Result<Vec<ExchangeRateCache>, String> {
+    db::get_exchange_rates().map_err(|e| e.to_string())
+}
+
+// 从网络获取最新汇率的响应结构
+#[derive(serde::Deserialize)]
+struct ExchangeRateApiResponse {
+    rates: std::collections::HashMap<String, f64>,
+}
+
+#[tauri::command]
+async fn fetch_exchange_rates(currencies: Vec<String>) -> Result<Vec<ExchangeRateCache>, String> {
+    // 使用 exchangerate-api.com 的免费 API
+    let client = reqwest::Client::new();
+    let response = client
+        .get("https://api.exchangerate-api.com/v4/latest/CNY")
+        .send()
+        .await
+        .map_err(|e| format!("网络请求失败: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("API 返回错误: {}", response.status()));
+    }
+
+    let data: ExchangeRateApiResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("解析响应失败: {}", e))?;
+
+    // 转换汇率：API 返回的是 1 CNY = X 外币，我们需要 1 外币 = X CNY
+    let mut rates_to_save: Vec<(String, f64)> = Vec::new();
+    for currency in &currencies {
+        if let Some(&rate) = data.rates.get(currency) {
+            if rate > 0.0 {
+                let cny_rate = 1.0 / rate;
+                rates_to_save.push((currency.clone(), cny_rate));
+            }
+        }
+    }
+
+    // 保存到数据库缓存
+    if !rates_to_save.is_empty() {
+        db::save_exchange_rates(rates_to_save).map_err(|e| e.to_string())?;
+    }
+
+    // 返回最新的缓存数据
     db::get_exchange_rates().map_err(|e| e.to_string())
 }
 
@@ -2255,10 +2306,12 @@ pub fn run() {
             delete_quick_note,
             get_quick_notes_count,
             update_quick_note_due_date,
+            update_quick_note_repeat,
             reorder_quick_notes,
             // 汇率
             save_exchange_rates,
             get_exchange_rates,
+            fetch_exchange_rates,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

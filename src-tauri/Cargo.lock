@@ -4899,7 +4899,7 @@ dependencies = [
 
 [[package]]
 name = "thesaurus-management"
-version = "0.9.7"
+version = "0.9.8"
 dependencies = [
  "base64 0.22.1",
  "calamine",
@@ -4912,6 +4912,7 @@ dependencies = [
  "pulldown-cmark",
  "quick-xml 0.31.0",
  "rand 0.8.5",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",

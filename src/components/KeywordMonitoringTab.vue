@@ -80,9 +80,6 @@
             <el-icon><Search /></el-icon>
           </template>
         </el-input>
-        <el-button circle size="small" class="help-btn" @click="emit('showHelp', 'monitoring')" title="查看帮助">
-          <el-icon><QuestionFilled /></el-icon>
-        </el-button>
       </div>
     </div>
 
@@ -1064,10 +1061,19 @@ function handleCalendarDateClick(dateStr: string) {
   calendarDate.value = new Date(year, month - 1, day);
 }
 
-// 从监控列表提取唯一 ASIN
-const uniqueAsins = computed(() =>
-  [...new Set(allMonitoringList.value.map(m => m.asin))]
-);
+// 从监控列表提取唯一 ASIN（包含图片信息）
+const uniqueAsins = computed(() => {
+  const asinMap = new Map<string, string | null>();
+  for (const m of allMonitoringList.value) {
+    if (!asinMap.has(m.asin)) {
+      asinMap.set(m.asin, m.image_url);
+    }
+  }
+  return Array.from(asinMap.entries()).map(([asin, imageUrl]) => ({
+    asin,
+    imageUrl
+  }));
+});
 
 // 按 ASIN 分组关键词
 const keywordsByAsin = computed(() => {

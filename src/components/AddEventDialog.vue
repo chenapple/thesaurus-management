@@ -110,17 +110,33 @@
 
       <el-form-item v-if="form.eventScope !== 'product'" label="选择ASIN">
         <el-select
-          v-model="form.targetAsin"
-          placeholder="请选择 ASIN"
+          v-model="form.targetAsins"
+          multiple
+          collapse-tags
+          collapse-tags-tooltip
+          placeholder="请选择 ASIN（可多选）"
           style="width: 100%"
           @change="handleAsinChange"
         >
           <el-option
-            v-for="asin in availableAsins"
-            :key="asin"
-            :label="asin"
-            :value="asin"
-          />
+            v-for="item in availableAsins"
+            :key="item.asin"
+            :label="item.asin"
+            :value="item.asin"
+          >
+            <div class="asin-option">
+              <img
+                v-if="item.imageUrl"
+                :src="item.imageUrl"
+                class="asin-image"
+                @error="(e: Event) => (e.target as HTMLImageElement).style.display = 'none'"
+              />
+              <span v-else class="asin-image-placeholder">
+                <el-icon><Picture /></el-icon>
+              </span>
+              <span class="asin-text">{{ item.asin }}</span>
+            </div>
+          </el-option>
         </el-select>
       </el-form-item>
 
@@ -160,7 +176,7 @@
 import { ref, reactive, watch, computed } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { ElMessage } from 'element-plus';
-import { QuestionFilled } from '@element-plus/icons-vue';
+import { QuestionFilled, Picture } from '@element-plus/icons-vue';
 import { addOptimizationEvent, updateOptimizationEvent } from '../api';
 import {
   EVENT_MAIN_TYPES,
@@ -170,11 +186,17 @@ import {
   type EventSubType
 } from '../types';
 
+// ASIN 信息类型
+interface AsinInfo {
+  asin: string;
+  imageUrl: string | null;
+}
+
 const props = defineProps<{
   modelValue: boolean;
   productId: number;
   editingEvent?: OptimizationEvent | null;
-  asins?: string[];  // 当前产品的 ASIN 列表
+  asins?: AsinInfo[];  // 当前产品的 ASIN 列表（包含图片）
   keywordsByAsin?: Record<string, string[]>;  // 每个 ASIN 下的关键词
 }>();
 
@@ -198,7 +220,7 @@ const form = reactive({
   title: '',
   description: '',
   eventScope: 'product' as EventScope,
-  targetAsin: '' as string,
+  targetAsins: [] as string[],  // 改为数组支持多选
 });
 
 // 子类型选项（根据主类型动态变化）
@@ -231,20 +253,25 @@ const rules: FormRules = {
 };
 
 // 可用的 ASIN 列表
-const availableAsins = computed(() => {
+const availableAsins = computed((): AsinInfo[] => {
   return props.asins || [];
 });
 
-// 当前选中 ASIN 下的关键词列表
+// 当前选中 ASIN 下的关键词列表（合并多个 ASIN 的关键词）
 const keywordsForSelectedAsin = computed(() => {
-  if (!form.targetAsin || !props.keywordsByAsin) return [];
-  return props.keywordsByAsin[form.targetAsin] || [];
+  if (form.targetAsins.length === 0 || !props.keywordsByAsin) return [];
+  const allKeywords = new Set<string>();
+  for (const asin of form.targetAsins) {
+    const keywords = props.keywordsByAsin[asin] || [];
+    keywords.forEach(kw => allKeywords.add(kw));
+  }
+  return Array.from(allKeywords);
 });
 
 // 事件范围变化时的处理
 function handleScopeChange() {
   if (form.eventScope === 'product') {
-    form.targetAsin = '';
+    form.targetAsins = [];
     selectedKeywords.value = [];
   } else if (form.eventScope === 'asin') {
     selectedKeywords.value = [];
@@ -279,7 +306,21 @@ function initForm() {
     form.eventSubTypes = parseEventSubTypes(props.editingEvent.event_sub_type as string);
     form.title = props.editingEvent.title;
     form.description = props.editingEvent.description || '';
-    form.targetAsin = props.editingEvent.target_asin || '';
+
+    // 解析 target_asin（支持旧的单值和新的 JSON 数组格式）
+    if (props.editingEvent.target_asin) {
+      if (props.editingEvent.target_asin.startsWith('[')) {
+        try {
+          form.targetAsins = JSON.parse(props.editingEvent.target_asin);
+        } catch {
+          form.targetAsins = [props.editingEvent.target_asin];
+        }
+      } else {
+        form.targetAsins = [props.editingEvent.target_asin];
+      }
+    } else {
+      form.targetAsins = [];
+    }
 
     // 解析关联关键词
     if (props.editingEvent.affected_keywords) {
@@ -293,7 +334,7 @@ function initForm() {
     }
 
     // 根据数据确定事件范围
-    if (!props.editingEvent.target_asin) {
+    if (form.targetAsins.length === 0) {
       form.eventScope = 'product';
     } else if (selectedKeywords.value.length > 0) {
       form.eventScope = 'keyword';
@@ -309,7 +350,7 @@ function initForm() {
     form.title = '';
     form.description = '';
     form.eventScope = 'product';
-    form.targetAsin = '';
+    form.targetAsins = [];
     selectedKeywords.value = [];
   }
 }
@@ -325,7 +366,7 @@ watch(() => props.modelValue, (val) => {
 function handleClose() {
   formRef.value?.resetFields();
   form.eventScope = 'product';
-  form.targetAsin = '';
+  form.targetAsins = [];
   selectedKeywords.value = [];
   emit('update:modelValue', false);
 }
@@ -341,8 +382,9 @@ async function handleSubmit() {
 
   try {
     // 根据事件范围确定 targetAsin 和 affectedKeywords
-    const targetAsin = form.eventScope !== 'product' && form.targetAsin
-      ? form.targetAsin
+    // 多个 ASIN 时存储为 JSON 数组
+    const targetAsin = form.eventScope !== 'product' && form.targetAsins.length > 0
+      ? (form.targetAsins.length === 1 ? form.targetAsins[0] : JSON.stringify(form.targetAsins))
       : undefined;
 
     const affectedKeywords = form.eventScope === 'keyword' && selectedKeywords.value.length > 0
@@ -413,5 +455,36 @@ async function handleSubmit() {
 
 .scope-help:hover {
   color: var(--el-color-primary);
+}
+
+/* ASIN 下拉选项样式 */
+.asin-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.asin-image {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  border-radius: 4px;
+  background: var(--el-fill-color-light);
+}
+
+.asin-image-placeholder {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--el-fill-color-light);
+  border-radius: 4px;
+  color: var(--el-text-color-placeholder);
+}
+
+.asin-text {
+  font-family: monospace;
+  font-size: 13px;
 }
 </style>

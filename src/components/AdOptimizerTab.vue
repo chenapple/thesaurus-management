@@ -5,9 +5,6 @@
       <div class="list-header">
         <h2>智能广告分析</h2>
         <div class="header-actions">
-          <el-button circle size="small" class="help-btn" @click="emit('showHelp', 'ads')" title="查看帮助">
-            <el-icon><QuestionFilled /></el-icon>
-          </el-button>
           <el-button type="primary" @click="showCreateDialog = true">
             <el-icon><Plus /></el-icon>
             新建项目

@@ -1,6 +1,6 @@
 [package]
 name = "thesaurus-management"
-version = "0.9.7"
+version = "0.9.8"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -37,6 +37,9 @@ tauri-plugin-window-state = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 rand = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
+
+# HTTP 客户端（用于汇率 API）
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 # 知识库文档解析依赖
 pdf-extract = "0.7"           # PDF 文本提取

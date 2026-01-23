@@ -13,6 +13,7 @@ import * as XLSX from "xlsx";
 import * as api from "./api";
 import { batchAnalyzeWords, batchAnalyzeKeywordCategories } from "./deepseek";
 import type { BackupInfo, Category, KeywordData, Product, Root, WorkflowStatus } from "./types";
+import { EXCHANGE_RATE_CURRENCIES } from "./types";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 // 懒加载组件 - 只在需要时才加载
@@ -176,6 +177,58 @@ const showShortcutsDialog = ref(false);
 
 // API Key 设置弹窗
 const showApiKeyDialog = ref(false);
+
+// 汇率显示设置弹窗
+const showExchangeRateSettings = ref(false);
+const selectedCurrencies = ref<string[]>(['USD', 'EUR', 'GBP']);
+
+// 加载汇率显示设置
+function loadExchangeRateSettings() {
+  const saved = localStorage.getItem('exchange_rate_currencies');
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        selectedCurrencies.value = parsed;
+      }
+    } catch (e) {
+      console.error('解析汇率设置失败:', e);
+    }
+  }
+}
+
+// 保存汇率显示设置
+function saveExchangeRateSettings() {
+  if (selectedCurrencies.value.length !== 3) {
+    ElMessage.warning('请选择 3 个货币');
+    return;
+  }
+  localStorage.setItem('exchange_rate_currencies', JSON.stringify(selectedCurrencies.value));
+  // 派发自定义事件通知其他组件
+  window.dispatchEvent(new CustomEvent('exchange-rate-settings-changed'));
+  showExchangeRateSettings.value = false;
+  ElMessage.success('汇率显示设置已保存');
+}
+
+// 切换货币选择
+function toggleCurrencySelection(code: string) {
+  const index = selectedCurrencies.value.indexOf(code);
+  if (index > -1) {
+    // 如果已选中，取消选择
+    if (selectedCurrencies.value.length > 1) {
+      selectedCurrencies.value.splice(index, 1);
+    } else {
+      ElMessage.warning('至少需要选择 1 个货币');
+    }
+  } else {
+    // 如果未选中，添加选择
+    if (selectedCurrencies.value.length < 3) {
+      selectedCurrencies.value.push(code);
+    } else {
+      ElMessage.warning('最多只能选择 3 个货币');
+    }
+  }
+}
 
 // 帮助弹窗
 const showHelpDialog = ref(false);
@@ -1930,6 +1983,9 @@ onMounted(async () => {
   // 初始化主题
   initTheme();
 
+  // 加载汇率显示设置
+  loadExchangeRateSettings();
+
   // 检查是否需要显示首次配置向导
   await checkSetupWizard();
 
@@ -2061,6 +2117,7 @@ onUnmounted(() => {
           <el-dropdown-menu>
             <el-dropdown-item @click="showApiKeyDialog = true">API Key</el-dropdown-item>
             <el-dropdown-item @click="showShortcutsDialog = true">快捷键</el-dropdown-item>
+            <el-dropdown-item @click="showExchangeRateSettings = true">汇率显示</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
@@ -2334,16 +2391,6 @@ onUnmounted(() => {
           <el-button v-if="viewMode === 'keywords'" size="small" @click="showColumnConfig = true">
             <el-icon><Setting /></el-icon>
             列配置
-          </el-button>
-          <el-button
-            v-if="viewMode === 'keywords' || viewMode === 'roots'"
-            circle
-            size="small"
-            class="help-btn"
-            @click="openHelp('keywords')"
-            title="查看帮助"
-          >
-            <el-icon><QuestionFilled /></el-icon>
           </el-button>
         </div>
       </header>
@@ -2857,6 +2904,39 @@ onUnmounted(() => {
       :app-version="appVersion"
     />
 
+    <!-- 汇率显示设置弹窗 -->
+    <el-dialog
+      v-model="showExchangeRateSettings"
+      title="汇率显示设置"
+      width="400px"
+      destroy-on-close
+    >
+      <div class="exchange-rate-settings">
+        <p class="settings-tip">选择要在概览页面显示的 3 种货币汇率</p>
+        <div class="currency-options">
+          <div
+            v-for="currency in EXCHANGE_RATE_CURRENCIES"
+            :key="currency.code"
+            class="currency-option"
+            :class="{ selected: selectedCurrencies.includes(currency.code) }"
+            @click="toggleCurrencySelection(currency.code)"
+          >
+            <span class="currency-flag" v-html="currency.flag"></span>
+            <span class="currency-name">{{ currency.name }}</span>
+            <span class="currency-code">{{ currency.code }}</span>
+            <el-icon v-if="selectedCurrencies.includes(currency.code)" class="check-icon"><Check /></el-icon>
+          </div>
+        </div>
+        <p class="settings-counter">
+          已选择 {{ selectedCurrencies.length }} / 3 种货币
+        </p>
+      </div>
+      <template #footer>
+        <el-button @click="showExchangeRateSettings = false">取消</el-button>
+        <el-button type="primary" @click="saveExchangeRateSettings" :disabled="selectedCurrencies.length !== 3">保存</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 列配置弹窗 -->
     <ColumnConfigDialog
       v-model:visible="showColumnConfig"
@@ -2960,17 +3040,48 @@ onUnmounted(() => {
           <div v-show="activeHelpTab === 'dashboard'">
           <div class="help-content">
             <h4>功能说明</h4>
-            <p>首页是数据总览面板，展示所有产品的关键指标汇总。</p>
+            <p>首页是数据总览面板，展示所有产品的关键指标汇总，并提供智慧大屏和备忘录等辅助工具。</p>
             <ul>
               <li><strong>关键词统计：</strong>显示各产品的关键词总数、已分类数量等</li>
               <li><strong>监控概览：</strong>显示正在监控的关键词数量和排名变化趋势</li>
               <li><strong>排名变化榜：</strong>展示排名上升/下降最多的关键词</li>
               <li><strong>待办提醒：</strong>提示需要关注的事项，如未分类关键词等</li>
+              <li><strong>汇率显示：</strong>实时显示主要货币对人民币汇率，支持美元、欧元、英镑、日元，点击齿轮图标可自定义选择显示哪3个</li>
             </ul>
+
+            <h4>智慧大屏</h4>
+            <p>点击右上角"智慧大屏"按钮进入全屏数据展示模式，适合团队会议、数据展示等场景。</p>
+            <ul>
+              <li><strong>全屏展示：</strong>自动适配屏幕尺寸，深色主题设计</li>
+              <li><strong>实时数据：</strong>展示关键词统计、排名监控、趋势图表等核心指标</li>
+              <li><strong>自动刷新：</strong>数据定时更新，无需手动操作</li>
+              <li><strong>按 ESC 退出：</strong>随时按 ESC 键返回普通视图</li>
+            </ul>
+
+            <h4>备忘录</h4>
+            <p>点击屏幕右侧边缘的悬浮按钮打开备忘录面板，快速记录工作待办事项。</p>
+            <ul>
+              <li><strong>快速添加：</strong>输入内容后按回车即可添加备忘</li>
+              <li><strong>完成标记：</strong>勾选复选框标记任务完成</li>
+              <li><strong>截止日期：</strong>点击日历图标设置任务截止时间，支持快捷选择"今天"、"明天"、"一周后"</li>
+              <li><strong>重复任务：</strong>设置截止日期后可配置重复周期
+                <ul>
+                  <li>每天：每日重复，截止日期顺延一天</li>
+                  <li>每周：完成后自动生成下周一到期的新任务</li>
+                  <li>每月：完成后自动生成下月1号到期的新任务</li>
+                </ul>
+              </li>
+              <li><strong>过期提醒：</strong>过期任务显示红色边框和闪烁徽章，启动时自动弹出系统通知</li>
+              <li><strong>拖拽排序：</strong>拖动任务前的图标调整顺序</li>
+              <li><strong>筛选查看：</strong>支持"全部"、"待办"、"已完成"三种筛选</li>
+            </ul>
+
             <h4>使用建议</h4>
             <ul>
               <li>每天打开首页快速了解整体数据变化</li>
               <li>关注排名变化榜，及时发现异常波动</li>
+              <li>使用备忘录记录每日工作计划，设置重复任务管理周期性工作</li>
+              <li>团队会议时打开智慧大屏展示数据成果</li>
             </ul>
           </div>
           </div>
@@ -4177,6 +4288,83 @@ h1, h2, h3, h4, h5, h6,
 </style>
 
 <style scoped>
+/* 汇率显示设置样式 */
+.exchange-rate-settings {
+  padding: 8px 0;
+}
+
+.exchange-rate-settings .settings-tip {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 16px;
+}
+
+.exchange-rate-settings .currency-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.exchange-rate-settings .currency-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.exchange-rate-settings .currency-option:hover {
+  border-color: var(--el-color-primary-light-5);
+  background: var(--el-color-primary-light-9);
+}
+
+.exchange-rate-settings .currency-option.selected {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.exchange-rate-settings .currency-flag {
+  width: 24px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.exchange-rate-settings .currency-flag :deep(svg) {
+  width: 100%;
+  height: 100%;
+}
+
+.exchange-rate-settings .currency-name {
+  flex: 1;
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+}
+
+.exchange-rate-settings .currency-code {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-family: monospace;
+}
+
+.exchange-rate-settings .check-icon {
+  color: var(--el-color-primary);
+  font-size: 16px;
+}
+
+.exchange-rate-settings .settings-counter {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  text-align: center;
+}
+
 .app-container {
   height: 100vh;
   display: flex;

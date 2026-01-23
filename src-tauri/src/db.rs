@@ -6443,6 +6443,8 @@ pub struct QuickNote {
     pub completed_at: Option<String>,
     pub due_date: Option<String>,
     pub sort_order: i64,
+    pub repeat_type: Option<String>,    // 'daily' | 'weekly' | 'monthly' | null
+    pub repeat_interval: i64,           // 间隔数，默认1
 }
 
 pub fn init_quick_notes_table(conn: &Connection) -> Result<()> {
@@ -6476,6 +6478,13 @@ pub fn init_quick_notes_table(conn: &Connection) -> Result<()> {
     if !columns.contains(&"sort_order".to_string()) {
         conn.execute("ALTER TABLE quick_notes ADD COLUMN sort_order INTEGER DEFAULT 0", [])?;
     }
+    // 重复任务字段
+    if !columns.contains(&"repeat_type".to_string()) {
+        conn.execute("ALTER TABLE quick_notes ADD COLUMN repeat_type TEXT", [])?;
+    }
+    if !columns.contains(&"repeat_interval".to_string()) {
+        conn.execute("ALTER TABLE quick_notes ADD COLUMN repeat_interval INTEGER DEFAULT 1", [])?;
+    }
 
     // 迁移后创建 sort_order 索引
     conn.execute(
@@ -6497,9 +6506,12 @@ pub fn add_quick_note(content: String) -> Result<i64> {
         )
         .unwrap_or(0);
 
+    // 使用本地时间（北京时间）而不是 UTC
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
     conn.execute(
-        "INSERT INTO quick_notes (content, sort_order) VALUES (?1, ?2)",
-        rusqlite::params![content, max_order + 1],
+        "INSERT INTO quick_notes (content, sort_order, created_at) VALUES (?1, ?2, ?3)",
+        rusqlite::params![content, max_order + 1, now],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -6508,9 +6520,9 @@ pub fn get_quick_notes(filter: Option<String>) -> Result<Vec<QuickNote>> {
     let conn = get_db().lock();
 
     let sql = match filter.as_deref() {
-        Some("pending") => "SELECT id, content, completed, created_at, completed_at, due_date, sort_order FROM quick_notes WHERE completed = 0 ORDER BY sort_order ASC, created_at DESC",
-        Some("completed") => "SELECT id, content, completed, created_at, completed_at, due_date, sort_order FROM quick_notes WHERE completed = 1 ORDER BY completed_at DESC",
-        _ => "SELECT id, content, completed, created_at, completed_at, due_date, sort_order FROM quick_notes ORDER BY completed ASC, sort_order ASC, created_at DESC",
+        Some("pending") => "SELECT id, content, completed, created_at, completed_at, due_date, sort_order, repeat_type, repeat_interval FROM quick_notes WHERE completed = 0 ORDER BY sort_order ASC, created_at DESC",
+        Some("completed") => "SELECT id, content, completed, created_at, completed_at, due_date, sort_order, repeat_type, repeat_interval FROM quick_notes WHERE completed = 1 ORDER BY completed_at DESC",
+        _ => "SELECT id, content, completed, created_at, completed_at, due_date, sort_order, repeat_type, repeat_interval FROM quick_notes ORDER BY completed ASC, sort_order ASC, created_at DESC",
     };
 
     let mut stmt = conn.prepare(sql)?;
@@ -6523,6 +6535,8 @@ pub fn get_quick_notes(filter: Option<String>) -> Result<Vec<QuickNote>> {
             completed_at: row.get(4)?,
             due_date: row.get(5)?,
             sort_order: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+            repeat_type: row.get(7)?,
+            repeat_interval: row.get::<_, Option<i64>>(8)?.unwrap_or(1),
         })
     })?;
 
@@ -6541,11 +6555,11 @@ pub fn update_quick_note(id: i64, content: String) -> Result<()> {
 pub fn toggle_quick_note(id: i64) -> Result<bool> {
     let conn = get_db().lock();
 
-    // 获取当前状态
-    let current: i32 = conn.query_row(
-        "SELECT completed FROM quick_notes WHERE id = ?1",
+    // 获取当前状态和重复设置
+    let (current, content, due_date, repeat_type, repeat_interval, sort_order): (i32, String, Option<String>, Option<String>, Option<i64>, i64) = conn.query_row(
+        "SELECT completed, content, due_date, repeat_type, repeat_interval, sort_order FROM quick_notes WHERE id = ?1",
         [id],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get::<_, Option<i64>>(5)?.unwrap_or(0))),
     )?;
 
     let new_completed = current == 0;
@@ -6556,6 +6570,18 @@ pub fn toggle_quick_note(id: i64) -> Result<bool> {
             "UPDATE quick_notes SET completed = 1, completed_at = ?2 WHERE id = ?1",
             rusqlite::params![id, now],
         )?;
+
+        // 如果是重复任务，自动创建下一个
+        if let (Some(ref rtype), Some(ref ddate)) = (&repeat_type, &due_date) {
+            let interval = repeat_interval.unwrap_or(1) as i64;
+            if let Some(next_due) = calculate_next_due_date(ddate, rtype, interval) {
+                let created_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                conn.execute(
+                    "INSERT INTO quick_notes (content, due_date, repeat_type, repeat_interval, sort_order, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![content, next_due, rtype, interval, sort_order, created_at],
+                )?;
+            }
+        }
     } else {
         conn.execute(
             "UPDATE quick_notes SET completed = 0, completed_at = NULL WHERE id = ?1",
@@ -6564,6 +6590,53 @@ pub fn toggle_quick_note(id: i64) -> Result<bool> {
     }
 
     Ok(new_completed)
+}
+
+// 计算下一个截止日期
+fn calculate_next_due_date(current_due: &str, repeat_type: &str, interval: i64) -> Option<String> {
+    use chrono::{NaiveDate, Duration, Datelike, Weekday};
+
+    let date = NaiveDate::parse_from_str(current_due, "%Y-%m-%d").ok()?;
+
+    let next_date = match repeat_type {
+        "daily" => date + Duration::days(interval),
+        "weekly" => {
+            // 找到下一个周一（至少 1 天后）
+            let mut next = date + Duration::days(1);
+            while next.weekday() != Weekday::Mon {
+                next = next + Duration::days(1);
+            }
+            // 如果 interval > 1，再加 (interval-1) 周
+            if interval > 1 {
+                next = next + Duration::weeks(interval - 1);
+            }
+            next
+        },
+        "monthly" => {
+            // 找到下一个月的 1 号
+            let (year, month) = if date.month() == 12 {
+                (date.year() + 1, 1)
+            } else {
+                (date.year(), date.month() + 1)
+            };
+            let mut next = NaiveDate::from_ymd_opt(year, month, 1)?;
+            // 如果 interval > 1，再加 (interval-1) 月
+            if interval > 1 {
+                for _ in 1..interval {
+                    let (y, m) = if next.month() == 12 {
+                        (next.year() + 1, 1)
+                    } else {
+                        (next.year(), next.month() + 1)
+                    };
+                    next = NaiveDate::from_ymd_opt(y, m, 1)?;
+                }
+            }
+            next
+        },
+        _ => return None,
+    };
+
+    Some(next_date.format("%Y-%m-%d").to_string())
 }
 
 pub fn delete_quick_note(id: i64) -> Result<()> {
@@ -6592,6 +6665,15 @@ pub fn update_quick_note_due_date(id: i64, due_date: Option<String>) -> Result<(
     conn.execute(
         "UPDATE quick_notes SET due_date = ?2 WHERE id = ?1",
         rusqlite::params![id, due_date],
+    )?;
+    Ok(())
+}
+
+pub fn update_quick_note_repeat(id: i64, repeat_type: Option<String>, repeat_interval: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE quick_notes SET repeat_type = ?2, repeat_interval = ?3 WHERE id = ?1",
+        rusqlite::params![id, repeat_type, repeat_interval],
     )?;
     Ok(())
 }

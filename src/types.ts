@@ -1031,6 +1031,8 @@ export interface QuickNote {
   completed_at?: string;
   due_date?: string;
   sort_order: number;
+  repeat_type?: 'daily' | 'weekly' | 'monthly' | null;  // 重复类型
+  repeat_interval: number;  // 重复间隔，默认1
 }
 
 // ==================== 汇率缓存 ====================
@@ -1053,4 +1055,7 @@ export const EXCHANGE_RATE_CURRENCIES: Array<{
   { code: 'EUR', symbol: '€', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="#003399"/><g fill="#FFCC00"><polygon points="15,2 15.9,4.8 18.8,4.8 16.5,6.5 17.4,9.3 15,7.6 12.6,9.3 13.5,6.5 11.2,4.8 14.1,4.8"/><polygon points="15,11 15.9,13.8 18.8,13.8 16.5,15.5 17.4,18.3 15,16.6 12.6,18.3 13.5,15.5 11.2,13.8 14.1,13.8"/><polygon points="6,6.5 6.9,9.3 9.8,9.3 7.5,11 8.4,13.8 6,12.1 3.6,13.8 4.5,11 2.2,9.3 5.1,9.3"/><polygon points="24,6.5 24.9,9.3 27.8,9.3 25.5,11 26.4,13.8 24,12.1 21.6,13.8 22.5,11 20.2,9.3 23.1,9.3"/></g></svg>`, name: '欧元' },
   { code: 'GBP', symbol: '£', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="#012169"/><path d="M0,0 L30,20 M30,0 L0,20" stroke="white" stroke-width="4"/><path d="M0,0 L30,20 M30,0 L0,20" stroke="#C8102E" stroke-width="2.5"/><path d="M15,0 V20 M0,10 H30" stroke="white" stroke-width="6"/><path d="M15,0 V20 M0,10 H30" stroke="#C8102E" stroke-width="3.5"/></svg>`, name: '英镑' },
   { code: 'JPY', symbol: '¥', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="white"/><circle cx="15" cy="10" r="6" fill="#BC002D"/></svg>`, name: '日元', multiplier: 100 },
+  { code: 'CAD', symbol: 'C$', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="white"/><rect width="7.5" height="20" fill="#FF0000"/><rect x="22.5" width="7.5" height="20" fill="#FF0000"/><path d="M15,4 L16,7 L13,9 L14,9 L13,12 L15,10 L17,12 L16,9 L17,9 L14,7 Z" fill="#FF0000"/></svg>`, name: '加元' },
+  { code: 'AUD', symbol: 'A$', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="#00008B"/><path d="M0,0 L12,8 M12,0 L0,8" stroke="white" stroke-width="1.5"/><path d="M0,0 L12,8 M12,0 L0,8" stroke="#C8102E" stroke-width="0.8"/><path d="M6,0 V8 M0,4 H12" stroke="white" stroke-width="2.5"/><path d="M6,0 V8 M0,4 H12" stroke="#C8102E" stroke-width="1.5"/><polygon points="22,16 22.3,17 23.3,17 22.5,17.6 22.8,18.6 22,18 21.2,18.6 21.5,17.6 20.7,17 21.7,17" fill="white"/><polygon points="25,7 25.2,7.6 25.8,7.6 25.3,8 25.5,8.6 25,8.2 24.5,8.6 24.7,8 24.2,7.6 24.8,7.6" fill="white"/><polygon points="27,11 27.2,11.6 27.8,11.6 27.3,12 27.5,12.6 27,12.2 26.5,12.6 26.7,12 26.2,11.6 26.8,11.6" fill="white"/><polygon points="24,13 24.2,13.6 24.8,13.6 24.3,14 24.5,14.6 24,14.2 23.5,14.6 23.7,14 23.2,13.6 23.8,13.6" fill="white"/><polygon points="19,10 19.4,11.2 20.6,11.2 19.6,12 20,13.2 19,12.4 18,13.2 18.4,12 17.4,11.2 18.6,11.2" fill="white"/></svg>`, name: '澳元' },
+  { code: 'MXN', symbol: 'Mex$', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="10" height="20" fill="#006341"/><rect x="10" width="10" height="20" fill="white"/><rect x="20" width="10" height="20" fill="#CE1126"/><circle cx="15" cy="10" r="3" fill="#6B3E26"/></svg>`, name: '墨西哥比索' },
 ];

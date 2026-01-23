@@ -1522,9 +1522,6 @@ onMounted(async () => {
           <h2>智能文案</h2>
           <p class="subtitle">基于竞品分析，打造符合 A9、COSMO、Rufus 算法的优质 Listing</p>
         </div>
-        <el-button circle size="small" class="help-btn" @click="emit('showHelp', 'smartcopy')" title="查看帮助">
-          <el-icon><QuestionFilled /></el-icon>
-        </el-button>
       </div>
 
       <!-- 场景选择 -->

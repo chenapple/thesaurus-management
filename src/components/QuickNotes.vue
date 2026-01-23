@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
-import { EditPen, Delete, Check, Close, Rank, Calendar } from '@element-plus/icons-vue';
+import { EditPen, Delete, Check, Close, Rank, Calendar, Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import draggable from 'vuedraggable';
@@ -157,6 +157,37 @@ async function updateDueDate(id: number, dueDate: string | null) {
     await loadNotes();
   } catch (e) {
     console.error('更新截止日期失败:', e);
+  }
+}
+
+// 更新重复设置
+async function updateRepeat(id: number, repeatType: string | null, repeatInterval: number = 1) {
+  try {
+    await api.updateQuickNoteRepeat(id, repeatType, repeatInterval);
+    await loadNotes();
+  } catch (e) {
+    console.error('更新重复设置失败:', e);
+  }
+}
+
+// 获取重复类型显示文本
+function getRepeatLabel(note: QuickNote): string {
+  if (!note.repeat_type) return '';
+  const interval = note.repeat_interval || 1;
+  if (interval === 1) {
+    switch (note.repeat_type) {
+      case 'daily': return '每天';
+      case 'weekly': return '每周';
+      case 'monthly': return '每月';
+      default: return '';
+    }
+  } else {
+    switch (note.repeat_type) {
+      case 'daily': return `每${interval}天`;
+      case 'weekly': return `每${interval}周`;
+      case 'monthly': return `每${interval}月`;
+      default: return '';
+    }
   }
 }
 
@@ -368,14 +399,18 @@ onMounted(async () => {
                 />
                 <div class="note-content" @dblclick="startEdit(note)">
                   <span class="note-text">{{ note.content }}</span>
-                  <!-- 截止日期显示 -->
+                  <!-- 截止日期、重复标识和创建时间 -->
                   <div class="note-meta">
                     <span v-if="note.due_date" class="due-date-label" :class="{ overdue: isOverdue(note) }">
                       <el-icon v-if="isOverdue(note)" class="warning-icon"><Calendar /></el-icon>
                       <el-icon v-else><Calendar /></el-icon>
                       {{ formatDueDate(note) }}
                     </span>
-                    <span v-else class="note-time">{{ formatTime(note.created_at) }}</span>
+                    <span v-if="note.repeat_type" class="repeat-label" :title="getRepeatLabel(note)">
+                      <el-icon><Refresh /></el-icon>
+                      {{ getRepeatLabel(note) }}
+                    </span>
+                    <span class="note-time">{{ formatTime(note.created_at) }}</span>
                   </div>
                 </div>
                 <div class="note-actions">
@@ -411,6 +446,22 @@ onMounted(async () => {
                         <el-button size="small" @click="updateDueDate(note.id, new Date().toISOString().split('T')[0])">今天</el-button>
                         <el-button size="small" @click="updateDueDate(note.id, new Date(Date.now() + 86400000).toISOString().split('T')[0])">明天</el-button>
                         <el-button size="small" @click="updateDueDate(note.id, new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0])">一周后</el-button>
+                      </div>
+                      <!-- 重复设置（仅当有截止日期时显示） -->
+                      <div v-if="note.due_date" class="repeat-setting">
+                        <span class="repeat-label-text">重复:</span>
+                        <el-select
+                          :model-value="note.repeat_type || ''"
+                          size="small"
+                          placeholder="不重复"
+                          style="width: 100%"
+                          @change="(val: string) => updateRepeat(note.id, val || null)"
+                        >
+                          <el-option label="不重复" value="" />
+                          <el-option label="每天" value="daily" />
+                          <el-option label="每周" value="weekly" />
+                          <el-option label="每月" value="monthly" />
+                        </el-select>
                       </div>
                     </div>
                   </el-popover>
@@ -635,10 +686,13 @@ onMounted(async () => {
 
 .note-meta {
   margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .note-time {
-  display: block;
   font-size: 12px;
   color: var(--el-text-color-placeholder);
 }
@@ -662,6 +716,32 @@ onMounted(async () => {
 
 .due-date-label .warning-icon {
   animation: pulse 1.5s infinite;
+}
+
+/* 重复任务标签 */
+.repeat-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--el-color-success);
+  padding: 2px 6px;
+  background: var(--el-color-success-light-9);
+  border-radius: 4px;
+}
+
+/* 重复设置区域 */
+.repeat-setting {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.repeat-label-text {
+  display: block;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 6px;
 }
 
 @keyframes pulse {

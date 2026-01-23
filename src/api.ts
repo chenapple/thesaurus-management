@@ -1518,6 +1518,20 @@ export async function updateQuickNoteDueDate(id: number, dueDate: string | null)
 }
 
 /**
+ * 更新快捷备忘重复设置
+ * @param id 备忘ID
+ * @param repeatType 重复类型: 'daily' | 'weekly' | 'monthly' | null
+ * @param repeatInterval 重复间隔，默认1
+ */
+export async function updateQuickNoteRepeat(
+  id: number,
+  repeatType: string | null,
+  repeatInterval: number = 1
+): Promise<void> {
+  return await invoke("update_quick_note_repeat", { id, repeatType, repeatInterval });
+}
+
+/**
  * 批量更新快捷备忘排序
  * @param ids 按顺序排列的备忘ID数组
  */
@@ -1539,4 +1553,13 @@ export async function saveExchangeRates(rates: [string, number][]): Promise<void
  */
 export async function getExchangeRates(): Promise<ExchangeRateCache[]> {
   return await invoke("get_exchange_rates");
+}
+
+/**
+ * 从网络获取最新汇率（通过后端代理）
+ * @param currencies 需要获取的货币代码列表，如 ['USD', 'EUR', 'GBP', 'JPY']
+ * @returns 更新后的汇率缓存
+ */
+export async function fetchExchangeRates(currencies: string[]): Promise<ExchangeRateCache[]> {
+  return await invoke("fetch_exchange_rates", { currencies });
 }

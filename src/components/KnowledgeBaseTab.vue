@@ -1879,9 +1879,6 @@ onMounted(async () => {
             知识库
           </el-button>
         </el-button-group>
-        <el-button circle size="small" class="help-btn" @click="emit('showHelp', 'knowledge')" title="查看帮助">
-          <el-icon><QuestionFilled /></el-icon>
-        </el-button>
       </div>
 
       <!-- 对话列表 -->
