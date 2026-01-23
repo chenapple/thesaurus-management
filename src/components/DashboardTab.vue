@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { TrendCharts, Document, Monitor, Folder, Top, Bottom, Timer, FullScreen, Calendar, ArrowLeft, ArrowRight } from '@element-plus/icons-vue';
 import BigScreenView from './BigScreenView.vue';
 import * as api from '../api';
+import { chatStream, checkApiKeyConfigured } from '../ai-service';
 
 // 视图模式
 const viewMode = ref<'normal' | 'bigscreen'>('normal');
@@ -342,6 +343,8 @@ onMounted(() => {
   startRateCarousel();
   // 监听汇率设置变更
   window.addEventListener('exchange-rate-settings-changed', handleExchangeRateSettingsChanged);
+  // 检查节日提醒
+  checkHolidayReminder();
 });
 
 onUnmounted(() => {
@@ -621,6 +624,192 @@ function getHolidayTypeLabel(type: HolidayType): string {
     case 'universal': return '🌍 通用';
     default: return '';
   }
+}
+
+// ==================== 节日提醒相关 ====================
+interface UpcomingHoliday {
+  name: string;
+  type: HolidayType;
+  date: Date;
+  daysLeft: number;
+  markets?: string[];
+}
+
+const showHolidayReminder = ref(false);
+const upcomingHolidays = ref<UpcomingHoliday[]>([]);
+const currentHolidayIndex = ref(0);
+const holidayAiSuggestions = ref<string[]>([]);
+const holidayAiLoading = ref(false);
+
+// 通用建议模板（AI 失败时兜底）
+const fallbackSuggestions: Record<HolidayType, string[]> = {
+  promo: ['检查热销品库存，确保备货充足', '设置促销折扣和优惠券', '提前调整广告预算', '优化产品详情页和 A+ 内容'],
+  western: ['准备节日主题包装和营销素材', '推出礼品组合和套装', '提前备货应对物流高峰', '更新产品图片增加节日元素'],
+  chinese: ['关注海外华人市场需求', '调整发货时效预期', '准备节日元素营销内容', '检查供应链和库存情况'],
+  japan: ['设置日本站专属促销', '准备本地化营销内容', '关注日本物流时效', '了解当地节日消费习惯'],
+  universal: ['检查各站点库存情况', '关注市场动态和竞品', '准备促销活动方案', '优化广告投放策略'],
+};
+
+// 获取当前显示的节日
+const currentHoliday = computed(() => {
+  if (upcomingHolidays.value.length === 0) return null;
+  return upcomingHolidays.value[currentHolidayIndex.value];
+});
+
+// 查找 14 天内的所有节日
+function findUpcomingHolidays(): UpcomingHoliday[] {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const result: UpcomingHoliday[] = [];
+  const dismissedHolidays = JSON.parse(localStorage.getItem('holiday_reminder_dismissed') || '[]');
+
+  // 检查未来 14 天
+  for (let i = 1; i <= 14; i++) {
+    const checkDate = new Date(today);
+    checkDate.setDate(today.getDate() + i);
+
+    const holidays = getHolidaysForDate(
+      checkDate.getFullYear(),
+      checkDate.getMonth(),
+      checkDate.getDate()
+    );
+
+    for (const h of holidays) {
+      // 跳过用户已屏蔽的节日
+      if (dismissedHolidays.includes(h.name)) continue;
+
+      result.push({
+        name: h.name,
+        type: h.type,
+        date: checkDate,
+        daysLeft: i,
+        markets: h.markets,
+      });
+    }
+  }
+
+  // 按天数排序
+  result.sort((a, b) => a.daysLeft - b.daysLeft);
+  return result;
+}
+
+// 生成 AI 建议
+async function generateHolidaySuggestions(holiday: UpcomingHoliday) {
+  holidayAiLoading.value = true;
+  holidayAiSuggestions.value = [];
+
+  // 检查 API Key 并确定可用的 provider
+  let provider: 'deepseek' | 'openai' | 'qwen' | null = null;
+  if (await checkApiKeyConfigured('deepseek')) {
+    provider = 'deepseek';
+  } else if (await checkApiKeyConfigured('qwen')) {
+    provider = 'qwen';
+  } else if (await checkApiKeyConfigured('openai')) {
+    provider = 'openai';
+  }
+
+  if (!provider) {
+    holidayAiSuggestions.value = fallbackSuggestions[holiday.type] || fallbackSuggestions.universal;
+    holidayAiLoading.value = false;
+    return;
+  }
+
+  const prompt = `你是电商运营专家。${holiday.name}还有${holiday.daysLeft}天到来。
+节日类型：${getHolidayTypeLabel(holiday.type)}
+${holiday.markets ? `相关市场：${holiday.markets.join(', ')}` : ''}
+
+请给出 4-5 条简洁的准备建议，帮助亚马逊卖家为这个节日做好准备。
+要求：每条建议不超过 20 字，直接输出建议列表，每条一行，不要编号。`;
+
+  try {
+    let fullResponse = '';
+    for await (const chunk of chatStream(
+      [{ role: 'user', content: prompt }],
+      { provider, maxTokens: 300 }
+    )) {
+      fullResponse += chunk.content;
+    }
+
+    // 解析建议
+    const suggestions = fullResponse
+      .split('\n')
+      .map(s => s.trim())
+      .filter(s => s.length > 0 && s.length <= 50);
+
+    if (suggestions.length > 0) {
+      holidayAiSuggestions.value = suggestions.slice(0, 5);
+    } else {
+      holidayAiSuggestions.value = fallbackSuggestions[holiday.type] || fallbackSuggestions.universal;
+    }
+  } catch (e) {
+    console.error('生成节日建议失败:', e);
+    holidayAiSuggestions.value = fallbackSuggestions[holiday.type] || fallbackSuggestions.universal;
+  } finally {
+    holidayAiLoading.value = false;
+  }
+}
+
+// 切换到上一个节日
+function prevHoliday() {
+  if (upcomingHolidays.value.length <= 1) return;
+  currentHolidayIndex.value = (currentHolidayIndex.value - 1 + upcomingHolidays.value.length) % upcomingHolidays.value.length;
+  if (currentHoliday.value) {
+    generateHolidaySuggestions(currentHoliday.value);
+  }
+}
+
+// 切换到下一个节日
+function nextHoliday() {
+  if (upcomingHolidays.value.length <= 1) return;
+  currentHolidayIndex.value = (currentHolidayIndex.value + 1) % upcomingHolidays.value.length;
+  if (currentHoliday.value) {
+    generateHolidaySuggestions(currentHoliday.value);
+  }
+}
+
+// 关闭提醒（记录今日已提醒）
+function closeHolidayReminder() {
+  showHolidayReminder.value = false;
+  localStorage.setItem('holiday_reminder_last_date', new Date().toISOString().split('T')[0]);
+}
+
+// 本节日不再提醒
+function dismissCurrentHoliday() {
+  if (!currentHoliday.value) return;
+
+  const dismissed = JSON.parse(localStorage.getItem('holiday_reminder_dismissed') || '[]');
+  if (!dismissed.includes(currentHoliday.value.name)) {
+    dismissed.push(currentHoliday.value.name);
+    localStorage.setItem('holiday_reminder_dismissed', JSON.stringify(dismissed));
+  }
+
+  // 如果还有其他节日，切换到下一个
+  upcomingHolidays.value = upcomingHolidays.value.filter(h => h.name !== currentHoliday.value?.name);
+  if (upcomingHolidays.value.length > 0) {
+    currentHolidayIndex.value = 0;
+    generateHolidaySuggestions(upcomingHolidays.value[0]);
+  } else {
+    closeHolidayReminder();
+  }
+}
+
+// 检查并显示节日提醒
+async function checkHolidayReminder() {
+  // 检查今天是否已提醒
+  const lastDate = localStorage.getItem('holiday_reminder_last_date');
+  const today = new Date().toISOString().split('T')[0];
+  if (lastDate === today) return;
+
+  // 查找即将到来的节日
+  const holidays = findUpcomingHolidays();
+  if (holidays.length === 0) return;
+
+  upcomingHolidays.value = holidays;
+  currentHolidayIndex.value = 0;
+  showHolidayReminder.value = true;
+
+  // 生成第一个节日的建议
+  await generateHolidaySuggestions(holidays[0]);
 }
 
 // ==================== 汇率相关 ====================
@@ -1185,6 +1374,70 @@ loadCachedRates().then(() => {
             <span class="legend-dot" style="background: #67c23a;"></span>
             通用
           </span>
+        </div>
+      </div>
+    </el-dialog>
+
+    <!-- 节日提醒弹窗 -->
+    <el-dialog
+      v-model="showHolidayReminder"
+      title=""
+      width="420px"
+      :show-close="false"
+      :close-on-click-modal="false"
+      class="holiday-reminder-dialog"
+    >
+      <div class="holiday-reminder" v-if="currentHoliday">
+        <!-- 节日信息头部 -->
+        <div class="reminder-header">
+          <el-button
+            v-if="upcomingHolidays.length > 1"
+            class="nav-btn"
+            :icon="ArrowLeft"
+            circle
+            size="small"
+            @click="prevHoliday"
+          />
+          <div class="holiday-info">
+            <span class="holiday-icon">{{ getHolidayTypeLabel(currentHoliday.type).split(' ')[0] }}</span>
+            <span class="holiday-name">{{ currentHoliday.name }}</span>
+            <span class="holiday-countdown">还剩 {{ currentHoliday.daysLeft }} 天</span>
+          </div>
+          <el-button
+            v-if="upcomingHolidays.length > 1"
+            class="nav-btn"
+            :icon="ArrowRight"
+            circle
+            size="small"
+            @click="nextHoliday"
+          />
+        </div>
+
+        <!-- 节日数量指示器 -->
+        <div class="holiday-indicator" v-if="upcomingHolidays.length > 1">
+          ({{ currentHolidayIndex + 1 }}/{{ upcomingHolidays.length }})
+        </div>
+
+        <!-- AI 建议 -->
+        <div class="reminder-suggestions">
+          <div class="suggestions-title">
+            <el-icon v-if="holidayAiLoading" class="is-loading"><Timer /></el-icon>
+            <span>{{ holidayAiLoading ? 'AI 正在生成建议...' : '准备建议' }}</span>
+          </div>
+          <ul class="suggestions-list" v-if="!holidayAiLoading && holidayAiSuggestions.length > 0">
+            <li v-for="(suggestion, idx) in holidayAiSuggestions" :key="idx">
+              {{ suggestion }}
+            </li>
+          </ul>
+          <div class="suggestions-loading" v-if="holidayAiLoading">
+            <el-skeleton :rows="4" animated />
+          </div>
+        </div>
+
+        <!-- 按钮 -->
+        <div class="reminder-actions">
+          <el-button @click="dismissCurrentHoliday">本节日不再提醒</el-button>
+          <el-button type="primary" @click="closeHolidayReminder">知道了</el-button>
         </div>
       </div>
     </el-dialog>
@@ -2107,6 +2360,99 @@ html.dark .timeline-dot {
 html.dark .timeline-tag {
   color: #60A5FA;
   background: linear-gradient(135deg, rgba(96, 165, 250, 0.15) 0%, rgba(147, 197, 253, 0.08) 100%);
+}
+
+/* 节日提醒弹窗 */
+.holiday-reminder-dialog :deep(.el-dialog__header) {
+  display: none;
+}
+
+.holiday-reminder-dialog :deep(.el-dialog__body) {
+  padding: 0;
+}
+
+.holiday-reminder {
+  padding: 24px;
+}
+
+.reminder-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.nav-btn {
+  flex-shrink: 0;
+}
+
+.holiday-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.holiday-icon {
+  font-size: 36px;
+}
+
+.holiday-name {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.holiday-countdown {
+  font-size: 16px;
+  color: var(--el-color-primary);
+  font-weight: 500;
+}
+
+.holiday-indicator {
+  text-align: center;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 16px;
+}
+
+.reminder-suggestions {
+  background: var(--el-fill-color-light);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.suggestions-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+  margin-bottom: 12px;
+}
+
+.suggestions-list {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.suggestions-list li {
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+  line-height: 1.8;
+}
+
+.suggestions-loading {
+  padding: 8px 0;
+}
+
+.reminder-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
 }
 
 /* Responsive */
