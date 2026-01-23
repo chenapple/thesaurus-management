@@ -25,6 +25,22 @@
             <el-slider
               v-model="maxBrowsers"
               :min="1"
+              :max="10"
+              :step="1"
+              :marks="{ 1: '1', 3: '3', 5: '5', 8: '8', 10: '10' }"
+              style="width: 280px;"
+            />
+          </div>
+          <div class="form-tip" style="margin-top: 24px;">
+            多国家检测时的并发数量。建议3-5个，过多可能触发反爬或占用过多系统资源
+          </div>
+        </el-form-item>
+
+        <el-form-item label="每浏览器标签页">
+          <div class="slider-wrapper">
+            <el-slider
+              v-model="tabsPerBrowser"
+              :min="1"
               :max="5"
               :step="1"
               :marks="{ 1: '1', 2: '2', 3: '3', 4: '4', 5: '5' }"
@@ -32,7 +48,20 @@
             />
           </div>
           <div class="form-tip" style="margin-top: 24px;">
-            多国家检测时的并发数量。建议2-3个，过多可能触发反爬
+            每个浏览器同时打开的标签页数量，可加速同一国家内的关键词检测
+          </div>
+        </el-form-item>
+
+        <el-form-item label="代理服务器">
+          <el-input
+            v-model="proxyList"
+            type="textarea"
+            :rows="3"
+            placeholder="每行一个代理地址，如: http://proxy1:8080"
+            style="width: 360px;"
+          />
+          <div class="form-tip">
+            可选。配置代理可分散请求，降低被封风险。支持多个代理轮换使用
           </div>
         </el-form-item>
 
@@ -265,6 +294,8 @@ const saving = ref(false);
 
 const settings = reactive<SchedulerSettings>({ ...DEFAULT_SCHEDULER_SETTINGS });
 const maxBrowsers = ref(3);  // 并发浏览器数量，默认3
+const tabsPerBrowser = ref(1);  // 每浏览器标签页数量，默认1
+const proxyList = ref('');  // 代理服务器列表，每行一个
 
 const status = reactive<SchedulerStatus>({
   is_running: false,
@@ -303,10 +334,12 @@ async function handleClearLogs() {
 async function loadSettings() {
   loading.value = true;
   try {
-    const [savedSettings, savedStatus, savedMaxBrowsers] = await Promise.all([
+    const [savedSettings, savedStatus, savedMaxBrowsers, savedTabsPerBrowser, savedProxyList] = await Promise.all([
       getSchedulerSettings(),
       getSchedulerStatus(),
       getApiKey('max_browsers'),
+      getApiKey('tabs_per_browser'),
+      getApiKey('proxy_list'),
     ]);
 
     Object.assign(settings, savedSettings);
@@ -315,9 +348,22 @@ async function loadSettings() {
     // 加载并发浏览器设置
     if (savedMaxBrowsers) {
       const parsed = parseInt(savedMaxBrowsers, 10);
-      if (!isNaN(parsed) && parsed >= 1 && parsed <= 5) {
+      if (!isNaN(parsed) && parsed >= 1 && parsed <= 10) {
         maxBrowsers.value = parsed;
       }
+    }
+
+    // 加载每浏览器标签页设置
+    if (savedTabsPerBrowser) {
+      const parsed = parseInt(savedTabsPerBrowser, 10);
+      if (!isNaN(parsed) && parsed >= 1 && parsed <= 5) {
+        tabsPerBrowser.value = parsed;
+      }
+    }
+
+    // 加载代理列表
+    if (savedProxyList) {
+      proxyList.value = savedProxyList;
     }
 
     // 同时加载任务记录
@@ -333,10 +379,12 @@ async function loadSettings() {
 async function handleSave() {
   saving.value = true;
   try {
-    // 保存调度器设置和并发浏览器设置
+    // 保存调度器设置和爬虫相关设置
     await Promise.all([
       updateSchedulerSettings({ ...settings }),
       setApiKey('max_browsers', maxBrowsers.value.toString()),
+      setApiKey('tabs_per_browser', tabsPerBrowser.value.toString()),
+      setApiKey('proxy_list', proxyList.value.trim()),
     ]);
 
     // 根据设置启动或停止调度器
@@ -354,6 +402,8 @@ async function handleSave() {
     await tauriEmit('scheduler-settings-updated', {
       max_pages: settings.max_pages,
       max_browsers: maxBrowsers.value,
+      tabs_per_browser: tabsPerBrowser.value,
+      proxy_list: proxyList.value.trim(),
     });
 
     ElMessage.success('设置已保存');

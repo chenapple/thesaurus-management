@@ -2581,19 +2581,29 @@ pub fn update_ranking_result(
     }
 }
 
-// 获取排名历史
+// 获取排名历史（按日期聚合，每天只取最佳排名）
 pub fn get_ranking_history(monitoring_id: i64, days: i64) -> Result<Vec<RankingHistory>> {
     let conn = get_db().lock();
+    let days_str = format!("-{} days", days);
 
+    // 按日期分组，取每天的最佳排名（最小值）
+    // 页码取最小排名对应的页码
     let mut stmt = conn.prepare(
-        "SELECT id, monitoring_id, check_date, organic_rank, organic_page,
-                sponsored_rank, sponsored_page, checked_at
+        "SELECT
+            MIN(id) as id,
+            monitoring_id,
+            check_date,
+            MIN(organic_rank) as organic_rank,
+            MIN(organic_page) as organic_page,
+            MIN(sponsored_rank) as sponsored_rank,
+            MIN(sponsored_page) as sponsored_page,
+            MIN(checked_at) as checked_at
          FROM keyword_ranking_history
          WHERE monitoring_id = ?1 AND check_date >= date('now', '+8 hours', ?2)
+         GROUP BY check_date
          ORDER BY check_date ASC"
     )?;
 
-    let days_str = format!("-{} days", days);
     let history = stmt
         .query_map(rusqlite::params![monitoring_id, days_str], |row| {
             Ok(RankingHistory {
@@ -2900,17 +2910,20 @@ pub fn update_keyword_monitoring_tags(id: i64, tags: Option<String>) -> Result<(
     Ok(())
 }
 
-// 批量获取监控项的迷你图数据（最近N天的排名）
+// 批量获取监控项的迷你图数据（最近N天的排名，按日期聚合取最佳）
 pub fn get_monitoring_sparklines(product_id: i64, days: i64) -> Result<Vec<MonitoringSparkline>> {
     let conn = get_db().lock();
     let days_str = format!("-{} days", days);
 
-    // 获取该产品所有监控项在最近N天的排名历史（包含自然排名和广告排名）
+    // 按日期分组，每天取最佳排名（最小值）
     let mut stmt = conn.prepare(
-        "SELECT h.monitoring_id, h.check_date, h.organic_rank, h.sponsored_rank
+        "SELECT h.monitoring_id, h.check_date,
+                MIN(h.organic_rank) as best_organic_rank,
+                MIN(h.sponsored_rank) as best_sponsored_rank
          FROM keyword_ranking_history h
          JOIN keyword_monitoring m ON h.monitoring_id = m.id
          WHERE m.product_id = ?1 AND h.check_date >= date('now', '+8 hours', ?2)
+         GROUP BY h.monitoring_id, h.check_date
          ORDER BY h.monitoring_id, h.check_date ASC"
     )?;
 
@@ -2918,8 +2931,8 @@ pub fn get_monitoring_sparklines(product_id: i64, days: i64) -> Result<Vec<Monit
         Ok((
             row.get::<_, i64>(0)?,         // monitoring_id
             row.get::<_, String>(1)?,      // check_date
-            row.get::<_, Option<i64>>(2)?, // organic_rank
-            row.get::<_, Option<i64>>(3)?, // sponsored_rank
+            row.get::<_, Option<i64>>(2)?, // organic_rank (best)
+            row.get::<_, Option<i64>>(3)?, // sponsored_rank (best)
         ))
     })?;
 

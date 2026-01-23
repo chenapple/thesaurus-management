@@ -1571,6 +1571,7 @@ watch(() => props.productId, () => {
   currentPage.value = 1;
   loadData();
   loadStats();
+  loadEvents();  // 重新加载优化事件
 });
 
 // 设置事件监听器

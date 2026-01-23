@@ -1031,7 +1031,7 @@ async def search_keyword(keyword: str, target_asin: str, country: str, max_pages
     return result
 
 
-async def search_country(p, country: str, keywords_dict: dict, max_pages: int, headless, progress_lock) -> list:
+async def search_country(p, country: str, keywords_dict: dict, max_pages: int, headless, progress_lock, proxy: str = None) -> list:
     """
     处理单个国家的所有关键词（用于并发）
 
@@ -1042,6 +1042,7 @@ async def search_country(p, country: str, keywords_dict: dict, max_pages: int, h
         max_pages: 最大搜索页数
         headless: 无头模式
         progress_lock: 进度输出锁（避免多线程输出混乱）
+        proxy: 代理服务器地址（可选）
 
     返回: [(monitoring_id, result), ...]
     """
@@ -1050,6 +1051,8 @@ async def search_country(p, country: str, keywords_dict: dict, max_pages: int, h
     unique_keyword_count = len(keywords_dict)
     total_targets = sum(len(kw_data['targets']) for kw_data in keywords_dict.values())
     print(f"[DEBUG] 开始处理 {country} 站 ({unique_keyword_count} 个唯一关键词，{total_targets} 个目标产品)...", file=sys.stderr)
+    if proxy:
+        print(f"[DEBUG] {country}: 使用代理 {proxy}", file=sys.stderr)
 
     config = COUNTRY_CONFIG.get(country, COUNTRY_CONFIG["US"])
 
@@ -1062,6 +1065,11 @@ async def search_country(p, country: str, keywords_dict: dict, max_pages: int, h
         launch_options["headless"] = False
     else:
         launch_options["headless"] = headless
+
+    # 添加代理配置
+    if proxy:
+        launch_options["proxy"] = {"server": proxy}
+
     browser = await p.chromium.launch(**launch_options)
 
     # 国家对应的地理位置坐标
@@ -1678,7 +1686,7 @@ async def search_country(p, country: str, keywords_dict: dict, max_pages: int, h
     return country_results
 
 
-async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headless = "new", max_browsers: int = 3) -> list:
+async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headless = "new", max_browsers: int = 3, tabs_per_browser: int = 1, proxy_list: list = None) -> list:
     """
     批量搜索关键词 - 按国家分组，并发处理多个国家
     优化：同一关键词监控多个产品时，只搜索一次，同时记录所有产品的排名
@@ -1688,6 +1696,8 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
         max_pages: 最大搜索页数
         headless: 无头模式 ("new"=新版无头模式, True=传统无头, False=显示浏览器)
         max_browsers: 最大并发浏览器数量
+        tabs_per_browser: 每个浏览器的标签页数量（用于同一国家内的关键词并发）
+        proxy_list: 代理服务器列表，可选
 
     返回: [(id, result), ...]
     """
@@ -1712,7 +1722,9 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
     total_searches_before = len(keywords_list)
     total_searches_after = sum(len(kw_dict) for kw_dict in country_groups.values())
     print(f"[DEBUG] 共 {len(keywords_list)} 个监控项，{len(country_groups)} 个国家，{total_searches_after} 个唯一关键词", file=sys.stderr)
-    print(f"[DEBUG] 并发模式: 最多 {max_browsers} 个浏览器同时运行", file=sys.stderr)
+    print(f"[DEBUG] 并发模式: 最多 {max_browsers} 个浏览器同时运行，每浏览器 {tabs_per_browser} 个标签页", file=sys.stderr)
+    if proxy_list:
+        print(f"[DEBUG] 代理池: {len(proxy_list)} 个代理可用", file=sys.stderr)
     if total_searches_before > total_searches_after:
         print(f"[DEBUG] 优化: 减少 {total_searches_before - total_searches_after} 次搜索 ({100 - total_searches_after * 100 // total_searches_before}% 节省)", file=sys.stderr)
 
@@ -1724,10 +1736,22 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
     # 使用信号量限制并发数
     semaphore = asyncio.Semaphore(max_browsers)
 
+    # 代理计数器，用于轮换代理
+    proxy_index = [0]  # 使用列表以便在闭包中修改
+
+    def get_next_proxy():
+        """获取下一个代理（轮换）"""
+        if not proxy_list:
+            return None
+        proxy = proxy_list[proxy_index[0] % len(proxy_list)]
+        proxy_index[0] += 1
+        return proxy
+
     async def limited_search_country(p, country, keywords_dict):
         """带并发限制的国家搜索"""
         async with semaphore:
-            return await search_country(p, country, keywords_dict, max_pages, headless, progress_lock)
+            proxy = get_next_proxy()
+            return await search_country_with_tabs(p, country, keywords_dict, max_pages, headless, progress_lock, tabs_per_browser, proxy)
 
     async with async_playwright() as p:
         # 创建所有国家的并发任务
@@ -1749,6 +1773,425 @@ async def search_keywords_batch(keywords_list: list, max_pages: int = 5, headles
     return all_results
 
 
+async def search_country_with_tabs(p, country: str, keywords_dict: dict, max_pages: int, headless, progress_lock, tabs_per_browser: int = 1, proxy: str = None) -> list:
+    """
+    使用多标签页并发搜索单个国家的关键词
+
+    参数:
+        p: playwright 实例
+        country: 国家代码
+        keywords_dict: {keyword_lower: {'original_keyword': str, 'targets': [(id, asin), ...]}}
+        max_pages: 最大搜索页数
+        headless: 无头模式
+        progress_lock: 进度输出锁
+        tabs_per_browser: 并发标签页数量
+        proxy: 代理服务器地址
+
+    返回: [(monitoring_id, result), ...]
+    """
+    # 如果标签页数量为1，使用原有逻辑
+    if tabs_per_browser <= 1:
+        return await search_country(p, country, keywords_dict, max_pages, headless, progress_lock, proxy)
+
+    country_results = []
+    config = COUNTRY_CONFIG.get(country, COUNTRY_CONFIG["US"])
+
+    unique_keyword_count = len(keywords_dict)
+    total_targets = sum(len(kw_data['targets']) for kw_data in keywords_dict.values())
+    print(f"[DEBUG] 开始处理 {country} 站 ({unique_keyword_count} 个唯一关键词，{total_targets} 个目标产品，{tabs_per_browser} 标签页并发)...", file=sys.stderr)
+    if proxy:
+        print(f"[DEBUG] {country}: 使用代理 {proxy}", file=sys.stderr)
+
+    # 启动浏览器
+    launch_options = {}
+    if headless == "new":
+        launch_options["headless"] = True
+        launch_options["args"] = ["--headless=new"]
+    elif headless == False:
+        launch_options["headless"] = False
+    else:
+        launch_options["headless"] = headless
+
+    if proxy:
+        launch_options["proxy"] = {"server": proxy}
+
+    browser = await p.chromium.launch(**launch_options)
+
+    # 地理位置配置
+    geo_locations = {
+        "DE": {"latitude": 52.5200, "longitude": 13.4050},
+        "FR": {"latitude": 48.8566, "longitude": 2.3522},
+        "UK": {"latitude": 51.5074, "longitude": -0.1278},
+        "US": {"latitude": 40.7128, "longitude": -74.0060},
+        "IT": {"latitude": 41.9028, "longitude": 12.4964},
+        "ES": {"latitude": 40.4168, "longitude": -3.7038},
+        "JP": {"latitude": 35.6762, "longitude": 139.6503},
+    }
+
+    timezone_map = {
+        "DE": "Europe/Berlin",
+        "FR": "Europe/Paris",
+        "UK": "Europe/London",
+        "IT": "Europe/Rome",
+        "ES": "Europe/Madrid",
+        "US": "America/New_York",
+        "JP": "Asia/Tokyo",
+    }
+
+    # Cookie配置
+    country_cookies = {
+        'DE': [
+            {'name': 'lc-acbde', 'value': 'de_DE', 'domain': '.amazon.de', 'path': '/'},
+            {'name': 'i18n-prefs', 'value': 'EUR', 'domain': '.amazon.de', 'path': '/'},
+        ],
+        'FR': [
+            {'name': 'lc-acbfr', 'value': 'fr_FR', 'domain': '.amazon.fr', 'path': '/'},
+            {'name': 'i18n-prefs', 'value': 'EUR', 'domain': '.amazon.fr', 'path': '/'},
+        ],
+        'UK': [
+            {'name': 'lc-acbuk', 'value': 'en_GB', 'domain': '.amazon.co.uk', 'path': '/'},
+            {'name': 'i18n-prefs', 'value': 'GBP', 'domain': '.amazon.co.uk', 'path': '/'},
+        ],
+        'IT': [
+            {'name': 'lc-acbit', 'value': 'it_IT', 'domain': '.amazon.it', 'path': '/'},
+            {'name': 'i18n-prefs', 'value': 'EUR', 'domain': '.amazon.it', 'path': '/'},
+        ],
+        'ES': [
+            {'name': 'lc-acbes', 'value': 'es_ES', 'domain': '.amazon.es', 'path': '/'},
+            {'name': 'i18n-prefs', 'value': 'EUR', 'domain': '.amazon.es', 'path': '/'},
+        ],
+        'JP': [
+            {'name': 'lc-acbjp', 'value': 'ja_JP', 'domain': '.amazon.co.jp', 'path': '/'},
+            {'name': 'i18n-prefs', 'value': 'JPY', 'domain': '.amazon.co.jp', 'path': '/'},
+        ],
+    }
+
+    try:
+        # 创建主上下文并设置邮编（所有标签页共享此上下文）
+        context = await browser.new_context(
+            locale=config['language'],
+            timezone_id=timezone_map.get(country, "America/New_York"),
+            viewport={"width": 1920, "height": 1080},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            geolocation=geo_locations.get(country, geo_locations["US"]),
+            permissions=["geolocation"]
+        )
+
+        if country in country_cookies:
+            await context.add_cookies(country_cookies[country])
+
+        # 创建主页面设置邮编
+        main_page = await context.new_page()
+        await main_page.set_extra_http_headers({
+            'Accept-Language': f'{config["language"]},en;q=0.9',
+        })
+
+        # 访问主页设置邮编
+        print(f"[DEBUG] {country}: 访问主页并设置邮编...", file=sys.stderr)
+        await main_page.goto(config['base_url'], wait_until="domcontentloaded", timeout=20000)
+
+        # 处理Cookie弹窗
+        try:
+            cookie_btn = main_page.locator('#sp-cc-accept')
+            if await cookie_btn.is_visible(timeout=2000):
+                await cookie_btn.click()
+                await main_page.wait_for_timeout(800)
+        except:
+            pass
+
+        # 设置邮编
+        address_success, address_text = await set_delivery_address(main_page, country, config['zipcode'], max_retries=3)
+        if not address_success:
+            print(f"[DEBUG] {country}: 邮编设置失败，继续尝试...", file=sys.stderr)
+
+        # 将关键词列表转换为可迭代的列表
+        keyword_items = list(keywords_dict.items())
+
+        # 使用信号量控制并发标签页数量
+        tab_semaphore = asyncio.Semaphore(tabs_per_browser)
+
+        async def search_keyword_in_tab(kw_idx, kw_lower, kw_data):
+            """在单独的标签页中搜索关键词"""
+            async with tab_semaphore:
+                page = await context.new_page()
+                await page.set_extra_http_headers({
+                    'Accept-Language': f'{config["language"]},en;q=0.9',
+                })
+
+                keyword = kw_data['original_keyword']
+                targets = kw_data['targets']
+                tab_results = []
+
+                try:
+                    # 执行搜索
+                    results_by_asin = await search_keyword_on_page(
+                        page, keyword, targets, country, config, max_pages, address_text
+                    )
+
+                    # 输出进度
+                    for monitoring_id, asin in targets:
+                        asin_upper = asin.upper()
+                        result = results_by_asin.get(asin_upper, {
+                            "keyword": keyword,
+                            "target_asin": asin,
+                            "country": country,
+                            "error": "未找到结果"
+                        })
+                        tab_results.append((monitoring_id, result))
+
+                        async with progress_lock:
+                            progress = {
+                                "type": "progress",
+                                "monitoring_id": monitoring_id,
+                                "result": result
+                            }
+                            output = json.dumps(progress, ensure_ascii=False)
+                            sys.stdout.buffer.write(output.encode('utf-8'))
+                            sys.stdout.buffer.write(b'\n')
+                            sys.stdout.flush()
+
+                except Exception as e:
+                    print(f"[DEBUG] {country}: 关键词 {keyword} 搜索失败: {e}", file=sys.stderr)
+                    for monitoring_id, asin in targets:
+                        error_result = {
+                            "keyword": keyword,
+                            "target_asin": asin,
+                            "country": country,
+                            "error": str(e),
+                            "checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        }
+                        tab_results.append((monitoring_id, error_result))
+
+                        async with progress_lock:
+                            progress = {
+                                "type": "progress",
+                                "monitoring_id": monitoring_id,
+                                "result": error_result
+                            }
+                            output = json.dumps(progress, ensure_ascii=False)
+                            sys.stdout.buffer.write(output.encode('utf-8'))
+                            sys.stdout.buffer.write(b'\n')
+                            sys.stdout.flush()
+                finally:
+                    await page.close()
+
+                return tab_results
+
+        # 并发执行所有关键词搜索
+        tasks = [
+            search_keyword_in_tab(idx, kw_lower, kw_data)
+            for idx, (kw_lower, kw_data) in enumerate(keyword_items)
+        ]
+
+        results_list = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # 合并结果
+        for result in results_list:
+            if isinstance(result, Exception):
+                print(f"[DEBUG] {country}: 某个关键词搜索失败: {result}", file=sys.stderr)
+            elif result:
+                country_results.extend(result)
+
+    except Exception as e:
+        print(f"[DEBUG] {country}: 处理出错: {e}", file=sys.stderr)
+    finally:
+        await browser.close()
+
+    return country_results
+
+
+async def search_keyword_on_page(page, keyword: str, targets: list, country: str, config: dict, max_pages: int, address_text: str) -> dict:
+    """
+    在指定页面上搜索关键词并返回所有目标ASIN的排名结果
+
+    参数:
+        page: Playwright 页面对象
+        keyword: 搜索关键词
+        targets: [(monitoring_id, asin), ...]
+        country: 国家代码
+        config: 国家配置
+        max_pages: 最大搜索页数
+        address_text: 配送地址文本
+
+    返回: {asin_upper: result_dict, ...}
+    """
+    from urllib.parse import quote_plus
+
+    # 构建目标ASIN映射
+    target_asins = {asin.upper(): mid for mid, asin in targets}
+    target_asin_list = list(target_asins.keys())
+
+    # 初始化每个目标的结果
+    results_by_asin = {}
+    for monitoring_id, asin in targets:
+        results_by_asin[asin.upper()] = {
+            "keyword": keyword,
+            "target_asin": asin,
+            "country": country,
+            "organic_rank": None,
+            "organic_page": None,
+            "sponsored_rank": None,
+            "sponsored_page": None,
+            "sponsored_type": None,
+            "product_info": None,
+            "organic_top_50": [],
+            "sponsored_top_20": [],
+            "checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "error": None,
+            "warning": None,
+            "delivery_address": address_text
+        }
+
+    # 跟踪每个目标ASIN是否找到
+    found_organic = {asin: False for asin in target_asins.keys()}
+    found_sponsored = {asin: False for asin in target_asins.keys()}
+
+    # 共享的搜索结果记录
+    shared_organic_top_50 = []
+    shared_sponsored_top_20 = []
+
+    encoded_keyword = quote_plus(keyword)
+    market_param = f"&{config['market_param']}" if config['market_param'] else ""
+
+    for page_num in range(1, max_pages + 1):
+        # 检查是否所有目标ASIN的自然和广告排名都找到了
+        all_organic_found = all(found_organic.values())
+        all_sponsored_found = all(found_sponsored.values())
+        if all_organic_found and all_sponsored_found:
+            break
+
+        search_url = f"{config['base_url']}/s?k={encoded_keyword}{market_param}"
+        if page_num > 1:
+            search_url += f"&page={page_num}"
+
+        # 优化：减少页面加载超时时间
+        await page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
+        await page.wait_for_timeout(3000)  # 减少等待时间
+
+        # 快速滚动触发懒加载
+        await page.evaluate('window.scrollTo(0, 300)')
+        await page.wait_for_timeout(300)
+        await page.evaluate('window.scrollTo(0, 0)')
+
+        # 检查验证码
+        try:
+            if await page.locator('text=Robot Check').is_visible(timeout=800):
+                for asin_upper in results_by_asin:
+                    results_by_asin[asin_upper]['error'] = "检测到验证码"
+                break
+        except:
+            pass
+
+        # 检测顶部广告
+        banner_product_count = 0
+        try:
+            banner_selectors = [
+                '[class*="sbx-desktop"]',
+                '[data-component-type="sbx"]',
+                '[data-component-type="sp-sponsored-brands"]',
+            ]
+            for selector in banner_selectors:
+                try:
+                    sbx_container = page.locator(selector).first
+                    if await sbx_container.count() > 0:
+                        sbx_html = await sbx_container.inner_html()
+                        banner_asins = re.findall(r'/dp/([A-Z0-9]{10})', sbx_html)
+                        if not banner_asins:
+                            banner_asins = re.findall(r'data-asin="([A-Z0-9]{10})"', sbx_html)
+                        banner_asins = list(dict.fromkeys(banner_asins))
+                        banner_product_count = len(banner_asins)
+
+                        for idx, asin in enumerate(banner_asins, 1):
+                            asin_upper = asin.upper()
+                            if asin_upper in target_asins and not found_sponsored.get(asin_upper, True):
+                                results_by_asin[asin_upper]['sponsored_rank'] = idx
+                                results_by_asin[asin_upper]['sponsored_page'] = page_num
+                                results_by_asin[asin_upper]['sponsored_type'] = 'brand_banner'
+                                found_sponsored[asin_upper] = True
+                        break
+                except:
+                    continue
+        except:
+            pass
+
+        # 解析搜索结果
+        search_results = await page.locator('[data-component-type="s-search-result"]').all()
+
+        seen_organic_asins = set()
+        seen_sponsored_asins = set()
+        page_organic_position = 0
+        page_sponsored_position = banner_product_count
+
+        for item in search_results:
+            try:
+                asin = await item.get_attribute('data-asin')
+                if not asin or len(asin) != 10:
+                    continue
+
+                item_html = await item.inner_html()
+                is_sponsored = bool(re.search(r'Sponsored|Sponsorisé|Gesponsert|Sponsorizzato|Patrocinado|Anzeige', item_html, re.IGNORECASE))
+
+                if is_sponsored:
+                    if asin not in seen_sponsored_asins:
+                        seen_sponsored_asins.add(asin)
+                        page_sponsored_position += 1
+
+                        if len(shared_sponsored_top_20) < 20:
+                            shared_sponsored_top_20.append(asin)
+
+                        asin_upper = asin.upper()
+                        if asin_upper in target_asins and not found_sponsored.get(asin_upper, True):
+                            results_by_asin[asin_upper]['sponsored_rank'] = page_sponsored_position
+                            results_by_asin[asin_upper]['sponsored_page'] = page_num
+                            results_by_asin[asin_upper]['sponsored_type'] = 'product_ad'
+                            found_sponsored[asin_upper] = True
+                else:
+                    if asin not in seen_organic_asins:
+                        seen_organic_asins.add(asin)
+                        page_organic_position += 1
+
+                        if len(shared_organic_top_50) < 50:
+                            shared_organic_top_50.append(asin)
+
+                        asin_upper = asin.upper()
+                        if asin_upper in target_asins and not found_organic.get(asin_upper, True):
+                            results_by_asin[asin_upper]['organic_rank'] = page_organic_position
+                            results_by_asin[asin_upper]['organic_page'] = page_num
+                            found_organic[asin_upper] = True
+
+                            # 提取产品信息
+                            try:
+                                title_elem = item.locator('h2')
+                                title = await title_elem.text_content() if await title_elem.count() > 0 else None
+                                price_elem = item.locator('.a-price .a-offscreen')
+                                price = await price_elem.first.text_content() if await price_elem.count() > 0 else None
+                                img_elem = item.locator('img.s-image')
+                                img_url = await img_elem.get_attribute('src') if await img_elem.count() > 0 else None
+
+                                results_by_asin[asin_upper]['product_info'] = {
+                                    'asin': asin,
+                                    'title': title.strip() if title else None,
+                                    'price': price.strip() if price else None,
+                                    'image_url': img_url
+                                }
+                            except:
+                                pass
+            except:
+                continue
+
+        # 页面间延迟（减少）
+        all_found = all(found_organic.values()) and all(found_sponsored.values())
+        if page_num < max_pages and not all_found:
+            await page.wait_for_timeout(1000)
+
+    # 填充共享的top列表
+    for asin_upper in results_by_asin:
+        results_by_asin[asin_upper]['organic_top_50'] = shared_organic_top_50.copy()
+        results_by_asin[asin_upper]['sponsored_top_20'] = shared_sponsored_top_20.copy()
+
+    return results_by_asin
+
+
 
 def main():
     if len(sys.argv) < 2:
@@ -1768,14 +2211,30 @@ def main():
         else:
             headless = True
         max_pages = int(sys.argv[3]) if len(sys.argv) > 3 else 5
-        max_browsers = int(sys.argv[4]) if len(sys.argv) > 4 else 3  # 新增：并发浏览器数量
+        max_browsers = int(sys.argv[4]) if len(sys.argv) > 4 else 3  # 并发浏览器数量
+        tabs_per_browser = int(sys.argv[5]) if len(sys.argv) > 5 else 1  # 每浏览器标签页数量
+        proxy_list_str = sys.argv[6] if len(sys.argv) > 6 and sys.argv[6] != 'none' else None  # 代理列表（逗号分隔）
+
+        # 解析代理列表
+        proxy_list = None
+        if proxy_list_str:
+            proxy_list = [p.strip() for p in proxy_list_str.split(',') if p.strip()]
+            if not proxy_list:
+                proxy_list = None
 
         # 从stdin读取JSON
         input_data = sys.stdin.read()
         keywords_list = json.loads(input_data)
 
-        # 执行批量检测（并发模式）
-        results = asyncio.run(search_keywords_batch(keywords_list, max_pages, headless, max_browsers))
+        # 执行批量检测（并发模式，支持多标签页和代理池）
+        results = asyncio.run(search_keywords_batch(
+            keywords_list,
+            max_pages,
+            headless,
+            max_browsers,
+            tabs_per_browser,
+            proxy_list
+        ))
 
         # 输出完成标记
         complete = {"type": "complete", "total": len(results)}

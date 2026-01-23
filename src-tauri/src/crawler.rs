@@ -244,6 +244,8 @@ pub async fn check_rankings_batch(
     keywords: Vec<(i64, String, String, String)>, // (monitoring_id, keyword, asin, country)
     max_pages: i64,
     max_browsers: i64,  // 并发浏览器数量
+    tabs_per_browser: i64,  // 每浏览器标签页数量
+    proxy_list: Option<String>,  // 代理列表（逗号分隔）
     progress_callback: impl Fn(i64, i64, String) + Send + 'static,
 ) -> Vec<(i64, RankingResult)> {
     let total = keywords.len() as i64;
@@ -253,7 +255,7 @@ pub async fn check_rankings_batch(
     }
 
     // 尝试使用批量模式（并发）
-    match call_python_crawler_batch(keywords.clone(), max_pages, max_browsers, total, progress_callback).await {
+    match call_python_crawler_batch(keywords.clone(), max_pages, max_browsers, tabs_per_browser, proxy_list, total, progress_callback).await {
         Ok(results) => results,
         Err(e) => {
             // 批量模式失败，返回错误结果
@@ -284,6 +286,8 @@ async fn call_python_crawler_batch(
     keywords: Vec<(i64, String, String, String)>,
     max_pages: i64,
     max_browsers: i64,  // 并发浏览器数量
+    tabs_per_browser: i64,  // 每浏览器标签页数量
+    proxy_list: Option<String>,  // 代理列表（逗号分隔）
     total: i64,
     progress_callback: impl Fn(i64, i64, String) + Send + 'static,
 ) -> Result<Vec<(i64, RankingResult)>, String> {
@@ -303,15 +307,20 @@ async fn call_python_crawler_batch(
     let input_json = serde_json::to_string(&input_data)
         .map_err(|e| format!("序列化输入数据失败: {}", e))?;
 
+    // 处理代理列表
+    let proxy_arg = proxy_list.unwrap_or_else(|| "none".to_string());
+
     // 在阻塞任务中执行
     tokio::task::spawn_blocking(move || {
-        // 调用 Python 脚本 --batch 模式（带并发参数）
+        // 调用 Python 脚本 --batch 模式（带并发参数、标签页数量、代理列表）
         let mut cmd = Command::new(&python_cmd);
         cmd.arg(&script_path)
             .arg("--batch")
             .arg("false")  // headless=false，有头模式（窗口隐藏到屏幕外）
             .arg(max_pages.to_string())
             .arg(max_browsers.to_string())  // 并发浏览器数量
+            .arg(tabs_per_browser.to_string())  // 每浏览器标签页数量
+            .arg(&proxy_arg)  // 代理列表
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

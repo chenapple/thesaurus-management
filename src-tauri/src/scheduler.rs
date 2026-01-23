@@ -229,12 +229,24 @@ impl Scheduler {
                                 .map(|m| (m.id, m.keyword.clone(), m.asin.clone(), m.country.clone()))
                                 .collect();
 
-                            // 获取并发浏览器数量设置
+                            // 获取爬虫设置
                             let max_browsers = db::get_setting("max_browsers")
                                 .ok()
                                 .flatten()
                                 .and_then(|s| s.parse::<i64>().ok())
                                 .unwrap_or(3);  // 默认3个并发浏览器
+
+                            let tabs_per_browser = db::get_setting("tabs_per_browser")
+                                .ok()
+                                .flatten()
+                                .and_then(|s| s.parse::<i64>().ok())
+                                .unwrap_or(1);  // 默认1个标签页
+
+                            let proxy_list = db::get_setting("proxy_list")
+                                .ok()
+                                .flatten()
+                                .filter(|s| !s.trim().is_empty())
+                                .map(|s| s.lines().filter(|l| !l.trim().is_empty()).collect::<Vec<_>>().join(","));
 
                             // 使用批量模式检测（并发模式，同一站点复用浏览器）
                             let task_id_clone = task_id;
@@ -242,6 +254,8 @@ impl Scheduler {
                                 keywords,
                                 5, // max_pages
                                 max_browsers,
+                                tabs_per_browser,
+                                proxy_list,
                                 move |completed, _total, msg| {
                                     println!("[Scheduler] {}", msg);
                                     // 更新任务进度（这里无法准确统计成功/失败，在结果处理时再统计）
