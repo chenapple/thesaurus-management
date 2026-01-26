@@ -360,6 +360,7 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
     // 迁移优化事件表：添加 event_sub_type 列
     migrate_events_add_sub_type(&conn)?;
     migrate_events_add_asin(&conn)?;
+    migrate_events_add_screenshots(&conn)?;
 
     // 迁移关键词监控表：添加 tags 列
     migrate_keyword_monitoring_tags(&conn)?;
@@ -493,6 +494,34 @@ fn migrate_events_add_asin(conn: &Connection) -> Result<()> {
     if !has_target_asin {
         // 添加 target_asin 列
         conn.execute("ALTER TABLE optimization_events ADD COLUMN target_asin TEXT", [])?;
+    }
+
+    Ok(())
+}
+
+// 数据库迁移：为 optimization_events 表添加 screenshots 列
+fn migrate_events_add_screenshots(conn: &Connection) -> Result<()> {
+    // 检查表是否存在
+    let table_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='optimization_events'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0) > 0;
+
+    if !table_exists {
+        return Ok(());
+    }
+
+    // 检查是否已有 screenshots 列
+    let has_screenshots: bool = conn
+        .prepare("SELECT screenshots FROM optimization_events LIMIT 1")
+        .is_ok();
+
+    if !has_screenshots {
+        // 添加 screenshots 列（存储 JSON 数组格式的文件名列表）
+        conn.execute("ALTER TABLE optimization_events ADD COLUMN screenshots TEXT", [])?;
     }
 
     Ok(())
@@ -3151,6 +3180,7 @@ pub struct OptimizationEvent {
     pub description: Option<String>,
     pub target_asin: Option<String>,         // 目标 ASIN（可选）
     pub affected_keywords: Option<String>,   // 关联关键词 JSON 数组（可选）
+    pub screenshots: Option<String>,         // 截图文件名 JSON 数组（可选）
     pub created_at: String,
 }
 
@@ -3164,12 +3194,13 @@ pub fn add_optimization_event(
     description: Option<String>,
     target_asin: Option<String>,
     affected_keywords: Option<String>,
+    screenshots: Option<String>,
 ) -> Result<i64> {
     let conn = get_db().lock();
     conn.execute(
-        "INSERT INTO optimization_events (product_id, event_date, event_type, event_sub_type, title, description, target_asin, affected_keywords)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        rusqlite::params![product_id, event_date, event_type, event_sub_type, title, description, target_asin, affected_keywords],
+        "INSERT INTO optimization_events (product_id, event_date, event_type, event_sub_type, title, description, target_asin, affected_keywords, screenshots)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![product_id, event_date, event_type, event_sub_type, title, description, target_asin, affected_keywords, screenshots],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -3183,7 +3214,7 @@ pub fn get_optimization_events(
     let conn = get_db().lock();
 
     let mut sql = String::from(
-        "SELECT id, product_id, event_date, event_type, COALESCE(event_sub_type, 'title') as event_sub_type, title, description, target_asin, affected_keywords, created_at
+        "SELECT id, product_id, event_date, event_type, COALESCE(event_sub_type, 'title') as event_sub_type, title, description, target_asin, affected_keywords, screenshots, created_at
          FROM optimization_events WHERE product_id = ?1"
     );
 
@@ -3217,7 +3248,8 @@ pub fn get_optimization_events(
             description: row.get(6)?,
             target_asin: row.get(7)?,
             affected_keywords: row.get(8)?,
-            created_at: row.get(9)?,
+            screenshots: row.get(9)?,
+            created_at: row.get(10)?,
         })
     })?
     .collect::<Result<Vec<_>>>()?;
@@ -3235,12 +3267,13 @@ pub fn update_optimization_event(
     description: Option<String>,
     target_asin: Option<String>,
     affected_keywords: Option<String>,
+    screenshots: Option<String>,
 ) -> Result<()> {
     let conn = get_db().lock();
     conn.execute(
         "UPDATE optimization_events SET event_date = ?1, event_type = ?2, event_sub_type = ?3, title = ?4,
-         description = ?5, target_asin = ?6, affected_keywords = ?7 WHERE id = ?8",
-        rusqlite::params![event_date, event_type, event_sub_type, title, description, target_asin, affected_keywords, id],
+         description = ?5, target_asin = ?6, affected_keywords = ?7, screenshots = ?8 WHERE id = ?9",
+        rusqlite::params![event_date, event_type, event_sub_type, title, description, target_asin, affected_keywords, screenshots, id],
     )?;
     Ok(())
 }

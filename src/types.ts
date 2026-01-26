@@ -315,6 +315,7 @@ export interface OptimizationEvent {
   description?: string;
   target_asin?: string;            // 目标 ASIN（可选）
   affected_keywords?: string;      // JSON字符串，存储关键词数组（可选）
+  screenshots?: string;            // JSON字符串，存储截图文件名数组（可选）
   created_at: string;
 }
 

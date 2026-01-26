@@ -194,6 +194,16 @@
               </div>
               <div class="event-title">{{ event.title }}</div>
               <div v-if="event.description" class="event-desc">{{ event.description }}</div>
+              <div v-if="getEventScreenshots(event).length > 0" class="event-screenshots">
+                <el-image
+                  v-for="(url, idx) in getEventScreenshots(event)"
+                  :key="idx"
+                  :src="url"
+                  fit="cover"
+                  class="event-screenshot-thumb"
+                  @click.stop="previewEventScreenshot(event, idx)"
+                />
+              </div>
             </div>
             <div class="event-actions">
               <el-button link type="primary" size="small" @click="handleEditEvent(event)">编辑</el-button>
@@ -257,6 +267,16 @@
                 </div>
                 <div class="event-title">{{ event.title }}</div>
                 <div v-if="event.description" class="event-desc">{{ event.description }}</div>
+                <div v-if="getEventScreenshots(event).length > 0" class="event-screenshots">
+                  <el-image
+                    v-for="(url, idx) in getEventScreenshots(event)"
+                    :key="idx"
+                    :src="url"
+                    fit="cover"
+                    class="event-screenshot-thumb"
+                    @click.stop="previewEventScreenshot(event, idx)"
+                  />
+                </div>
               </div>
               <div class="event-actions">
                 <el-button link type="primary" size="small" @click="handleEditEvent(event)">编辑</el-button>
@@ -837,6 +857,16 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 图片预览 -->
+    <teleport to="body">
+      <el-image-viewer
+        v-if="screenshotPreviewVisible"
+        :url-list="screenshotPreviewUrls"
+        :initial-index="screenshotPreviewIndex"
+        @close="screenshotPreviewVisible = false"
+      />
+    </teleport>
   </div>
 </template>
 
@@ -846,6 +876,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, ArrowDown } from '@element-plus/icons-vue';
 import { listen } from '@tauri-apps/api/event';
 import { openUrl } from '@tauri-apps/plugin-opener';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import {
   getKeywordMonitoringList,
@@ -860,6 +891,7 @@ import {
   checkSelectedRankings,
   checkDependencies,
   getSchedulerSettings,
+  getScreenshotsDir,
 } from '../api';
 import type { KeywordMonitoring, MonitoringStats, OptimizationEvent } from '../types';
 import { COUNTRY_OPTIONS, PRIORITY_OPTIONS, getCountryFlag, EVENT_MAIN_TYPES, EVENT_SUB_TYPES, type EventMainType, KEYWORD_TAGS } from '../types';
@@ -1009,6 +1041,12 @@ const optimizationEvents = ref<OptimizationEvent[]>([]);
 const eventsLoading = ref(false);
 const eventsViewMode = ref<'list' | 'calendar'>('list');
 const calendarDate = ref(new Date());
+const screenshotsDir = ref<string>('');
+
+// 截图预览状态
+const screenshotPreviewVisible = ref(false);
+const screenshotPreviewUrls = ref<string[]>([]);
+const screenshotPreviewIndex = ref(0);
 
 // 标签编辑相关
 const showTagDialog = ref(false);
@@ -1613,11 +1651,33 @@ async function loadEvents() {
   eventsLoading.value = true;
   try {
     optimizationEvents.value = await getOptimizationEvents(props.productId);
+    // 加载截图目录路径
+    if (!screenshotsDir.value) {
+      screenshotsDir.value = await getScreenshotsDir();
+    }
   } catch (e) {
     console.error('加载优化事件失败:', e);
   } finally {
     eventsLoading.value = false;
   }
+}
+
+// 获取事件截图 URL 列表
+function getEventScreenshots(event: OptimizationEvent): string[] {
+  if (!event.screenshots || !screenshotsDir.value) return [];
+  try {
+    const filenames = JSON.parse(event.screenshots) as string[];
+    return filenames.map(filename => convertFileSrc(`${screenshotsDir.value}/${filename}`));
+  } catch {
+    return [];
+  }
+}
+
+// 预览截图
+function previewEventScreenshot(event: OptimizationEvent, index: number) {
+  screenshotPreviewUrls.value = getEventScreenshots(event);
+  screenshotPreviewIndex.value = index;
+  screenshotPreviewVisible.value = true;
 }
 
 // 添加事件
@@ -2557,5 +2617,27 @@ onUnmounted(() => {
 
 .tag-checkbox :deep(.el-checkbox__label) {
   padding-left: 8px;
+}
+
+/* 事件截图样式 */
+.event-screenshots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.event-screenshot-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid var(--el-border-color-lighter);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.event-screenshot-thumb:hover {
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 </style>

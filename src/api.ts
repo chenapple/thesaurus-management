@@ -615,7 +615,8 @@ export async function addOptimizationEvent(
   title: string,
   description?: string,
   targetAsin?: string,
-  affectedKeywords?: string
+  affectedKeywords?: string,
+  screenshots?: string
 ): Promise<number> {
   return await invoke("add_optimization_event", {
     productId,
@@ -626,6 +627,7 @@ export async function addOptimizationEvent(
     description,
     targetAsin,
     affectedKeywords,
+    screenshots,
   });
 }
 
@@ -655,7 +657,8 @@ export async function updateOptimizationEvent(
   title: string,
   description?: string,
   targetAsin?: string,
-  affectedKeywords?: string
+  affectedKeywords?: string,
+  screenshots?: string
 ): Promise<void> {
   return await invoke("update_optimization_event", {
     id,
@@ -666,6 +669,7 @@ export async function updateOptimizationEvent(
     description,
     targetAsin,
     affectedKeywords,
+    screenshots,
   });
 }
 
@@ -674,6 +678,42 @@ export async function updateOptimizationEvent(
  */
 export async function deleteOptimizationEvent(id: number): Promise<void> {
   return await invoke("delete_optimization_event", { id });
+}
+
+// ==================== 截图管理 ====================
+
+/**
+ * 获取截图目录路径
+ */
+export async function getScreenshotsDir(): Promise<string> {
+  return await invoke("get_screenshots_dir");
+}
+
+/**
+ * 保存事件截图
+ * @param eventId 事件ID
+ * @param base64Data Base64 编码的图片数据
+ * @param index 图片索引
+ * @returns 保存的文件名
+ */
+export async function saveEventScreenshot(
+  eventId: number,
+  base64Data: string,
+  index: number
+): Promise<string> {
+  return await invoke("save_event_screenshot", {
+    eventId,
+    base64Data,
+    index,
+  });
+}
+
+/**
+ * 删除事件截图
+ * @param filename 文件名
+ */
+export async function deleteEventScreenshot(filename: string): Promise<void> {
+  return await invoke("delete_event_screenshot", { filename });
 }
 
 // ==================== 知识库管理 ====================

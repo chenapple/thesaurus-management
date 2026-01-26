@@ -715,8 +715,9 @@ fn add_optimization_event(
     description: Option<String>,
     target_asin: Option<String>,
     affected_keywords: Option<String>,
+    screenshots: Option<String>,
 ) -> Result<i64, String> {
-    db::add_optimization_event(product_id, event_date, event_type, event_sub_type, title, description, target_asin, affected_keywords)
+    db::add_optimization_event(product_id, event_date, event_type, event_sub_type, title, description, target_asin, affected_keywords, screenshots)
         .map_err(|e| e.to_string())
 }
 
@@ -740,14 +741,82 @@ fn update_optimization_event(
     description: Option<String>,
     target_asin: Option<String>,
     affected_keywords: Option<String>,
+    screenshots: Option<String>,
 ) -> Result<(), String> {
-    db::update_optimization_event(id, event_date, event_type, event_sub_type, title, description, target_asin, affected_keywords)
+    db::update_optimization_event(id, event_date, event_type, event_sub_type, title, description, target_asin, affected_keywords, screenshots)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn delete_optimization_event(id: i64) -> Result<(), String> {
     db::delete_optimization_event(id).map_err(|e| e.to_string())
+}
+
+// 截图管理
+#[tauri::command]
+fn get_screenshots_dir(app: tauri::AppHandle) -> Result<String, String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let screenshots_dir = app_data_dir.join("screenshots");
+    std::fs::create_dir_all(&screenshots_dir).map_err(|e| e.to_string())?;
+    screenshots_dir.to_str().ok_or("Invalid path".to_string()).map(|s| s.to_string())
+}
+
+#[tauri::command]
+fn save_event_screenshot(
+    app: tauri::AppHandle,
+    event_id: i64,
+    base64_data: String,
+    index: usize,
+) -> Result<String, String> {
+    use base64::{Engine as _, engine::general_purpose};
+
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let screenshots_dir = app_data_dir.join("screenshots");
+    std::fs::create_dir_all(&screenshots_dir).map_err(|e| e.to_string())?;
+
+    // 生成文件名: {event_id}_{timestamp}_{index}.png
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+    let filename = format!("{}_{}_{}_.png", event_id, timestamp, index);
+    let file_path = screenshots_dir.join(&filename);
+
+    // 解码 base64 数据（去掉 data:image/xxx;base64, 前缀）
+    let base64_clean = if base64_data.contains(",") {
+        base64_data.split(',').nth(1).unwrap_or(&base64_data)
+    } else {
+        &base64_data
+    };
+
+    let image_data = general_purpose::STANDARD
+        .decode(base64_clean)
+        .map_err(|e| format!("Failed to decode base64: {}", e))?;
+
+    // 检查文件大小（最大 5MB）
+    if image_data.len() > 5 * 1024 * 1024 {
+        return Err("Image size exceeds 5MB limit".to_string());
+    }
+
+    std::fs::write(&file_path, image_data).map_err(|e| e.to_string())?;
+
+    Ok(filename)
+}
+
+#[tauri::command]
+fn delete_event_screenshot(
+    app: tauri::AppHandle,
+    filename: String,
+) -> Result<(), String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let screenshots_dir = app_data_dir.join("screenshots");
+    let file_path = screenshots_dir.join(&filename);
+
+    if file_path.exists() {
+        std::fs::remove_file(&file_path).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 // ==================== 知识库管理 ====================
@@ -2215,6 +2284,10 @@ pub fn run() {
             get_optimization_events,
             update_optimization_event,
             delete_optimization_event,
+            // 截图管理
+            get_screenshots_dir,
+            save_event_screenshot,
+            delete_event_screenshot,
             // 知识库管理
             kb_create_category,
             kb_get_categories,

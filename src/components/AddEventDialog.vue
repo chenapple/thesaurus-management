@@ -157,6 +157,50 @@
           />
         </el-select>
       </el-form-item>
+
+      <el-form-item label="截图">
+        <div
+          class="screenshot-upload-area"
+          @paste="handlePaste"
+          @dragover.prevent
+          @drop.prevent="handleDrop"
+          tabindex="0"
+        >
+          <el-upload
+            ref="uploadRef"
+            :auto-upload="false"
+            :show-file-list="false"
+            accept="image/*"
+            multiple
+            :on-change="handleFileChange"
+            :disabled="uploadedImages.length >= 5"
+          >
+            <div class="upload-trigger" v-if="uploadedImages.length < 5">
+              <el-icon class="upload-icon"><Plus /></el-icon>
+              <div class="upload-text">
+                <span>点击/拖拽/粘贴</span>
+                <span class="upload-hint">最多 5 张，最大 5MB/张</span>
+              </div>
+            </div>
+          </el-upload>
+
+          <div class="uploaded-images" v-if="uploadedImages.length > 0">
+            <div
+              v-for="(img, index) in uploadedImages"
+              :key="index"
+              class="image-item"
+            >
+              <el-image
+                :src="img.url"
+                fit="cover"
+                class="image-preview"
+                @click="previewImage(index)"
+              />
+              <el-icon class="remove-btn" @click="removeImage(index)"><Close /></el-icon>
+            </div>
+          </div>
+        </div>
+      </el-form-item>
     </el-form>
 
     <template #footer>
@@ -170,14 +214,25 @@
       </el-button>
     </template>
   </el-dialog>
+
+  <!-- 图片预览 -->
+  <teleport to="body">
+    <el-image-viewer
+      v-if="previewVisible"
+      :url-list="previewUrls"
+      :initial-index="previewIndex"
+      @close="previewVisible = false"
+    />
+  </teleport>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, watch, computed } from 'vue';
-import type { FormInstance, FormRules } from 'element-plus';
+import type { FormInstance, FormRules, UploadInstance, UploadFile } from 'element-plus';
 import { ElMessage } from 'element-plus';
-import { QuestionFilled, Picture } from '@element-plus/icons-vue';
-import { addOptimizationEvent, updateOptimizationEvent } from '../api';
+import { QuestionFilled, Picture, Plus, Close } from '@element-plus/icons-vue';
+import { addOptimizationEvent, updateOptimizationEvent, saveEventScreenshot, deleteEventScreenshot, getScreenshotsDir } from '../api';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import {
   EVENT_MAIN_TYPES,
   EVENT_SUB_TYPES,
@@ -206,8 +261,24 @@ const emit = defineEmits<{
 }>();
 
 const formRef = ref<FormInstance>();
+const uploadRef = ref<UploadInstance>();
 const submitting = ref(false);
 const selectedKeywords = ref<string[]>([]);
+const screenshotsDir = ref<string>('');
+
+// 上传的图片列表
+interface UploadedImage {
+  url: string;       // 预览 URL (data: URL 或 file: URL)
+  base64: string;    // Base64 数据（用于新上传的图片）
+  filename?: string; // 已保存的文件名（用于编辑时已有的图片）
+  isNew: boolean;    // 是否是新上传的
+}
+const uploadedImages = ref<UploadedImage[]>([]);
+
+// 图片预览状态
+const previewVisible = ref(false);
+const previewIndex = ref(0);
+const previewUrls = computed(() => uploadedImages.value.map(img => img.url));
 
 // 事件范围类型
 type EventScope = 'product' | 'asin' | 'keyword';
@@ -341,6 +412,9 @@ function initForm() {
     } else {
       form.eventScope = 'asin';
     }
+
+    // 加载已有的截图
+    loadExistingScreenshots();
   } else {
     // 新建事件，默认今天
     const today = new Date();
@@ -352,7 +426,152 @@ function initForm() {
     form.eventScope = 'product';
     form.targetAsins = [];
     selectedKeywords.value = [];
+    uploadedImages.value = [];
   }
+}
+
+// 加载已有的截图
+async function loadExistingScreenshots() {
+  uploadedImages.value = [];
+  if (!props.editingEvent?.screenshots) return;
+
+  try {
+    const filenames = JSON.parse(props.editingEvent.screenshots) as string[];
+    if (!screenshotsDir.value) {
+      screenshotsDir.value = await getScreenshotsDir();
+    }
+
+    for (const filename of filenames) {
+      const filePath = `${screenshotsDir.value}/${filename}`;
+      const url = convertFileSrc(filePath);
+      uploadedImages.value.push({
+        url,
+        base64: '',
+        filename,
+        isNew: false,
+      });
+    }
+  } catch (e) {
+    console.error('Failed to load existing screenshots:', e);
+  }
+}
+
+// 处理文件选择
+async function handleFileChange(file: UploadFile) {
+  if (!file.raw) return;
+
+  // 检查文件大小
+  if (file.raw.size > 5 * 1024 * 1024) {
+    ElMessage.warning('图片大小不能超过 5MB');
+    return;
+  }
+
+  // 检查数量限制
+  if (uploadedImages.value.length >= 5) {
+    ElMessage.warning('最多只能上传 5 张图片');
+    return;
+  }
+
+  // 转换为 base64
+  const base64 = await fileToBase64(file.raw);
+  uploadedImages.value.push({
+    url: base64,
+    base64,
+    isNew: true,
+  });
+}
+
+// 处理粘贴事件
+async function handlePaste(event: ClipboardEvent) {
+  const items = event.clipboardData?.items;
+  if (!items) return;
+
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      const file = item.getAsFile();
+      if (!file) continue;
+
+      // 检查文件大小
+      if (file.size > 5 * 1024 * 1024) {
+        ElMessage.warning('图片大小不能超过 5MB');
+        return;
+      }
+
+      // 检查数量限制
+      if (uploadedImages.value.length >= 5) {
+        ElMessage.warning('最多只能上传 5 张图片');
+        return;
+      }
+
+      const base64 = await fileToBase64(file);
+      uploadedImages.value.push({
+        url: base64,
+        base64,
+        isNew: true,
+      });
+    }
+  }
+}
+
+// 处理拖放事件
+async function handleDrop(event: DragEvent) {
+  const files = event.dataTransfer?.files;
+  if (!files) return;
+
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) continue;
+
+    // 检查文件大小
+    if (file.size > 5 * 1024 * 1024) {
+      ElMessage.warning('图片大小不能超过 5MB');
+      continue;
+    }
+
+    // 检查数量限制
+    if (uploadedImages.value.length >= 5) {
+      ElMessage.warning('最多只能上传 5 张图片');
+      break;
+    }
+
+    const base64 = await fileToBase64(file);
+    uploadedImages.value.push({
+      url: base64,
+      base64,
+      isNew: true,
+    });
+  }
+}
+
+// 文件转 base64
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// 移除图片
+async function removeImage(index: number) {
+  const img = uploadedImages.value[index];
+
+  // 如果是已保存的图片，需要删除文件
+  if (!img.isNew && img.filename) {
+    try {
+      await deleteEventScreenshot(img.filename);
+    } catch (e) {
+      console.error('Failed to delete screenshot file:', e);
+    }
+  }
+
+  uploadedImages.value.splice(index, 1);
+}
+
+// 预览图片
+function previewImage(index: number) {
+  previewIndex.value = index;
+  previewVisible.value = true;
 }
 
 // 监听对话框打开
@@ -368,6 +587,7 @@ function handleClose() {
   form.eventScope = 'product';
   form.targetAsins = [];
   selectedKeywords.value = [];
+  uploadedImages.value = [];
   emit('update:modelValue', false);
 }
 
@@ -394,8 +614,49 @@ async function handleSubmit() {
     // 将多选的具体操作序列化为 JSON 字符串
     const eventSubTypesJson = JSON.stringify(form.eventSubTypes);
 
+    // 处理截图
+    // 对于编辑模式，先获取事件 ID；对于新增模式，先创建事件获取 ID
+    let eventId: number;
+    let screenshotsJson: string | undefined;
+
     if (props.editingEvent) {
-      // 更新事件
+      eventId = props.editingEvent.id;
+    } else {
+      // 先创建事件（不含截图），获取 ID
+      eventId = await addOptimizationEvent(
+        props.productId,
+        form.eventDate,
+        form.eventType,
+        eventSubTypesJson,
+        form.title,
+        form.description || undefined,
+        targetAsin,
+        affectedKeywords,
+        undefined
+      );
+    }
+
+    // 保存新上传的截图
+    const screenshotFilenames: string[] = [];
+    for (let i = 0; i < uploadedImages.value.length; i++) {
+      const img = uploadedImages.value[i];
+      if (img.isNew && img.base64) {
+        // 新上传的图片，保存到文件
+        const filename = await saveEventScreenshot(eventId, img.base64, i);
+        screenshotFilenames.push(filename);
+      } else if (img.filename) {
+        // 已有的图片，保留文件名
+        screenshotFilenames.push(img.filename);
+      }
+    }
+
+    // 生成截图 JSON
+    screenshotsJson = screenshotFilenames.length > 0
+      ? JSON.stringify(screenshotFilenames)
+      : undefined;
+
+    if (props.editingEvent) {
+      // 更新事件（包含截图）
       await updateOptimizationEvent(
         props.editingEvent.id,
         form.eventDate,
@@ -404,21 +665,25 @@ async function handleSubmit() {
         form.title,
         form.description || undefined,
         targetAsin,
-        affectedKeywords
+        affectedKeywords,
+        screenshotsJson
       );
       ElMessage.success('事件已更新');
     } else {
-      // 添加事件
-      await addOptimizationEvent(
-        props.productId,
-        form.eventDate,
-        form.eventType,
-        eventSubTypesJson,
-        form.title,
-        form.description || undefined,
-        targetAsin,
-        affectedKeywords
-      );
+      // 更新事件以包含截图
+      if (screenshotsJson) {
+        await updateOptimizationEvent(
+          eventId,
+          form.eventDate,
+          form.eventType,
+          eventSubTypesJson,
+          form.title,
+          form.description || undefined,
+          targetAsin,
+          affectedKeywords,
+          screenshotsJson
+        );
+      }
       ElMessage.success('事件已记录');
     }
 
@@ -486,5 +751,102 @@ async function handleSubmit() {
 .asin-text {
   font-family: monospace;
   font-size: 13px;
+}
+
+/* 截图上传区域样式 */
+.screenshot-upload-area {
+  width: 100%;
+  outline: none;
+}
+
+.screenshot-upload-area:focus {
+  outline: none;
+}
+
+.upload-trigger {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 80px;
+  border: 1px dashed var(--el-border-color);
+  border-radius: 6px;
+  background: var(--el-fill-color-lighter);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.upload-trigger:hover {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.upload-icon {
+  font-size: 24px;
+  color: var(--el-text-color-placeholder);
+  margin-bottom: 4px;
+}
+
+.upload-text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.upload-hint {
+  font-size: 10px;
+  color: var(--el-text-color-placeholder);
+  margin-top: 2px;
+}
+
+.uploaded-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.image-item {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+.image-preview {
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+.remove-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  color: white;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.image-item:hover .remove-btn {
+  opacity: 1;
+}
+
+.remove-btn:hover {
+  background: var(--el-color-danger);
 }
 </style>
