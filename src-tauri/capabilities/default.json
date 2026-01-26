@@ -13,6 +13,12 @@
     "fs:default",
     "fs:allow-read",
     "fs:write-all",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        "$APPDATA/**"
+      ]
+    },
     "updater:default",
     "process:allow-restart",
     "clipboard-manager:default",
