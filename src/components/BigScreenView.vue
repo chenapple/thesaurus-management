@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { FullScreen, Refresh, Close } from '@element-plus/icons-vue';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getVersion } from '@tauri-apps/api/app';
 import * as echarts from 'echarts';
 import type { MonitoringStats, TrafficLevelStats, OptimizationEvent, Product, SchedulerSettings, SchedulerStatus } from '../types';
 
@@ -35,6 +36,40 @@ const isFullscreen = ref(false);
 const currentTime = ref('');
 const currentDate = ref('');
 let timeTimer: ReturnType<typeof setInterval> | null = null;
+
+// 应用版本
+const appVersion = ref('');
+
+// 排名榜轮播
+const risersPage = ref(0);
+const fallersPage = ref(0);
+const CAROUSEL_PAGE_SIZE = 5;
+const CAROUSEL_INTERVAL = 5000; // 5秒切换一次
+let carouselTimer: ReturnType<typeof setInterval> | null = null;
+
+// 计算当前显示的排名数据
+function getVisibleRisers() {
+  const start = risersPage.value * CAROUSEL_PAGE_SIZE;
+  return props.topRisers.slice(start, start + CAROUSEL_PAGE_SIZE);
+}
+
+function getVisibleFallers() {
+  const start = fallersPage.value * CAROUSEL_PAGE_SIZE;
+  return props.topFallers.slice(start, start + CAROUSEL_PAGE_SIZE);
+}
+
+// 轮播下一页
+function nextCarouselPage() {
+  const risersMaxPage = Math.ceil(props.topRisers.length / CAROUSEL_PAGE_SIZE) - 1;
+  const fallersMaxPage = Math.ceil(props.topFallers.length / CAROUSEL_PAGE_SIZE) - 1;
+
+  if (risersMaxPage > 0) {
+    risersPage.value = risersPage.value >= risersMaxPage ? 0 : risersPage.value + 1;
+  }
+  if (fallersMaxPage > 0) {
+    fallersPage.value = fallersPage.value >= fallersMaxPage ? 0 : fallersPage.value + 1;
+  }
+}
 
 // 数字动画
 const animatedKeywordCount = ref(0);
@@ -320,9 +355,19 @@ watch([() => props.monitoringStats, () => props.trafficStats], () => {
   updateCharts();
 }, { deep: true });
 
-onMounted(() => {
+onMounted(async () => {
   updateTime();
   timeTimer = setInterval(updateTime, 1000);
+
+  // 启动排名榜轮播
+  carouselTimer = setInterval(nextCarouselPage, CAROUSEL_INTERVAL);
+
+  // 获取应用版本
+  try {
+    appVersion.value = await getVersion();
+  } catch (e) {
+    appVersion.value = '0.0.0';
+  }
 
   // 初始动画
   animateNumber(props.stats.keywordCount, animatedKeywordCount);
@@ -343,6 +388,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (timeTimer) clearInterval(timeTimer);
+  if (carouselTimer) clearInterval(carouselTimer);
   window.removeEventListener('resize', handleResize);
   rankingChart?.dispose();
   trafficChart?.dispose();
@@ -423,36 +469,54 @@ onUnmounted(() => {
           <!-- 排名上升榜 -->
           <div class="data-card flex-grow">
             <div class="card-header">
-              <span class="card-title">排名上升 TOP5</span>
+              <span class="card-title">
+                排名上升
+                <span v-if="topRisers.length > CAROUSEL_PAGE_SIZE" class="page-indicator">
+                  {{ risersPage + 1 }}/{{ Math.ceil(topRisers.length / CAROUSEL_PAGE_SIZE) }}
+                </span>
+              </span>
               <span class="card-badge rise">RISING</span>
             </div>
             <div class="card-body">
-              <div class="rank-list">
-                <div v-for="(item, index) in topRisers.slice(0, 5)" :key="index" class="rank-item rise">
-                  <span class="rank-index">{{ index + 1 }}</span>
+              <TransitionGroup name="rank-fade" tag="div" class="rank-list">
+                <div
+                  v-for="(item, index) in getVisibleRisers()"
+                  :key="item.keyword"
+                  class="rank-item rise"
+                >
+                  <span class="rank-index">{{ risersPage * CAROUSEL_PAGE_SIZE + index + 1 }}</span>
                   <span class="rank-keyword">{{ item.keyword }}</span>
                   <span class="rank-change">+{{ item.change }}</span>
                 </div>
-                <div v-if="topRisers.length === 0" class="empty-hint">暂无数据</div>
-              </div>
+              </TransitionGroup>
+              <div v-if="topRisers.length === 0" class="empty-hint">暂无数据</div>
             </div>
           </div>
 
           <!-- 排名下降榜 -->
           <div class="data-card flex-grow">
             <div class="card-header">
-              <span class="card-title">排名下降 TOP5</span>
+              <span class="card-title">
+                排名下降
+                <span v-if="topFallers.length > CAROUSEL_PAGE_SIZE" class="page-indicator">
+                  {{ fallersPage + 1 }}/{{ Math.ceil(topFallers.length / CAROUSEL_PAGE_SIZE) }}
+                </span>
+              </span>
               <span class="card-badge fall">FALLING</span>
             </div>
             <div class="card-body">
-              <div class="rank-list">
-                <div v-for="(item, index) in topFallers.slice(0, 5)" :key="index" class="rank-item fall">
-                  <span class="rank-index">{{ index + 1 }}</span>
+              <TransitionGroup name="rank-fade" tag="div" class="rank-list">
+                <div
+                  v-for="(item, index) in getVisibleFallers()"
+                  :key="item.keyword"
+                  class="rank-item fall"
+                >
+                  <span class="rank-index">{{ fallersPage * CAROUSEL_PAGE_SIZE + index + 1 }}</span>
                   <span class="rank-keyword">{{ item.keyword }}</span>
                   <span class="rank-change">{{ item.change }}</span>
                 </div>
-                <div v-if="topFallers.length === 0" class="empty-hint">暂无数据</div>
-              </div>
+              </TransitionGroup>
+              <div v-if="topFallers.length === 0" class="empty-hint">暂无数据</div>
             </div>
           </div>
         </aside>
@@ -632,7 +696,7 @@ onUnmounted(() => {
           <span>系统运行正常</span>
         </div>
         <div class="footer-center">
-          <span>THESAURUS MANAGEMENT SYSTEM v0.9.7</span>
+          <span>THESAURUS MANAGEMENT SYSTEM v{{ appVersion }}</span>
         </div>
         <div class="footer-right">
           <span>数据更新于 {{ currentTime }}</span>
@@ -1454,6 +1518,34 @@ onUnmounted(() => {
 @keyframes statusPulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
+}
+
+/* 排名榜轮播动画 */
+.rank-fade-enter-active,
+.rank-fade-leave-active {
+  transition: all 0.4s ease;
+}
+
+.rank-fade-enter-from {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
+.rank-fade-leave-to {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.rank-fade-move {
+  transition: transform 0.4s ease;
+}
+
+/* 页码指示器 */
+.page-indicator {
+  font-size: 12px;
+  color: rgba(0, 212, 255, 0.7);
+  margin-left: 8px;
+  font-family: 'Orbitron', monospace;
 }
 
 /* 滚动条 */

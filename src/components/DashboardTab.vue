@@ -462,59 +462,161 @@ interface Holiday {
 
 // 节日数据 - 格式: "MM-DD" 或 "MM-DD-YYYY" 用于特定年份
 const holidayData: Record<string, Holiday[]> = {
-  // 一月
-  '01-01': [{ name: '元旦', type: 'universal' }],
+  // ==================== 一月 ====================
+  '01-01': [{ name: '元旦', type: 'universal' }, { name: '年货节开始', type: 'promo', markets: ['CN'] }],
+  '01-02': [{ name: '日本新年假期', type: 'japan', markets: ['JP'] }],
+  '01-03': [{ name: '日本新年假期', type: 'japan', markets: ['JP'] }],
+  '01-06': [{ name: '主显节', type: 'western', markets: ['ES', 'IT'] }],
+  '01-13': [{ name: '成人日 (日本)', type: 'japan', markets: ['JP'] }],
   '01-15': [{ name: 'MLK Day (美)', type: 'western', markets: ['US'] }],
-  '01-26': [{ name: '澳大利亚国庆日', type: 'western', markets: ['AU'] }],
-  // 二月
+  '01-26': [{ name: '澳大利亚国庆日', type: 'western', markets: ['AU'] }, { name: '共和国日 (印度)', type: 'western', markets: ['IN'] }],
+  // ==================== 二月 ====================
+  '02-01': [{ name: '年货节结束', type: 'promo', markets: ['CN'] }],
+  '02-03': [{ name: '节分 (日本)', type: 'japan', markets: ['JP'] }],
+  '02-11': [{ name: '建国纪念日 (日本)', type: 'japan', markets: ['JP'] }],
   '02-14': [{ name: '情人节', type: 'universal' }],
-  // 三月
-  '03-08': [{ name: '妇女节', type: 'universal' }],
-  '03-17': [{ name: '圣帕特里克节', type: 'western', markets: ['US', 'UK'] }],
-  // 四月
+  '02-17': [{ name: '总统日 (美)', type: 'western', markets: ['US'] }],
+  '02-23': [{ name: '天皇诞辰 (日本)', type: 'japan', markets: ['JP'] }],
+  // ==================== 三月 ====================
+  '03-03': [{ name: '女儿节 (日本)', type: 'japan', markets: ['JP'] }],
+  '03-08': [{ name: '38女王节', type: 'promo', markets: ['CN'] }, { name: '妇女节', type: 'universal' }],
+  '03-14': [{ name: '白色情人节', type: 'japan', markets: ['JP', 'KR'] }],
+  '03-17': [{ name: '圣帕特里克节', type: 'western', markets: ['US', 'UK', 'IE'] }],
+  '03-20': [{ name: '春分日 (日本)', type: 'japan', markets: ['JP'] }],
+  '03-21': [{ name: '春季大促开始', type: 'promo' }],
+  // ==================== 四月 ====================
   '04-01': [{ name: '愚人节', type: 'western' }],
-  // 五月 - 母亲节是5月第二个周日，这里用固定日期近似
+  '04-22': [{ name: '地球日', type: 'universal' }],
+  '04-23': [{ name: '圣乔治日 (英)', type: 'western', markets: ['UK'] }],
+  '04-27': [{ name: '国王节 (荷兰)', type: 'western', markets: ['NL'] }],
+  '04-29': [{ name: '昭和日 (日本)', type: 'japan', markets: ['JP'] }],
+  // ==================== 五月 ====================
   '05-01': [{ name: '劳动节', type: 'universal' }],
-  '05-05': [{ name: '儿童节 (日本)', type: 'japan', markets: ['JP'] }],
-  '05-11': [{ name: '母亲节', type: 'universal' }],
-  '05-31': [{ name: 'Memorial Day (美)', type: 'western', markets: ['US'] }],
-  // 六月
-  '06-01': [{ name: '儿童节', type: 'chinese', markets: ['CN'] }],
-  '06-15': [{ name: '父亲节', type: 'universal' }],
+  '05-03': [{ name: '宪法纪念日 (日本)', type: 'japan', markets: ['JP'] }],
+  '05-04': [{ name: '绿之日 (日本)', type: 'japan', markets: ['JP'] }],
+  '05-05': [{ name: '儿童节 (日本)', type: 'japan', markets: ['JP'] }, { name: '五五大促', type: 'promo', markets: ['CN'] }],
+  '05-06': [{ name: '黄金周结束 (日本)', type: 'japan', markets: ['JP'] }],
+  '05-09': [{ name: '欧洲日', type: 'western', markets: ['EU'] }],
+  '05-26': [{ name: 'Memorial Day (美)', type: 'western', markets: ['US'] }],
+  // ==================== 六月 ====================
+  '06-01': [{ name: '儿童节', type: 'chinese', markets: ['CN'] }, { name: '618预热开始', type: 'promo', markets: ['CN'] }],
+  '06-14': [{ name: '美国国旗日', type: 'western', markets: ['US'] }],
+  '06-16': [{ name: '618预售开始', type: 'promo', markets: ['CN'] }],
   '06-18': [{ name: '618 大促', type: 'promo', markets: ['CN'] }],
-  // 七月
+  '06-20': [{ name: '618返场', type: 'promo', markets: ['CN'] }],
+  '06-21': [{ name: '夏至', type: 'universal' }],
+  // ==================== 七月 ====================
+  '07-01': [{ name: '加拿大国庆日', type: 'western', markets: ['CA'] }, { name: '暑期大促开始', type: 'promo' }],
   '07-04': [{ name: '美国独立日', type: 'western', markets: ['US'] }],
-  '07-15': [{ name: 'Prime Day (预估)', type: 'promo', markets: ['US', 'UK', 'DE', 'JP'] }],
-  '07-16': [{ name: 'Prime Day (预估)', type: 'promo', markets: ['US', 'UK', 'DE', 'JP'] }],
-  // 八月
-  '08-15': [{ name: '盂兰盆节', type: 'japan', markets: ['JP'] }],
-  // 九月
-  '09-01': [{ name: '返校季开始', type: 'promo', markets: ['US'] }],
-  '09-04': [{ name: 'Labor Day (美)', type: 'western', markets: ['US'] }],
-  // 十月
-  '10-01': [{ name: '国庆节', type: 'chinese', markets: ['CN'] }],
-  '10-09': [{ name: '感恩节 (加)', type: 'western', markets: ['CA'] }],
-  '10-31': [{ name: '万圣节', type: 'western', markets: ['US', 'UK'] }],
-  // 十一月
-  '11-11': [{ name: '双十一', type: 'promo', markets: ['CN'] }, { name: '光棍节', type: 'chinese', markets: ['CN'] }],
-  '11-23': [{ name: '感恩节 (美)', type: 'western', markets: ['US'] }],
-  '11-24': [{ name: '黑色星期五', type: 'promo' }],
-  '11-27': [{ name: '网络星期一', type: 'promo' }],
-  // 十二月
-  '12-12': [{ name: '双十二', type: 'promo', markets: ['CN'] }],
+  '07-07': [{ name: '七夕 (日本)', type: 'japan', markets: ['JP'] }],
+  '07-14': [{ name: '法国国庆日', type: 'western', markets: ['FR'] }],
+  '07-15': [{ name: 'Prime Day', type: 'promo', markets: ['US', 'UK', 'DE', 'JP', 'CA', 'FR', 'IT', 'ES'] }],
+  '07-16': [{ name: 'Prime Day', type: 'promo', markets: ['US', 'UK', 'DE', 'JP', 'CA', 'FR', 'IT', 'ES'] }],
+  '07-17': [{ name: '海之日 (日本)', type: 'japan', markets: ['JP'] }],
+  // ==================== 八月 ====================
+  '08-01': [{ name: '瑞士国庆日', type: 'western', markets: ['CH'] }],
+  '08-11': [{ name: '山之日 (日本)', type: 'japan', markets: ['JP'] }],
+  '08-13': [{ name: '盂兰盆节开始 (日本)', type: 'japan', markets: ['JP'] }],
+  '08-15': [{ name: '盂兰盆节 (日本)', type: 'japan', markets: ['JP'] }, { name: '印度独立日', type: 'western', markets: ['IN'] }],
+  '08-16': [{ name: '盂兰盆节结束 (日本)', type: 'japan', markets: ['JP'] }],
+  // ==================== 九月 ====================
+  '09-01': [{ name: '返校季', type: 'promo', markets: ['US', 'UK', 'DE'] }],
+  '09-02': [{ name: 'Labor Day (美)', type: 'western', markets: ['US'] }],
+  '09-09': [{ name: '99大促', type: 'promo', markets: ['CN'] }],
+  '09-15': [{ name: '敬老日 (日本)', type: 'japan', markets: ['JP'] }],
+  '09-22': [{ name: '秋分日 (日本)', type: 'japan', markets: ['JP'] }],
+  // ==================== 十月 ====================
+  '10-01': [{ name: '国庆节', type: 'chinese', markets: ['CN'] }, { name: '国庆大促', type: 'promo', markets: ['CN'] }],
+  '10-03': [{ name: '德国统一日', type: 'western', markets: ['DE'] }],
+  '10-08': [{ name: '秋季Prime Day', type: 'promo', markets: ['US', 'UK', 'DE', 'JP'] }],
+  '10-09': [{ name: '秋季Prime Day', type: 'promo', markets: ['US', 'UK', 'DE', 'JP'] }, { name: '感恩节 (加)', type: 'western', markets: ['CA'] }],
+  '10-12': [{ name: '哥伦布日 (美)', type: 'western', markets: ['US'] }, { name: '西班牙国庆日', type: 'western', markets: ['ES'] }],
+  '10-14': [{ name: '体育日 (日本)', type: 'japan', markets: ['JP'] }],
+  '10-20': [{ name: '双十一预热开始', type: 'promo', markets: ['CN'] }],
+  '10-31': [{ name: '万圣节', type: 'western', markets: ['US', 'UK', 'CA', 'AU'] }],
+  // ==================== 十一月 ====================
+  '11-01': [{ name: '双十一预售', type: 'promo', markets: ['CN'] }, { name: '万圣节翌日', type: 'western', markets: ['MX'] }],
+  '11-03': [{ name: '文化日 (日本)', type: 'japan', markets: ['JP'] }],
+  '11-11': [{ name: '双十一', type: 'promo', markets: ['CN'] }, { name: '光棍节', type: 'chinese', markets: ['CN'] }, { name: '退伍军人节 (美)', type: 'western', markets: ['US'] }],
+  '11-15': [{ name: '七五三 (日本)', type: 'japan', markets: ['JP'] }],
+  '11-23': [{ name: '勤劳感谢日 (日本)', type: 'japan', markets: ['JP'] }],
+  // ==================== 十二月 ====================
+  '12-02': [{ name: '捐赠星期二', type: 'promo', markets: ['US'] }],
+  '12-05': [{ name: '圣诞购物季开始', type: 'promo' }],
+  '12-12': [{ name: '双十二', type: 'promo', markets: ['CN'] }, { name: '绿色星期一', type: 'promo', markets: ['US'] }],
+  '12-14': [{ name: '免运日 (美)', type: 'promo', markets: ['US'] }],
+  '12-21': [{ name: '冬至', type: 'universal' }, { name: '超级星期六', type: 'promo', markets: ['US'] }],
   '12-24': [{ name: '平安夜', type: 'western' }],
   '12-25': [{ name: '圣诞节', type: 'western' }],
-  '12-26': [{ name: 'Boxing Day', type: 'western', markets: ['UK', 'CA', 'AU'] }],
-  '12-31': [{ name: '除夕', type: 'universal' }],
+  '12-26': [{ name: 'Boxing Day', type: 'western', markets: ['UK', 'CA', 'AU'] }, { name: '节后大促开始', type: 'promo' }],
+  '12-31': [{ name: '除夕', type: 'universal' }, { name: '年末清仓', type: 'promo' }],
 };
 
-// 2026年特定节日（农历节日等）
-const holiday2026: Record<string, Holiday[]> = {
-  '02-17': [{ name: '春节', type: 'chinese', markets: ['CN'] }],
-  '04-05': [{ name: '清明节', type: 'chinese', markets: ['CN'] }],
-  '04-05-2026': [{ name: '复活节', type: 'western' }],
-  '05-31': [{ name: '端午节', type: 'chinese', markets: ['CN'] }],
-  '10-06': [{ name: '中秋节', type: 'chinese', markets: ['CN'] }],
+// 特定年份节日（农历节日、动态节日等）
+const yearlyHolidays: Record<number, Record<string, Holiday[]>> = {
+  2025: {
+    '01-29': [{ name: '春节', type: 'chinese', markets: ['CN'] }],
+    '02-12': [{ name: '元宵节', type: 'chinese', markets: ['CN'] }],
+    '04-04': [{ name: '清明节', type: 'chinese', markets: ['CN'] }],
+    '04-20': [{ name: '复活节', type: 'western' }],
+    '05-05': [{ name: '端午节', type: 'chinese', markets: ['CN'] }],
+    '05-11': [{ name: '母亲节', type: 'universal' }],
+    '06-15': [{ name: '父亲节', type: 'universal' }],
+    '08-10': [{ name: '七夕节', type: 'chinese', markets: ['CN'] }],
+    '10-06': [{ name: '中秋节', type: 'chinese', markets: ['CN'] }],
+    '10-29': [{ name: '重阳节', type: 'chinese', markets: ['CN'] }],
+    '11-27': [{ name: '感恩节 (美)', type: 'western', markets: ['US'] }],
+    '11-28': [{ name: '黑色星期五', type: 'promo' }],
+    '11-29': [{ name: '小企业星期六', type: 'promo', markets: ['US'] }],
+    '12-01': [{ name: '网络星期一', type: 'promo' }],
+  },
+  2026: {
+    '02-17': [{ name: '春节', type: 'chinese', markets: ['CN'] }],
+    '03-03': [{ name: '元宵节', type: 'chinese', markets: ['CN'] }],
+    '04-05': [{ name: '清明节', type: 'chinese', markets: ['CN'] }, { name: '复活节', type: 'western' }],
+    '05-10': [{ name: '母亲节', type: 'universal' }],
+    '05-31': [{ name: '端午节', type: 'chinese', markets: ['CN'] }],
+    '06-21': [{ name: '父亲节', type: 'universal' }],
+    '08-19': [{ name: '七夕节', type: 'chinese', markets: ['CN'] }],
+    '10-06': [{ name: '中秋节', type: 'chinese', markets: ['CN'] }],
+    '10-18': [{ name: '重阳节', type: 'chinese', markets: ['CN'] }],
+    '11-26': [{ name: '感恩节 (美)', type: 'western', markets: ['US'] }],
+    '11-27': [{ name: '黑色星期五', type: 'promo' }],
+    '11-28': [{ name: '小企业星期六', type: 'promo', markets: ['US'] }],
+    '11-30': [{ name: '网络星期一', type: 'promo' }],
+  },
+  2027: {
+    '02-06': [{ name: '春节', type: 'chinese', markets: ['CN'] }],
+    '02-20': [{ name: '元宵节', type: 'chinese', markets: ['CN'] }],
+    '03-28': [{ name: '复活节', type: 'western' }],
+    '04-05': [{ name: '清明节', type: 'chinese', markets: ['CN'] }],
+    '05-09': [{ name: '母亲节', type: 'universal' }],
+    '06-19': [{ name: '端午节', type: 'chinese', markets: ['CN'] }],
+    '06-20': [{ name: '父亲节', type: 'universal' }],
+    '08-08': [{ name: '七夕节', type: 'chinese', markets: ['CN'] }],
+    '09-25': [{ name: '中秋节', type: 'chinese', markets: ['CN'] }],
+    '10-07': [{ name: '重阳节', type: 'chinese', markets: ['CN'] }],
+    '11-25': [{ name: '感恩节 (美)', type: 'western', markets: ['US'] }],
+    '11-26': [{ name: '黑色星期五', type: 'promo' }],
+    '11-27': [{ name: '小企业星期六', type: 'promo', markets: ['US'] }],
+    '11-29': [{ name: '网络星期一', type: 'promo' }],
+  },
+  2028: {
+    '01-26': [{ name: '春节', type: 'chinese', markets: ['CN'] }],
+    '02-09': [{ name: '元宵节', type: 'chinese', markets: ['CN'] }],
+    '04-04': [{ name: '清明节', type: 'chinese', markets: ['CN'] }],
+    '04-16': [{ name: '复活节', type: 'western' }],
+    '05-14': [{ name: '母亲节', type: 'universal' }],
+    '06-06': [{ name: '端午节', type: 'chinese', markets: ['CN'] }],
+    '06-18': [{ name: '父亲节', type: 'universal' }],
+    '08-26': [{ name: '七夕节', type: 'chinese', markets: ['CN'] }],
+    '10-13': [{ name: '中秋节', type: 'chinese', markets: ['CN'] }],
+    '10-25': [{ name: '重阳节', type: 'chinese', markets: ['CN'] }],
+    '11-23': [{ name: '感恩节 (美)', type: 'western', markets: ['US'] }],
+    '11-24': [{ name: '黑色星期五', type: 'promo' }],
+    '11-25': [{ name: '小企业星期六', type: 'promo', markets: ['US'] }],
+    '11-27': [{ name: '网络星期一', type: 'promo' }],
+  },
 };
 
 // 获取某月的天数
@@ -537,9 +639,10 @@ function getHolidaysForDate(year: number, month: number, day: number): Holiday[]
     holidays.push(...holidayData[mmdd]);
   }
 
-  // 查找特定年份节日
-  if (year === 2026 && holiday2026[mmdd]) {
-    holidays.push(...holiday2026[mmdd]);
+  // 查找特定年份节日（农历节日、动态节日等）
+  const yearHolidays = yearlyHolidays[year];
+  if (yearHolidays && yearHolidays[mmdd]) {
+    holidays.push(...yearHolidays[mmdd]);
   }
 
   return holidays;
