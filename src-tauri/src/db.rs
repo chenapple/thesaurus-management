@@ -382,6 +382,9 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
     // 初始化汇率缓存表
     init_exchange_rate_table(&conn)?;
 
+    // 初始化汇率历史表
+    init_exchange_rate_history_table(&conn)?;
+
     DB.set(Mutex::new(conn))
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
@@ -6753,4 +6756,78 @@ pub fn get_exchange_rates() -> Result<Vec<ExchangeRateCache>> {
     })?;
 
     rows.collect()
+}
+
+// ==================== 汇率历史记录 ====================
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExchangeRateHistory {
+    pub currency: String,
+    pub rate: f64,
+    pub date: String,
+}
+
+pub fn init_exchange_rate_history_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS exchange_rate_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            currency TEXT NOT NULL,
+            rate REAL NOT NULL,
+            date TEXT NOT NULL,
+            UNIQUE(currency, date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_rate_history_currency_date
+        ON exchange_rate_history(currency, date);
+        "
+    )?;
+    Ok(())
+}
+
+// 保存每日汇率历史（每天每个货币只保存一条）
+pub fn save_exchange_rate_history(rates: Vec<(String, f64)>) -> Result<()> {
+    let conn = get_db().lock();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+    for (currency, rate) in rates {
+        conn.execute(
+            "INSERT OR REPLACE INTO exchange_rate_history (currency, rate, date) VALUES (?1, ?2, ?3)",
+            rusqlite::params![currency, rate, today],
+        )?;
+    }
+
+    Ok(())
+}
+
+// 获取指定货币的历史汇率（默认30天）
+pub fn get_exchange_rate_history(currency: &str, days: i32) -> Result<Vec<ExchangeRateHistory>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT currency, rate, date FROM exchange_rate_history
+         WHERE currency = ?1
+         AND date >= date('now', ?2)
+         ORDER BY date ASC"
+    )?;
+
+    let days_param = format!("-{} days", days);
+    let rows = stmt.query_map(rusqlite::params![currency, days_param], |row| {
+        Ok(ExchangeRateHistory {
+            currency: row.get(0)?,
+            rate: row.get(1)?,
+            date: row.get(2)?,
+        })
+    })?;
+
+    rows.collect()
+}
+
+// 清理超过指定天数的历史数据
+pub fn cleanup_old_exchange_rate_history(days: i32) -> Result<usize> {
+    let conn = get_db().lock();
+    let days_param = format!("-{} days", days);
+    let deleted = conn.execute(
+        "DELETE FROM exchange_rate_history WHERE date < date('now', ?1)",
+        rusqlite::params![days_param],
+    )?;
+    Ok(deleted)
 }

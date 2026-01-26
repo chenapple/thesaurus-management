@@ -1043,6 +1043,12 @@ export interface ExchangeRateCache {
   updated_at: string;
 }
 
+export interface ExchangeRateHistory {
+  currency: string;
+  rate: number;
+  date: string;
+}
+
 // 汇率显示配置
 export const EXCHANGE_RATE_CURRENCIES: Array<{
   code: string;

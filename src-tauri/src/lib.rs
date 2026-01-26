@@ -9,7 +9,7 @@ mod ai;
 use db::{BackupInfo, Category, KeywordData, KeywordMonitoring, MonitoringSparkline, MonitoringStats, Product, RankingHistory, RankingSnapshot, RootWithCategories, TrafficLevelStats, UncategorizedKeyword, WorkflowStatus};
 use db::{KbCategory, KbDocument, KbChunk, KbSearchResult, KbConversation, KbMessage, KbDocumentLink, KbDocumentCategory};
 use db::ScProject;
-use db::{QuickNote, ExchangeRateCache};
+use db::{QuickNote, ExchangeRateCache, ExchangeRateHistory};
 use scheduler::{SchedulerSettings, SchedulerStatus, SCHEDULER, MARKET_RESEARCH_SCHEDULER};
 use crawler::{BsrResult, SubcategoryResult};
 use tauri::Manager;
@@ -2039,11 +2039,19 @@ async fn fetch_exchange_rates(currencies: Vec<String>) -> Result<Vec<ExchangeRat
 
     // 保存到数据库缓存
     if !rates_to_save.is_empty() {
-        db::save_exchange_rates(rates_to_save).map_err(|e| e.to_string())?;
+        db::save_exchange_rates(rates_to_save.clone()).map_err(|e| e.to_string())?;
+        // 同时保存每日历史记录
+        let _ = db::save_exchange_rate_history(rates_to_save);
     }
 
     // 返回最新的缓存数据
     db::get_exchange_rates().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_exchange_rate_history(currency: String, days: Option<i32>) -> Result<Vec<ExchangeRateHistory>, String> {
+    let days = days.unwrap_or(30);
+    db::get_exchange_rate_history(&currency, days).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2340,6 +2348,7 @@ pub fn run() {
             save_exchange_rates,
             get_exchange_rates,
             fetch_exchange_rates,
+            get_exchange_rate_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

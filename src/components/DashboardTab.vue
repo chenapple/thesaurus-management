@@ -1,8 +1,17 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
-import { TrendCharts, Document, Monitor, Folder, Top, Bottom, Timer, FullScreen, Calendar, ArrowLeft, ArrowRight } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
+import { TrendCharts, Document, Monitor, Folder, Top, Bottom, Timer, FullScreen, Calendar, ArrowLeft, ArrowRight, Loading } from '@element-plus/icons-vue';
 import BigScreenView from './BigScreenView.vue';
 import * as api from '../api';
+import VChart from 'vue-echarts';
+import { use } from 'echarts/core';
+import { CanvasRenderer } from 'echarts/renderers';
+import { LineChart } from 'echarts/charts';
+import { GridComponent, TooltipComponent, MarkPointComponent } from 'echarts/components';
+
+// 注册 ECharts 组件
+use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, MarkPointComponent]);
 import { chatStream, checkApiKeyConfigured } from '../ai-service';
 
 // 视图模式
@@ -78,6 +87,7 @@ const schedulerStatus = ref<SchedulerStatus | null>(null);
 const schedulerSettings = ref<SchedulerSettings | null>(null);
 const countdownText = ref('');
 let countdownTimer: ReturnType<typeof setInterval> | null = null;
+let exchangeRateRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
 // 分离的倒计时数据（用于大字体显示）
 const countdownHours = ref('00');
@@ -356,6 +366,8 @@ onUnmounted(() => {
   stopClock();
   // 停止汇率轮播
   stopRateCarousel();
+  // 停止汇率自动刷新
+  stopExchangeRateRefreshTimer();
   // 移除事件监听
   window.removeEventListener('exchange-rate-settings-changed', handleExchangeRateSettingsChanged);
 });
@@ -743,6 +755,10 @@ const upcomingHolidays = ref<UpcomingHoliday[]>([]);
 const currentHolidayIndex = ref(0);
 const holidayAiSuggestions = ref<string[]>([]);
 const holidayAiLoading = ref(false);
+const selectedSuggestions = ref<number[]>([]);
+const addingToNotes = ref(false);
+// 缓存每个节日的 AI 建议，key 为节日名称
+const holidaySuggestionsCache = ref<Map<string, string[]>>(new Map());
 
 // 通用建议模板（AI 失败时兜底）
 const fallbackSuggestions: Record<HolidayType, string[]> = {
@@ -796,8 +812,15 @@ function findUpcomingHolidays(): UpcomingHoliday[] {
   return result;
 }
 
-// 生成 AI 建议
+// 生成 AI 建议（带缓存）
 async function generateHolidaySuggestions(holiday: UpcomingHoliday) {
+  // 检查缓存，如果已有建议则直接使用
+  const cached = holidaySuggestionsCache.value.get(holiday.name);
+  if (cached) {
+    holidayAiSuggestions.value = cached;
+    return;
+  }
+
   holidayAiLoading.value = true;
   holidayAiSuggestions.value = [];
 
@@ -812,7 +835,9 @@ async function generateHolidaySuggestions(holiday: UpcomingHoliday) {
   }
 
   if (!provider) {
-    holidayAiSuggestions.value = fallbackSuggestions[holiday.type] || fallbackSuggestions.universal;
+    const suggestions = fallbackSuggestions[holiday.type] || fallbackSuggestions.universal;
+    holidayAiSuggestions.value = suggestions;
+    holidaySuggestionsCache.value.set(holiday.name, suggestions);
     holidayAiLoading.value = false;
     return;
   }
@@ -841,12 +866,17 @@ ${holiday.markets ? `相关市场：${holiday.markets.join(', ')}` : ''}
 
     if (suggestions.length > 0) {
       holidayAiSuggestions.value = suggestions.slice(0, 5);
+      holidaySuggestionsCache.value.set(holiday.name, suggestions.slice(0, 5));
     } else {
-      holidayAiSuggestions.value = fallbackSuggestions[holiday.type] || fallbackSuggestions.universal;
+      const fallback = fallbackSuggestions[holiday.type] || fallbackSuggestions.universal;
+      holidayAiSuggestions.value = fallback;
+      holidaySuggestionsCache.value.set(holiday.name, fallback);
     }
   } catch (e) {
     console.error('生成节日建议失败:', e);
-    holidayAiSuggestions.value = fallbackSuggestions[holiday.type] || fallbackSuggestions.universal;
+    const fallback = fallbackSuggestions[holiday.type] || fallbackSuggestions.universal;
+    holidayAiSuggestions.value = fallback;
+    holidaySuggestionsCache.value.set(holiday.name, fallback);
   } finally {
     holidayAiLoading.value = false;
   }
@@ -873,7 +903,47 @@ function nextHoliday() {
 // 关闭提醒（记录今日已提醒）
 function closeHolidayReminder() {
   showHolidayReminder.value = false;
+  selectedSuggestions.value = [];
+  holidaySuggestionsCache.value.clear();
   localStorage.setItem('holiday_reminder_last_date', new Date().toISOString().split('T')[0]);
+}
+
+// 切换建议选中状态
+function toggleSuggestion(idx: number) {
+  const index = selectedSuggestions.value.indexOf(idx);
+  if (index > -1) {
+    selectedSuggestions.value.splice(index, 1);
+  } else {
+    selectedSuggestions.value.push(idx);
+  }
+}
+
+// 将选中的建议加入备忘录
+async function addSuggestionsToNotes() {
+  if (selectedSuggestions.value.length === 0 || !currentHoliday.value) return;
+
+  addingToNotes.value = true;
+  try {
+    // 按索引排序，保持原顺序
+    const sortedIndices = [...selectedSuggestions.value].sort((a, b) => a - b);
+
+    for (const idx of sortedIndices) {
+      const suggestion = holidayAiSuggestions.value[idx];
+      if (suggestion) {
+        // 添加节日标签前缀
+        const content = `【${currentHoliday.value.name}】${suggestion}`;
+        await api.addQuickNote(content);
+      }
+    }
+
+    ElMessage.success(`已添加 ${selectedSuggestions.value.length} 条建议到备忘录`);
+    selectedSuggestions.value = [];
+  } catch (e) {
+    console.error('添加备忘录失败:', e);
+    ElMessage.error('添加失败，请重试');
+  } finally {
+    addingToNotes.value = false;
+  }
 }
 
 // 本节日不再提醒
@@ -939,6 +1009,7 @@ const currentRateIndex = ref(0);
 const rateSlideDirection = ref<'up' | 'down'>('up'); // 滑动方向
 let rateCarouselTimer: ReturnType<typeof setInterval> | null = null;
 const RATE_CAROUSEL_INTERVAL = 3000; // 3秒切换一次
+const isRateHovered = ref(false); // 鼠标是否悬停在汇率区域
 
 // 获取当前显示的货币
 const currentDisplayCurrency = computed(() => {
@@ -950,7 +1021,7 @@ const currentDisplayCurrency = computed(() => {
 // 开始汇率自动轮播
 function startRateCarousel() {
   stopRateCarousel();
-  if (displayCurrencies.value.length > 1) {
+  if (displayCurrencies.value.length > 1 && !isRateHovered.value) {
     rateCarouselTimer = setInterval(() => {
       rateSlideDirection.value = 'up'; // 自动轮播向上滑动
       currentRateIndex.value = (currentRateIndex.value + 1) % displayCurrencies.value.length;
@@ -964,6 +1035,18 @@ function stopRateCarousel() {
     clearInterval(rateCarouselTimer);
     rateCarouselTimer = null;
   }
+}
+
+// 鼠标悬停汇率区域时暂停轮播
+function onRateMouseEnter() {
+  isRateHovered.value = true;
+  stopRateCarousel();
+}
+
+// 鼠标离开汇率区域时恢复轮播
+function onRateMouseLeave() {
+  isRateHovered.value = false;
+  startRateCarousel();
 }
 
 // 汇率滚轮切换
@@ -1009,17 +1092,49 @@ const displayCurrencies = computed(() => {
   return EXCHANGE_RATE_CURRENCIES.filter(c => selectedCurrencies.value.includes(c.code));
 });
 
+// 从 localStorage 加载上次汇率（用于比较涨跌）
+function loadPreviousRatesFromStorage() {
+  try {
+    const saved = localStorage.getItem('previous_exchange_rates');
+    if (saved) {
+      const parsed = JSON.parse(saved) as [string, number][];
+      previousExchangeRates.value = new Map(parsed);
+    }
+  } catch (e) {
+    console.error('加载上次汇率失败:', e);
+  }
+}
+
+// 将当前汇率保存到 localStorage（作为下次比较的基准）
+function saveCurrentRatesToStorage() {
+  try {
+    if (exchangeRates.value.size > 0) {
+      const data = Array.from(exchangeRates.value.entries());
+      localStorage.setItem('previous_exchange_rates', JSON.stringify(data));
+    }
+  } catch (e) {
+    console.error('保存汇率失败:', e);
+  }
+}
+
 // 加载缓存的汇率
 async function loadCachedRates() {
   try {
+    // 先从 localStorage 加载上次汇率
+    loadPreviousRatesFromStorage();
+
     const cached = await api.getExchangeRates();
     if (cached.length > 0) {
       cached.forEach(item => {
         exchangeRates.value.set(item.currency, item.rate);
       });
-      // 初始化 previousExchangeRates，这样下次刷新时就有对比数据
-      previousExchangeRates.value = new Map(exchangeRates.value);
       exchangeRatesUpdatedAt.value = cached[0]?.updated_at || null;
+
+      // 如果没有上次汇率数据，用当前汇率初始化（首次使用）
+      if (previousExchangeRates.value.size === 0) {
+        previousExchangeRates.value = new Map(exchangeRates.value);
+        saveCurrentRatesToStorage();
+      }
     }
   } catch (e) {
     console.error('加载缓存汇率失败:', e);
@@ -1033,14 +1148,17 @@ async function fetchExchangeRates() {
     // 获取需要的货币代码列表
     const currencies = EXCHANGE_RATE_CURRENCIES.map(c => c.code);
 
+    // 在获取新汇率前，将当前汇率保存为"上次汇率"
+    if (exchangeRates.value.size > 0) {
+      previousExchangeRates.value = new Map(exchangeRates.value);
+      saveCurrentRatesToStorage();
+    }
+
     // 调用后端 API 获取汇率
     const result = await api.fetchExchangeRates(currencies);
 
     // 更新本地状态
     if (result && result.length > 0) {
-      // 保存当前汇率作为"上次汇率"用于比较涨跌
-      previousExchangeRates.value = new Map(exchangeRates.value);
-
       result.forEach(item => {
         exchangeRates.value.set(item.currency, item.rate);
       });
@@ -1067,6 +1185,148 @@ function formatRate(currency: string): string {
   return rate.toFixed(2);
 }
 
+// 启动汇率自动刷新定时器（每小时刷新一次）
+function startExchangeRateRefreshTimer() {
+  // 清除已存在的定时器
+  if (exchangeRateRefreshTimer) {
+    clearInterval(exchangeRateRefreshTimer);
+  }
+  // 每小时刷新一次汇率
+  exchangeRateRefreshTimer = setInterval(() => {
+    console.log('自动刷新汇率...');
+    fetchExchangeRates();
+  }, 60 * 60 * 1000); // 1小时 = 3600000毫秒
+}
+
+// 停止汇率自动刷新定时器
+function stopExchangeRateRefreshTimer() {
+  if (exchangeRateRefreshTimer) {
+    clearInterval(exchangeRateRefreshTimer);
+    exchangeRateRefreshTimer = null;
+  }
+}
+
+// ==================== 汇率趋势图 ====================
+
+import type { ExchangeRateHistory } from '../types';
+
+const rateHistoryLoading = ref(false);
+const rateHistoryData = ref<ExchangeRateHistory[]>([]);
+const rateHistoryCache = ref<Map<string, ExchangeRateHistory[]>>(new Map());
+
+// 加载汇率历史数据
+async function loadRateHistory(currency: string) {
+  // 检查缓存
+  if (rateHistoryCache.value.has(currency)) {
+    rateHistoryData.value = rateHistoryCache.value.get(currency) || [];
+    return;
+  }
+
+  rateHistoryLoading.value = true;
+  try {
+    const history = await api.getExchangeRateHistory(currency, 30);
+    rateHistoryData.value = history;
+    // 缓存数据
+    rateHistoryCache.value.set(currency, history);
+  } catch (e) {
+    console.error('加载汇率历史失败:', e);
+    rateHistoryData.value = [];
+  } finally {
+    rateHistoryLoading.value = false;
+  }
+}
+
+// 计算历史数据最高最低值
+const rateHistoryMax = computed(() => {
+  if (rateHistoryData.value.length === 0) return 0;
+  return Math.max(...rateHistoryData.value.map(d => d.rate));
+});
+
+const rateHistoryMin = computed(() => {
+  if (rateHistoryData.value.length === 0) return 0;
+  return Math.min(...rateHistoryData.value.map(d => d.rate));
+});
+
+// 趋势图配置
+const rateChartOption = computed(() => {
+  if (rateHistoryData.value.length === 0) return {};
+
+  const dates = rateHistoryData.value.map(d => d.date.slice(5)); // 只显示 MM-DD
+  const rates = rateHistoryData.value.map(d => d.rate);
+  const maxRate = rateHistoryMax.value;
+  const minRate = rateHistoryMin.value;
+  const maxIdx = rates.indexOf(maxRate);
+  const minIdx = rates.indexOf(minRate);
+
+  return {
+    grid: {
+      left: 45,
+      right: 15,
+      top: 20,
+      bottom: 25,
+    },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: any) => {
+        const data = params[0];
+        return `${data.axisValue}<br/>汇率: ${data.value.toFixed(4)}`;
+      }
+    },
+    xAxis: {
+      type: 'category',
+      data: dates,
+      axisLabel: {
+        fontSize: 10,
+        interval: Math.floor(dates.length / 5) - 1,
+      },
+      axisLine: { lineStyle: { color: '#ddd' } },
+    },
+    yAxis: {
+      type: 'value',
+      scale: true,
+      axisLabel: {
+        fontSize: 10,
+        formatter: (v: number) => v.toFixed(2),
+      },
+      splitLine: { lineStyle: { color: '#f0f0f0' } },
+    },
+    series: [{
+      type: 'line',
+      data: rates,
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 4,
+      lineStyle: { width: 2, color: '#409eff' },
+      areaStyle: {
+        color: {
+          type: 'linear',
+          x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: 'rgba(64,158,255,0.3)' },
+            { offset: 1, color: 'rgba(64,158,255,0.05)' }
+          ]
+        }
+      },
+      markPoint: {
+        symbol: 'circle',
+        symbolSize: 8,
+        data: [
+          {
+            name: '最高',
+            coord: [maxIdx, maxRate],
+            itemStyle: { color: '#f56c6c' },
+          },
+          {
+            name: '最低',
+            coord: [minIdx, minRate],
+            itemStyle: { color: '#67c23a' },
+          }
+        ]
+      }
+    }]
+  };
+});
+
 // 初始化时加载用户汇率偏好
 loadCurrencyPreference();
 
@@ -1082,6 +1342,8 @@ loadCachedRates().then(() => {
       fetchExchangeRates();
     }
   }
+  // 启动每小时自动刷新定时器
+  startExchangeRateRefreshTimer();
 });
 </script>
 
@@ -1146,31 +1408,77 @@ loadCachedRates().then(() => {
             <span class="clock-time">{{ currentTime }}</span>
           </div>
           <span class="header-divider"></span>
-          <!-- 汇率显示（轮播） -->
+          <!-- 汇率显示（轮播）带趋势图 -->
           <div
-            class="exchange-rates"
+            class="exchange-rates-wrapper"
             v-if="currentDisplayCurrency"
-            @wheel="handleRateWheel"
-            :title="`1 ${currentDisplayCurrency.code} = ${formatRate(currentDisplayCurrency.code)} CNY${currentDisplayCurrency.multiplier ? ` (×${currentDisplayCurrency.multiplier})` : ''} (滚轮切换货币)`"
+            @mouseenter="onRateMouseEnter"
+            @mouseleave="onRateMouseLeave"
           >
-            <transition :name="rateSlideDirection === 'up' ? 'rate-slide-up' : 'rate-slide-down'" mode="out-in">
-              <span class="rate-item" :key="currentDisplayCurrency.code">
-                <span class="rate-flag" v-html="currentDisplayCurrency.flag"></span>
-                <span class="rate-code">{{ currentDisplayCurrency.code }}</span>
-                <span class="rate-value">{{ formatRate(currentDisplayCurrency.code) }}</span>
-                <span
-                  v-if="getRateDirection(currentDisplayCurrency.code) !== null"
-                  class="rate-direction"
-                  :class="{
-                    up: getRateDirection(currentDisplayCurrency.code) === 1,
-                    down: getRateDirection(currentDisplayCurrency.code) === -1,
-                    equal: getRateDirection(currentDisplayCurrency.code) === 0
-                  }"
+            <el-popover
+              placement="bottom"
+              :width="320"
+              trigger="hover"
+              :show-after="300"
+              @before-enter="loadRateHistory(currentDisplayCurrency.code)"
+            >
+              <template #reference>
+                <div
+                  class="exchange-rates"
+                  @wheel="handleRateWheel"
+                  :title="`1 ${currentDisplayCurrency.code} = ${formatRate(currentDisplayCurrency.code)} CNY${currentDisplayCurrency.multiplier ? ` (×${currentDisplayCurrency.multiplier})` : ''} (滚轮切换货币)`"
                 >
-                  {{ getRateDirection(currentDisplayCurrency.code) === 1 ? '↑' : getRateDirection(currentDisplayCurrency.code) === -1 ? '↓' : '—' }}
-                </span>
-              </span>
-            </transition>
+                  <transition :name="rateSlideDirection === 'up' ? 'rate-slide-up' : 'rate-slide-down'" mode="out-in">
+                    <span class="rate-item" :key="currentDisplayCurrency.code">
+                      <span class="rate-flag" v-html="currentDisplayCurrency.flag"></span>
+                      <span class="rate-code">{{ currentDisplayCurrency.code }}</span>
+                      <span class="rate-value">{{ formatRate(currentDisplayCurrency.code) }}</span>
+                      <span
+                        v-if="getRateDirection(currentDisplayCurrency.code) !== null"
+                        class="rate-direction"
+                        :class="{
+                          up: getRateDirection(currentDisplayCurrency.code) === 1,
+                          down: getRateDirection(currentDisplayCurrency.code) === -1,
+                          equal: getRateDirection(currentDisplayCurrency.code) === 0
+                        }"
+                      >
+                        {{ getRateDirection(currentDisplayCurrency.code) === 1 ? '↑' : getRateDirection(currentDisplayCurrency.code) === -1 ? '↓' : '—' }}
+                      </span>
+                    </span>
+                  </transition>
+                </div>
+              </template>
+              <!-- 趋势图内容 -->
+              <div class="rate-trend-popover">
+                <div class="trend-header">
+                  <span class="trend-title">{{ currentDisplayCurrency.code }}/CNY 汇率趋势 (30天)</span>
+                </div>
+                <div v-if="rateHistoryLoading" class="trend-loading">
+                  <el-icon class="is-loading"><Loading /></el-icon>
+                  <span>加载中...</span>
+                </div>
+                <div v-else-if="rateHistoryData.length < 2" class="trend-no-data">
+                  <span>暂无历史数据，需要持续记录几天后才能显示趋势</span>
+                </div>
+                <div v-else class="trend-chart-container">
+                  <v-chart class="trend-chart" :option="rateChartOption" autoresize />
+                  <div class="trend-stats">
+                    <span class="stat-item">
+                      <span class="label">最高:</span>
+                      <span class="value high">{{ rateHistoryMax.toFixed(4) }}</span>
+                    </span>
+                    <span class="stat-item">
+                      <span class="label">最低:</span>
+                      <span class="value low">{{ rateHistoryMin.toFixed(4) }}</span>
+                    </span>
+                    <span class="stat-item">
+                      <span class="label">当前:</span>
+                      <span class="value">{{ formatRate(currentDisplayCurrency.code) }}</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </el-popover>
           </div>
           <!-- 大屏模式切换 -->
           <el-button
@@ -1532,10 +1840,24 @@ loadCachedRates().then(() => {
           <div class="suggestions-title">
             <el-icon v-if="holidayAiLoading" class="is-loading"><Timer /></el-icon>
             <span>{{ holidayAiLoading ? 'AI 正在生成建议...' : '准备建议' }}</span>
+            <span v-if="!holidayAiLoading && holidayAiSuggestions.length > 0" class="suggestions-hint">
+              (勾选后可加入备忘录)
+            </span>
           </div>
           <ul class="suggestions-list" v-if="!holidayAiLoading && holidayAiSuggestions.length > 0">
-            <li v-for="(suggestion, idx) in holidayAiSuggestions" :key="idx">
-              {{ suggestion }}
+            <li
+              v-for="(suggestion, idx) in holidayAiSuggestions"
+              :key="idx"
+              class="suggestion-item"
+              :class="{ selected: selectedSuggestions.includes(idx) }"
+              @click="toggleSuggestion(idx)"
+            >
+              <el-checkbox
+                :model-value="selectedSuggestions.includes(idx)"
+                @click.stop
+                @change="toggleSuggestion(idx)"
+              />
+              <span class="suggestion-text">{{ suggestion }}</span>
             </li>
           </ul>
           <div class="suggestions-loading" v-if="holidayAiLoading">
@@ -1546,6 +1868,14 @@ loadCachedRates().then(() => {
         <!-- 按钮 -->
         <div class="reminder-actions">
           <el-button @click="dismissCurrentHoliday">本节日不再提醒</el-button>
+          <el-button
+            v-if="selectedSuggestions.length > 0"
+            type="success"
+            :loading="addingToNotes"
+            @click="addSuggestionsToNotes"
+          >
+            加入备忘录 ({{ selectedSuggestions.length }})
+          </el-button>
           <el-button type="primary" @click="closeHolidayReminder">知道了</el-button>
         </div>
       </div>
@@ -1831,6 +2161,10 @@ loadCachedRates().then(() => {
 }
 
 /* 汇率显示 */
+.exchange-rates-wrapper {
+  display: inline-flex;
+}
+
 .exchange-rates {
   display: flex;
   align-items: center;
@@ -1925,6 +2259,71 @@ loadCachedRates().then(() => {
 .rate-slide-down-leave-to {
   opacity: 0;
   transform: translateY(12px);
+}
+
+/* 汇率趋势图弹出框 */
+.rate-trend-popover {
+  .trend-header {
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #f0f0f0;
+
+    .trend-title {
+      font-size: 14px;
+      font-weight: 500;
+      color: #333;
+    }
+  }
+
+  .trend-loading,
+  .trend-no-data {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 30px 0;
+    color: #999;
+    font-size: 13px;
+  }
+
+  .trend-chart-container {
+    .trend-chart {
+      width: 100%;
+      height: 160px;
+    }
+
+    .trend-stats {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid #f0f0f0;
+
+      .stat-item {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 12px;
+
+        .label {
+          color: #999;
+        }
+
+        .value {
+          font-weight: 500;
+          color: #333;
+
+          &.high {
+            color: #f56c6c;
+          }
+
+          &.low {
+            color: #67c23a;
+          }
+        }
+      }
+    }
+  }
 }
 
 /* Card Utility - Glassmorphism */
@@ -2577,15 +2976,49 @@ html.dark .timeline-tag {
   margin-bottom: 12px;
 }
 
-.suggestions-list {
-  margin: 0;
-  padding-left: 20px;
+.suggestions-hint {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  margin-left: 8px;
 }
 
-.suggestions-list li {
+.suggestions-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.suggestion-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: 4px 0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: var(--el-fill-color-light);
+}
+
+.suggestion-item:hover {
+  background: var(--el-fill-color);
+}
+
+.suggestion-item.selected {
+  background: var(--el-color-success-light-9);
+  border: 1px solid var(--el-color-success-light-5);
+}
+
+.suggestion-item .el-checkbox {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.suggestion-text {
   font-size: 14px;
   color: var(--el-text-color-regular);
-  line-height: 1.8;
+  line-height: 1.6;
+  flex: 1;
 }
 
 .suggestions-loading {
@@ -2596,6 +3029,7 @@ html.dark .timeline-tag {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 /* Responsive */

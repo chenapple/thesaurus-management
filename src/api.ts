@@ -1463,7 +1463,7 @@ export async function adGetAllAnalysis(projectId: number): Promise<AdAnalysisRec
 
 // ==================== 快捷备忘录 ====================
 
-import type { QuickNote, ExchangeRateCache } from './types';
+import type { QuickNote, ExchangeRateCache, ExchangeRateHistory } from './types';
 
 /**
  * 添加快捷备忘
@@ -1562,4 +1562,14 @@ export async function getExchangeRates(): Promise<ExchangeRateCache[]> {
  */
 export async function fetchExchangeRates(currencies: string[]): Promise<ExchangeRateCache[]> {
   return await invoke("fetch_exchange_rates", { currencies });
+}
+
+/**
+ * 获取指定货币的历史汇率
+ * @param currency 货币代码，如 'USD'
+ * @param days 获取多少天的历史，默认30天
+ * @returns 历史汇率数据
+ */
+export async function getExchangeRateHistory(currency: string, days: number = 30): Promise<ExchangeRateHistory[]> {
+  return await invoke("get_exchange_rate_history", { currency, days });
 }
