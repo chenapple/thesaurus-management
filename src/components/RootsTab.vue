@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import { ElMessage } from "element-plus";
-import { Plus, RefreshLeft, Collection, ArrowLeft, Edit } from "@element-plus/icons-vue";
+import { ref, computed } from "vue";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { Plus, RefreshLeft, Collection, ArrowLeft, Edit, CircleClose, CircleCheck } from "@element-plus/icons-vue";
 import * as api from "../api";
 import type { Root, Category, Product } from "../types";
 
-defineProps<{
+const props = defineProps<{
   selectedProduct: Product | null;
   roots: Root[];
   total: number;
@@ -24,6 +24,7 @@ const emit = defineEmits<{
   (e: 'load-roots'): void;
   (e: 'toggle-category', rootId: number, categoryId: number): void;
   (e: 'switch-to-keywords'): void;
+  (e: 'negative-changed'): void;
 }>();
 
 // Translation editing
@@ -32,6 +33,10 @@ const editingTranslation = ref("");
 
 // Category dropdown
 const categoryDropdownVisible = ref<{ [key: number]: boolean }>({});
+
+// Selection for batch operations
+const selectedRoots = ref<Root[]>([]);
+const tableRef = ref<InstanceType<typeof import('element-plus')['ElTable']> | null>(null);
 
 function startEdit(row: Root) {
   editingId.value = row.id;
@@ -78,18 +83,107 @@ function clearSearch() {
   emit('update:searchText', '');
   emit('load-roots');
 }
+
+// Selection handling
+function handleSelectionChange(rows: Root[]) {
+  selectedRoots.value = rows;
+}
+
+function clearSelection() {
+  selectedRoots.value = [];
+  tableRef.value?.clearSelection();
+}
+
+// Toggle negative for single root
+async function handleToggleNegative(row: Root, isNegative: boolean) {
+  try {
+    const affected = await api.setRootNegative(row.id, isNegative);
+    row.is_negative = isNegative;
+    ElMessage.success(
+      isNegative
+        ? `已标记为否词，${affected} 个关键词受影响`
+        : `已取消否词标记，${affected} 个关键词已恢复`
+    );
+    // 通知父组件刷新关键词数据
+    emit('negative-changed');
+  } catch (e) {
+    // Revert UI state on error
+    row.is_negative = !isNegative;
+    ElMessage.error("操作失败: " + e);
+  }
+}
+
+// Batch set negative
+async function batchSetNegative(isNegative: boolean) {
+  if (selectedRoots.value.length === 0) return;
+
+  const ids = selectedRoots.value.map((r) => r.id);
+  const action = isNegative ? "标记为否词" : "取消否词标记";
+
+  try {
+    await ElMessageBox.confirm(
+      `确定要将选中的 ${selectedRoots.value.length} 个词根${action}吗？`,
+      "批量操作",
+      { confirmButtonText: "确定", cancelButtonText: "取消", type: "warning" }
+    );
+
+    const affected = await api.batchSetRootsNegative(ids, isNegative);
+
+    // Update local state
+    for (const root of selectedRoots.value) {
+      root.is_negative = isNegative;
+    }
+
+    ElMessage.success(`已${action} ${selectedRoots.value.length} 个词根，共 ${affected} 个关键词受影响`);
+    clearSelection();
+    // 通知父组件刷新关键词数据
+    emit('negative-changed');
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error("操作失败: " + e);
+    }
+  }
+}
+
+// Computed for negative count
+const negativeCount = computed(() => {
+  return props.roots.filter((r) => r.is_negative).length;
+});
 </script>
 
 <template>
   <div class="roots-tab">
+    <!-- Batch operations toolbar -->
+    <div v-if="selectedRoots.length > 0" class="batch-toolbar">
+      <span class="batch-info">已选中 {{ selectedRoots.length }} 个词根</span>
+      <el-button type="danger" size="small" @click="batchSetNegative(true)">
+        <el-icon><CircleClose /></el-icon>
+        批量标记否词
+      </el-button>
+      <el-button size="small" @click="batchSetNegative(false)">
+        <el-icon><CircleCheck /></el-icon>
+        批量取消否词
+      </el-button>
+      <el-button text @click="clearSelection">取消选择</el-button>
+    </div>
+
+    <!-- Info bar (shown when no selection) -->
+    <div v-else-if="negativeCount > 0" class="info-bar">
+      <span class="negative-info">
+        已标记 {{ negativeCount }} 个否词词根
+      </span>
+    </div>
+
     <!-- Roots table -->
     <div class="table-container">
       <el-table
+        ref="tableRef"
         :data="roots"
         v-loading="loading"
         stripe
         style="width: 100%"
         :default-sort="{ prop: 'contains_count', order: 'descending' }"
+        @selection-change="handleSelectionChange"
       >
         <template #empty>
           <div class="table-empty-state">
@@ -108,11 +202,25 @@ function clearSearch() {
             </el-button>
           </div>
         </template>
+
+        <el-table-column type="selection" width="40" />
         <el-table-column type="index" label="#" width="50" />
 
         <el-table-column label="词根" min-width="120">
           <template #default="{ row }">
-            <span class="word-cell">{{ row.word }}</span>
+            <span class="word-cell" :class="{ 'is-negative': row.is_negative }">
+              {{ row.word }}
+            </span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="否词" width="80" align="center">
+          <template #default="{ row }">
+            <el-switch
+              :model-value="row.is_negative"
+              size="small"
+              @change="(val: boolean) => handleToggleNegative(row, val)"
+            />
           </template>
         </el-table-column>
 
@@ -225,6 +333,36 @@ function clearSearch() {
   overflow: hidden;
 }
 
+.info-bar {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.batch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--el-color-warning-light-9);
+  border-bottom: 1px solid var(--el-color-warning-light-5);
+  flex-shrink: 0;
+}
+
+.batch-info {
+  font-size: 14px;
+  color: var(--el-color-warning-dark-2);
+  font-weight: 500;
+}
+
+.negative-info {
+  font-size: 13px;
+  color: var(--el-color-danger);
+}
+
 .table-container {
   flex: 1;
   overflow: auto;
@@ -247,6 +385,11 @@ function clearSearch() {
 .word-cell {
   font-weight: 500;
   color: var(--accent-color);
+}
+
+.word-cell.is-negative {
+  color: var(--el-color-danger);
+  text-decoration: line-through;
 }
 
 .translation-cell {

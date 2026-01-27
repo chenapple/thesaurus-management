@@ -139,6 +139,7 @@ pub struct RootWithCategories {
     pub contains_count: i64,
     pub percentage: f64,
     pub categories: Vec<i64>,
+    pub is_negative: bool,  // 是否为否词词根
 }
 
 // 关键词完整数据结构
@@ -365,6 +366,9 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
     // 迁移关键词监控表：添加 tags 列
     migrate_keyword_monitoring_tags(&conn)?;
 
+    // 迁移词根表：添加 is_negative 列
+    migrate_roots_add_is_negative(&conn)?;
+
     // 初始化知识库表
     init_knowledge_base_tables(&conn)?;
 
@@ -537,6 +541,21 @@ fn migrate_keyword_monitoring_tags(conn: &Connection) -> Result<()> {
     if !has_tags {
         // 添加 tags 列
         conn.execute("ALTER TABLE keyword_monitoring ADD COLUMN tags TEXT", [])?;
+    }
+
+    Ok(())
+}
+
+// 数据库迁移：为词根表添加 is_negative 字段
+fn migrate_roots_add_is_negative(conn: &Connection) -> Result<()> {
+    // 检查 roots 表是否存在 is_negative 列
+    let has_is_negative: bool = conn
+        .prepare("SELECT is_negative FROM roots LIMIT 1")
+        .is_ok();
+
+    if !has_is_negative {
+        // 添加 is_negative 列，默认为 0 (false)
+        conn.execute("ALTER TABLE roots ADD COLUMN is_negative INTEGER DEFAULT 0", [])?;
     }
 
     Ok(())
@@ -928,7 +947,8 @@ pub fn get_roots(
     let mut sql = String::from(
         "
         SELECT DISTINCT r.id, r.word, r.translation,
-               (SELECT COUNT(*) FROM keyword_roots WHERE root_id = r.id) as contains_count
+               (SELECT COUNT(*) FROM keyword_roots WHERE root_id = r.id) as contains_count,
+               COALESCE(r.is_negative, 0) as is_negative
         FROM roots r
         ",
     );
@@ -994,6 +1014,7 @@ pub fn get_roots(
             } else {
                 0.0
             };
+            let is_negative_int: i64 = row.get(4)?;
             Ok(RootWithCategories {
                 id: row.get(0)?,
                 word: row.get(1)?,
@@ -1001,6 +1022,7 @@ pub fn get_roots(
                 contains_count,
                 percentage,
                 categories: Vec::new(),
+                is_negative: is_negative_int != 0,
             })
         })?
         .collect::<Result<Vec<_>>>()?;
@@ -1039,6 +1061,98 @@ pub fn update_root_translation(id: i64, translation: String) -> Result<()> {
         rusqlite::params![translation, id],
     )?;
     Ok(())
+}
+
+// 设置词根的否词状态并同步到关联的关键词
+// 返回受影响的关键词数量
+pub fn set_root_negative(id: i64, is_negative: bool) -> Result<i64> {
+    let conn = get_db().lock();
+
+    // 获取词根信息
+    let (word, product_id): (String, i64) = conn.query_row(
+        "SELECT word, product_id FROM roots WHERE id = ?1",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+
+    // 更新词根的 is_negative 状态
+    conn.execute(
+        "UPDATE roots SET is_negative = ?1 WHERE id = ?2",
+        rusqlite::params![if is_negative { 1 } else { 0 }, id],
+    )?;
+
+    // 使用字符串匹配同步到关联的关键词（不依赖 keyword_roots 表）
+    // 匹配关键词中包含该词根的记录（作为完整单词或单词前缀）
+    let word_pattern = format!("% {}%", word.to_lowercase());
+    let word_pattern_start = format!("{}%", word.to_lowercase());
+
+    let affected = if is_negative {
+        // 标记为否词时：更新所有包含该词根的关键词
+        conn.execute(
+            "UPDATE keyword_data SET negative_word = ?1
+             WHERE product_id = ?2
+             AND (
+                 LOWER(' ' || keyword) LIKE ?3
+                 OR LOWER(keyword) LIKE ?4
+             )",
+            rusqlite::params![word, product_id, word_pattern, word_pattern_start],
+        )?
+    } else {
+        // 取消否词时：只清除 negative_word 等于该词根的记录
+        conn.execute(
+            "UPDATE keyword_data SET negative_word = NULL
+             WHERE product_id = ?1
+             AND negative_word = ?2
+             AND (
+                 LOWER(' ' || keyword) LIKE ?3
+                 OR LOWER(keyword) LIKE ?4
+             )",
+            rusqlite::params![product_id, word, word_pattern, word_pattern_start],
+        )?
+    };
+
+    Ok(affected as i64)
+}
+
+// 批量设置词根的否词状态（通过ID列表）
+// 返回受影响的关键词总数量
+pub fn batch_set_roots_negative(ids: Vec<i64>, is_negative: bool) -> Result<i64> {
+    let mut total_affected: i64 = 0;
+    for id in ids {
+        total_affected += set_root_negative(id, is_negative)?;
+    }
+    Ok(total_affected)
+}
+
+// 批量设置词根的否词状态（通过词根word列表，用于AI推荐）
+// 返回受影响的关键词总数量
+pub fn batch_set_roots_negative_by_words(
+    product_id: i64,
+    words: Vec<String>,
+    is_negative: bool,
+) -> Result<i64> {
+    // 先查找所有词根ID
+    let mut root_ids: Vec<i64> = Vec::new();
+    {
+        let conn = get_db().lock();
+        for word in &words {
+            if let Ok(id) = conn.query_row(
+                "SELECT id FROM roots WHERE word = ?1 AND product_id = ?2",
+                rusqlite::params![word, product_id],
+                |row| row.get::<_, i64>(0),
+            ) {
+                root_ids.push(id);
+            }
+        }
+    }
+
+    // 然后逐个设置否词状态
+    let mut total_affected: i64 = 0;
+    for id in root_ids {
+        total_affected += set_root_negative(id, is_negative)?;
+    }
+
+    Ok(total_affected)
 }
 
 // 为词根添加分类

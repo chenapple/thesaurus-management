@@ -6,7 +6,7 @@ export const columnDefinitions = [
   { key: "keyword", label: "关键词", required: true },
   { key: "translation", label: "翻译", default: true },
   { key: "traffic_level", label: "流量级别", default: true },
-  { key: "negative_word", label: "否词", default: false },
+  { key: "negative_word", label: "否词", default: true },
   { key: "orderliness", label: "有序性", default: true },
   { key: "phrase_tag", label: "词组标签", default: true },
   { key: "primary_category", label: "一级分类", default: true },

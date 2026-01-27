@@ -35,6 +35,7 @@ export interface AnalysisResult {
   word: string;
   translation: string;
   categories: string[];
+  is_negative?: boolean;  // 是否为与产品不相关的否词
 }
 
 // 关键词分类结果
@@ -74,25 +75,43 @@ async function fetchWithTimeout(
 // 单批次分析（支持取消）
 export async function analyzeWords(
   words: string[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  productName?: string  // 产品名称，用于判断否词
 ): Promise<AnalysisResult[]> {
   // 获取 API Key
   const apiKey = await getDeepSeekApiKey();
 
+  // 根据是否有产品名构建不同的prompt
+  const negativeInstruction = productName
+    ? `
+3. 是否为否词（is_negative）：判断该词根是否与产品"${productName}"不相关。如果该词根明显指向其他品类、其他人群、竞品品牌等与该产品无关的概念，则标记为true。`
+    : "";
+
+  const negativeExample = productName
+    ? `, "is_negative": false`
+    : "";
+
+  const negativeExamples = productName
+    ? `
+  {"word": "dog", "translation": "狗", "categories": ["其他"], "is_negative": true},
+  {"word": "men", "translation": "男士", "categories": ["适用人群"], "is_negative": true}`
+    : "";
+
   const prompt = `你是一个电商关键词分析专家。请分析以下英文词根，为每个词提供：
 1. 中文翻译（简洁准确）
-2. 分类标签（从以下分类中选择1-3个最合适的）
+2. 分类标签（从以下分类中选择1-3个最合适的）${negativeInstruction}
 
 可选分类：${CATEGORIES.join("、")}
+${productName ? `\n当前产品：${productName}` : ""}
 
 词根列表：
 ${words.join("\n")}
 
 请严格按照以下JSON格式返回，不要有其他内容：
 [
-  {"word": "helmet", "translation": "头盔", "categories": ["品类词"]},
-  {"word": "kids", "translation": "儿童", "categories": ["适用人群"]},
-  {"word": "blue", "translation": "蓝色", "categories": ["颜色"]}
+  {"word": "helmet", "translation": "头盔", "categories": ["品类词"]${negativeExample}},
+  {"word": "kids", "translation": "儿童", "categories": ["适用人群"]${negativeExample}},
+  {"word": "blue", "translation": "蓝色", "categories": ["颜色"]${negativeExample}}${negativeExamples}
 ]`;
 
   const response = await fetchWithTimeout(
@@ -176,6 +195,7 @@ export interface BatchAnalyzeOptions {
   onProgress?: (current: number, total: number) => void;
   onBatchComplete?: (results: AnalysisResult[]) => Promise<void>;
   signal?: AbortSignal;
+  productName?: string;  // 产品名称，用于判断否词
 }
 
 // 批量分析（支持并发和取消）
@@ -189,6 +209,7 @@ export async function batchAnalyzeWords(
     onProgress,
     onBatchComplete,
     signal,
+    productName,
   } = options;
 
   const allResults: AnalysisResult[] = [];
@@ -207,7 +228,7 @@ export async function batchAnalyzeWords(
       throw new DOMException("Aborted", "AbortError");
     }
 
-    const batchResults = await analyzeWords(batch, signal);
+    const batchResults = await analyzeWords(batch, signal, productName);
 
     // 更新进度
     completedWords += batch.length;

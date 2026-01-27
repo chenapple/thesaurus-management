@@ -15,7 +15,7 @@ const helpSearchQuery = ref('');
 
 const helpSections = [
   { id: 'dashboard', title: '数据概览', icon: 'DataAnalysis', keywords: ['首页', '数据', '统计', '关键词', '监控', '排名变化', '待办'] },
-  { id: 'keywords', title: '词库管理', icon: 'Collection', keywords: ['关键词', '导入', '分类', '词根', '流量', '搜索量', 'AI', '西柚', '卖家精灵'] },
+  { id: 'keywords', title: '词库管理', icon: 'Collection', keywords: ['关键词', '导入', '分类', '词根', '流量', '搜索量', 'AI', '西柚', '卖家精灵', '否词', '批量', '标记'] },
   { id: 'monitoring', title: '排名监控', icon: 'TrendCharts', keywords: ['排名', '监控', '追踪', '变化', '调度', '定时', '通知'] },
   { id: 'smartcopy', title: '智能文案', icon: 'EditPen', keywords: ['文案', '标题', '五点', 'listing', 'AI', '竞品', '分析', '新品', '老品'] },
   { id: 'ads', title: '智能广告', icon: 'Promotion', keywords: ['广告', 'ACOS', 'CPC', '否词', '优化', '预算', '投放'] },
@@ -129,19 +129,31 @@ function handleClose() {
         <!-- Keywords help -->
         <div v-show="activeHelpTab === 'keywords'" class="help-content">
           <h4>功能说明</h4>
-          <p>管理和分析亚马逊关键词数据，支持导入第三方工具数据、AI智能分类、流量分级等功能。</p>
+          <p>管理和分析亚马逊关键词数据，支持导入第三方工具数据、AI智能分类、流量分级、否词标记等功能。</p>
           <ul>
             <li><strong>数据导入：</strong>支持导入西柚找词、卖家精灵、H10等工具导出的关键词数据</li>
             <li><strong>多维度展示：</strong>关键词视图、词根视图、词云视图三种查看方式</li>
             <li><strong>智能分类：</strong>AI自动分析关键词并进行一级分类</li>
             <li><strong>流量分级：</strong>根据搜索量自动划分大词、中词、小词</li>
+            <li><strong>否词标记：</strong>在词根视图中标记与产品不相关的词根，自动同步到关键词</li>
           </ul>
+
+          <h4>否词功能</h4>
+          <p>在词根视图中标记与产品不相关的词根为"否词"，系统会自动将包含该词根的所有关键词标记为否词。</p>
+          <ul>
+            <li><strong>单个标记：</strong>在词根列表的"否词"列点击开关，即可标记/取消标记</li>
+            <li><strong>批量标记：</strong>勾选多个词根后，使用顶部工具栏的"批量标记否词"或"批量取消否词"按钮</li>
+            <li><strong>AI 智能识别：</strong>运行"智能分析"时，AI 会根据产品名称自动识别不相关词根并标记为否词</li>
+            <li><strong>实时同步：</strong>标记否词后，关键词视图的否词列会实时更新显示</li>
+          </ul>
+
           <h4>使用流程</h4>
           <ol>
             <li>创建产品，选择对应的亚马逊站点</li>
             <li>导入关键词数据</li>
             <li>设置流量分级阈值</li>
-            <li>运行 AI 分析进行智能分类</li>
+            <li>运行 AI 分析进行智能分类和否词识别</li>
+            <li>切换到词根视图，手动调整否词标记</li>
             <li>使用筛选功能定位目标关键词</li>
             <li>将重点关键词添加到排名监控</li>
           </ol>

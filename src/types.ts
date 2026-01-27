@@ -36,6 +36,7 @@ export interface Root {
   contains_count: number;
   percentage: number;
   categories: number[];
+  is_negative: boolean;  // 是否为否词词根
 }
 
 export interface Stats {

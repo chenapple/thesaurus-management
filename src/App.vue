@@ -642,11 +642,14 @@ async function handleAIAnalysis() {
   analysisProgress.value = { current: 0, total: unanalyzedRoots.length };
   analysisAbortController.value = new AbortController();
 
+  let negativeCount = 0;  // 统计否词数量
+
   try {
     await batchAnalyzeWords(
       unanalyzedRoots.map(r => r.word),
       {
         signal: analysisAbortController.value.signal,
+        productName: selectedProduct.value.name,  // 传入产品名，用于否词判断
         onProgress: (current: number) => {
           analysisProgress.value.current = current;
         },
@@ -666,12 +669,20 @@ async function handleAIAnalysis() {
               }
               root.translation = result.translation;
               root.categories = [...root.categories, ...categoryIds];
+
+              // 处理否词标记
+              if (result.is_negative && !root.is_negative) {
+                await api.setRootNegative(root.id, true);
+                root.is_negative = true;
+                negativeCount++;
+              }
             }
           }
         },
       }
     );
-    ElMessage.success("分析完成");
+    const negativeMsg = negativeCount > 0 ? `，识别 ${negativeCount} 个否词` : "";
+    ElMessage.success(`分析完成${negativeMsg}`);
   } catch (e) {
     if ((e as Error).name !== 'AbortError') {
       ElMessage.error("分析失败: " + e);
@@ -1579,6 +1590,7 @@ onUnmounted(() => {
           @load-roots="loadRoots"
           @toggle-category="toggleRootCategory"
           @switch-to-keywords="viewMode = 'keywords'"
+          @negative-changed="loadKeywordData"
         />
 
         <!-- Word cloud view -->

@@ -294,9 +294,12 @@ const localFilters = computed({
           </template>
         </el-table-column>
 
-        <el-table-column v-if="columnConfig.negative_word" prop="negative_word" label="否词" width="70" align="center">
+        <el-table-column v-if="columnConfig.negative_word" prop="negative_word" label="否词" width="100" align="center">
           <template #default="{ row }">
-            {{ row.negative_word || '-' }}
+            <el-tag v-if="row.negative_word" type="danger" size="small">
+              {{ row.negative_word }}
+            </el-tag>
+            <span v-else class="empty-cell">-</span>
           </template>
         </el-table-column>
 

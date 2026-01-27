@@ -101,6 +101,31 @@ export async function removeRootCategory(
   return await invoke("remove_root_category", { rootId, categoryId });
 }
 
+// 设置单个词根的否词状态，返回受影响的关键词数量
+export async function setRootNegative(
+  id: number,
+  isNegative: boolean
+): Promise<number> {
+  return await invoke("set_root_negative", { id, isNegative });
+}
+
+// 批量设置词根的否词状态（通过ID列表），返回受影响的关键词数量
+export async function batchSetRootsNegative(
+  ids: number[],
+  isNegative: boolean
+): Promise<number> {
+  return await invoke("batch_set_roots_negative", { ids, isNegative });
+}
+
+// 批量设置词根的否词状态（通过word列表，用于AI推荐），返回受影响的关键词数量
+export async function batchSetRootsNegativeByWords(
+  productId: number,
+  words: string[],
+  isNegative: boolean
+): Promise<number> {
+  return await invoke("batch_set_roots_negative_by_words", { productId, words, isNegative });
+}
+
 export async function getStats(productId?: number): Promise<[number, number]> {
   return await invoke("get_stats", { productId: productId || null });
 }

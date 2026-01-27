@@ -237,7 +237,7 @@
           </el-calendar>
 
           <!-- 选中日期的事件列表 -->
-          <div v-if="selectedDateEvents.length" class="selected-date-events">
+          <div ref="selectedDateEventsRef" v-if="selectedDateEvents.length" class="selected-date-events">
             <div class="selected-date-header">
               <span>{{ formatCalendarDate(calendarDate) }} 的事件</span>
               <el-tag size="small">{{ selectedDateEvents.length }}</el-tag>
@@ -871,7 +871,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
+import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, ArrowDown } from '@element-plus/icons-vue';
 import { listen } from '@tauri-apps/api/event';
@@ -1041,6 +1041,7 @@ const optimizationEvents = ref<OptimizationEvent[]>([]);
 const eventsLoading = ref(false);
 const eventsViewMode = ref<'list' | 'calendar'>('list');
 const calendarDate = ref(new Date());
+const selectedDateEventsRef = ref<HTMLElement | null>(null);
 const screenshotsDir = ref<string>('');
 
 // 截图预览状态
@@ -1093,6 +1094,13 @@ function formatCalendarDate(date: Date): string {
 function handleCalendarDateClick(dateStr: string) {
   const [year, month, day] = dateStr.split('-').map(Number);
   calendarDate.value = new Date(year, month - 1, day);
+
+  // 滚动到事件列表
+  nextTick(() => {
+    if (selectedDateEventsRef.value) {
+      selectedDateEventsRef.value.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  });
 }
 
 // 从监控列表提取唯一 ASIN（包含图片信息）
@@ -2443,6 +2451,8 @@ onUnmounted(() => {
 /* 日历视图 */
 .events-calendar {
   padding: 0 8px;
+  max-height: 500px;
+  overflow-y: auto;
 }
 
 .events-calendar :deep(.el-calendar) {

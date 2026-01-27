@@ -78,6 +78,25 @@ fn update_root_translation(id: i64, translation: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn set_root_negative(id: i64, is_negative: bool) -> Result<i64, String> {
+    db::set_root_negative(id, is_negative).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn batch_set_roots_negative(ids: Vec<i64>, is_negative: bool) -> Result<i64, String> {
+    db::batch_set_roots_negative(ids, is_negative).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn batch_set_roots_negative_by_words(
+    product_id: i64,
+    words: Vec<String>,
+    is_negative: bool,
+) -> Result<i64, String> {
+    db::batch_set_roots_negative_by_words(product_id, words, is_negative).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn add_root_category(root_id: i64, category_id: i64) -> Result<(), String> {
     db::add_root_category(root_id, category_id).map_err(|e| e.to_string())
 }
@@ -2211,6 +2230,9 @@ pub fn run() {
             import_keywords,
             get_roots,
             update_root_translation,
+            set_root_negative,
+            batch_set_roots_negative,
+            batch_set_roots_negative_by_words,
             add_root_category,
             remove_root_category,
             get_stats,
