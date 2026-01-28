@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
-import { Plus, Delete, Back, Refresh, ArrowRight, CopyDocument, DataLine, Select, Search, MoreFilled } from '@element-plus/icons-vue';
+import { Plus, Delete, Back, Refresh, ArrowRight, CopyDocument, DataLine, Select, Search, MoreFilled, Link, InfoFilled, Document, Box, ChatDotRound, Check } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   scGetProjects, scCreateProject, scDeleteProject, scGetProject, scUpdateProject,
@@ -1645,12 +1645,12 @@ onMounted(async () => {
         <!-- 关联产品信息 -->
         <div v-if="linkedProduct" class="linked-product-info">
           <el-tag type="success" size="small">
-            📊 已关联: {{ linkedProduct.name }}
+            <el-icon style="margin-right: 4px;"><Link /></el-icon>已关联: {{ linkedProduct.name }}
             <span v-if="linkedKeywordCount > 0"> ({{ linkedKeywordCount }} 个关键词)</span>
           </el-tag>
         </div>
         <div v-else-if="currentProject.product_id === null" class="linked-product-info">
-          <el-tag type="info" size="small">💡 未关联产品（无法使用关键词数据进行 AI 分析）</el-tag>
+          <el-tag type="info" size="small"><el-icon style="margin-right: 4px;"><InfoFilled /></el-icon>未关联产品（无法使用关键词数据进行 AI 分析）</el-tag>
         </div>
       </div>
 
@@ -1658,7 +1658,7 @@ onMounted(async () => {
       <div v-if="currentProject.scenario_type === 'optimize' && currentProject.my_asin" class="my-listing-section">
         <div class="section-header">
           <span class="section-title">
-            📝 我的现有文案
+            <el-icon class="section-icon"><Document /></el-icon>我的现有文案
             <el-tag v-if="currentProject.my_title" type="success" size="small" style="margin-left: 8px;">已获取</el-tag>
             <el-tag v-else type="warning" size="small" style="margin-left: 8px;">待获取</el-tag>
           </span>
@@ -1703,7 +1703,7 @@ onMounted(async () => {
       <div v-if="currentProject.scenario_type === 'new'" class="my-product-section">
         <div class="section-header" @click="showMyProductForm = !showMyProductForm">
           <span class="section-title clickable">
-            📦 我的产品信息
+            <el-icon class="section-icon"><Box /></el-icon>我的产品信息
             <el-tag v-if="currentProject.my_product_info" type="success" size="small" style="margin-left: 8px;">已填写</el-tag>
             <el-tag v-else type="warning" size="small" style="margin-left: 8px;">必填</el-tag>
             <el-icon class="expand-icon" :class="{ expanded: showMyProductForm }"><ArrowRight /></el-icon>
@@ -2015,7 +2015,7 @@ onMounted(async () => {
       <div v-if="competitors.length > 0 && competitors.some(c => c.fetched_at)" class="reviews-section">
         <div class="section-header" @click="showReviewsSection = !showReviewsSection">
           <span class="section-title clickable">
-            💬 评论分析
+            <el-icon class="section-icon"><ChatDotRound /></el-icon>评论分析
             <el-icon class="expand-icon" :class="{ expanded: showReviewsSection }"><ArrowRight /></el-icon>
           </span>
           <div class="header-actions" @click.stop>
@@ -2133,7 +2133,7 @@ onMounted(async () => {
               <div class="progress-steps">
                 <div :class="['step', { active: analysisStep === 1, done: analysisStep > 1 }]">
                   <span class="step-icon">
-                    <span v-if="analysisStep > 1" class="icon-done">✓</span>
+                    <el-icon v-if="analysisStep > 1" class="icon-done"><Check /></el-icon>
                     <span v-else-if="analysisStep === 1" class="loading-spinner"></span>
                     <span v-else class="icon-pending">○</span>
                   </span>
@@ -2141,7 +2141,7 @@ onMounted(async () => {
                 </div>
                 <div :class="['step', { active: analysisStep === 2, done: analysisStep > 2 }]">
                   <span class="step-icon">
-                    <span v-if="analysisStep > 2" class="icon-done">✓</span>
+                    <el-icon v-if="analysisStep > 2" class="icon-done"><Check /></el-icon>
                     <span v-else-if="analysisStep === 2" class="loading-spinner"></span>
                     <span v-else class="icon-pending">○</span>
                   </span>
@@ -2149,7 +2149,7 @@ onMounted(async () => {
                 </div>
                 <div :class="['step', { active: analysisStep === 3 }]">
                   <span class="step-icon">
-                    <span v-if="optimizationResult" class="icon-done">✓</span>
+                    <el-icon v-if="optimizationResult" class="icon-done"><Check /></el-icon>
                     <span v-else-if="analysisStep === 3" class="loading-spinner"></span>
                     <span v-else class="icon-pending">○</span>
                   </span>
@@ -2663,7 +2663,8 @@ onMounted(async () => {
   margin-bottom: 16px;
 }
 
-.section-title { font-size: 16px; font-weight: 600; color: var(--el-text-color-primary); }
+.section-title { font-size: 16px; font-weight: 600; color: var(--el-text-color-primary); display: flex; align-items: center; gap: 6px; }
+.section-icon { font-size: 18px; color: var(--el-color-primary); }
 .header-actions { display: flex; gap: 8px; }
 .loading-state { padding: 20px 0; }
 .empty-state { padding: 40px 0; }

@@ -6685,24 +6685,29 @@ pub fn add_quick_note(content: String) -> Result<i64> {
 pub fn get_quick_notes(filter: Option<String>) -> Result<Vec<QuickNote>> {
     let conn = get_db().lock();
 
-    // 获取今天的日期（用于过滤未到期的重复任务）
+    // 获取今天的日期
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
-    // 未完成任务的过滤条件：due_date 为空 或 due_date <= 今天
-    // 这样重复任务在完成后，下一个周期的任务只有到期日才会显示
+    // 显示规则：
+    // - 普通任务（repeat_type IS NULL）：无论截止日期，总是显示
+    // - 重复任务（repeat_type IS NOT NULL）：只有到期日（due_date <= 今天）才显示
     let sql = match filter.as_deref() {
         Some("pending") => format!(
             "SELECT id, content, completed, created_at, completed_at, due_date, sort_order, repeat_type, repeat_interval \
              FROM quick_notes \
-             WHERE completed = 0 AND (due_date IS NULL OR due_date <= '{}') \
+             WHERE completed = 0 AND (repeat_type IS NULL OR due_date IS NULL OR due_date <= '{}') \
              ORDER BY sort_order ASC, created_at DESC",
             today
         ),
-        Some("completed") => "SELECT id, content, completed, created_at, completed_at, due_date, sort_order, repeat_type, repeat_interval FROM quick_notes WHERE completed = 1 ORDER BY completed_at DESC".to_string(),
+        Some("completed") =>
+            "SELECT id, content, completed, created_at, completed_at, due_date, sort_order, repeat_type, repeat_interval \
+             FROM quick_notes \
+             WHERE completed = 1 \
+             ORDER BY completed_at DESC".to_string(),
         _ => format!(
             "SELECT id, content, completed, created_at, completed_at, due_date, sort_order, repeat_type, repeat_interval \
              FROM quick_notes \
-             WHERE completed = 1 OR (completed = 0 AND (due_date IS NULL OR due_date <= '{}')) \
+             WHERE completed = 1 OR (completed = 0 AND (repeat_type IS NULL OR due_date IS NULL OR due_date <= '{}')) \
              ORDER BY completed ASC, sort_order ASC, created_at DESC",
             today
         ),
