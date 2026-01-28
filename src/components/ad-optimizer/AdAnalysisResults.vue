@@ -394,7 +394,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { Download, Loading, CopyDocument, QuestionFilled } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import type { AdAnalysisResult, CountryAnalysisResult } from '../../types';
@@ -405,14 +405,39 @@ const props = defineProps<{
   result: AdAnalysisResult;
   targetAcos: number;
   isPartial?: boolean;  // 是否还在分析中（增量显示）
+  selectedCountry?: string;  // 外部传入的选中国家（用于同步）
 }>();
 
 const emit = defineEmits<{
   (e: 'export', type: 'negative_words' | 'bid_adjustments' | 'all'): void;
+  (e: 'update:selectedCountry', country: string): void;
 }>();
 
 const activeTab = ref('negative');
 const activeCountry = ref('overview');
+
+// 当外部 selectedCountry 变化时，同步到内部
+watch(() => props.selectedCountry, (newCountry) => {
+  if (newCountry !== undefined) {
+    // 'all' 对应 'overview'，国家代码直接对应
+    if (newCountry === 'all') {
+      activeCountry.value = 'overview';
+    } else {
+      // 检查该国家是否已分析
+      const countryExists = props.result.by_country?.some(c => c.country === newCountry);
+      if (countryExists) {
+        activeCountry.value = newCountry;
+      }
+    }
+  }
+}, { immediate: true });
+
+// 当内部 activeCountry 变化时，通知外部
+watch(activeCountry, (newVal) => {
+  // 'overview' 对应 'all'
+  const emitValue = newVal === 'overview' ? 'all' : newVal;
+  emit('update:selectedCountry', emitValue);
+});
 
 // 是否有多个国家
 const hasMultipleCountries = computed(() => {

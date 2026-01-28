@@ -1996,8 +1996,8 @@ fn ad_delete_project(id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn ad_import_search_terms(project_id: i64, search_terms: Vec<db::AdSearchTerm>) -> Result<i64, String> {
-    db::ad_import_search_terms(project_id, search_terms)
+fn ad_import_search_terms(project_id: i64, search_terms: Vec<db::AdSearchTerm>, mode: String) -> Result<i64, String> {
+    db::ad_import_search_terms(project_id, search_terms, &mode)
         .map_err(|e| e.to_string())
 }
 

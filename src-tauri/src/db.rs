@@ -4691,6 +4691,14 @@ pub fn init_smart_copy_tables(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE ad_search_terms ADD COLUMN country TEXT", []);
     let _ = conn.execute("ALTER TABLE ad_search_terms ADD COLUMN sku TEXT", []);
 
+    // 迁移：创建唯一索引用于追加导入模式的 UPSERT 操作
+    // 去重键：project_id + report_date + customer_search_term + campaign_name + ad_group_name + country
+    let _ = conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ad_search_terms_upsert_key
+         ON ad_search_terms(project_id, report_date, customer_search_term, campaign_name, ad_group_name, country)",
+        [],
+    );
+
     Ok(())
 }
 
@@ -5457,51 +5465,112 @@ pub fn ad_update_project(id: i64, name: &str, marketplace: &str, target_acos: f6
     Ok(())
 }
 
-// 删除广告项目
+// 删除广告项目（同时删除关联的搜索词和分析结果）
 pub fn ad_delete_project(id: i64) -> Result<()> {
     let conn = get_db().lock();
+    // 先删除关联的搜索词数据
+    conn.execute("DELETE FROM ad_search_terms WHERE project_id = ?1", [id])?;
+    // 删除关联的分析结果
+    conn.execute("DELETE FROM ad_analysis_results WHERE project_id = ?1", [id])?;
+    // 最后删除项目本身
     conn.execute("DELETE FROM ad_projects WHERE id = ?1", [id])?;
     Ok(())
 }
 
 // 导入搜索词数据（批量）
-pub fn ad_import_search_terms(project_id: i64, search_terms: Vec<AdSearchTerm>) -> Result<i64> {
+// mode: "replace" = 替换全部, "append" = 追加合并
+pub fn ad_import_search_terms(project_id: i64, search_terms: Vec<AdSearchTerm>, mode: &str) -> Result<i64> {
     let conn = get_db().lock();
 
-    // 先删除该项目的旧数据
-    conn.execute("DELETE FROM ad_search_terms WHERE project_id = ?1", [project_id])?;
+    // 替换模式：先删除该项目的旧数据
+    if mode == "replace" {
+        conn.execute("DELETE FROM ad_search_terms WHERE project_id = ?1", [project_id])?;
+    }
 
     let mut count = 0i64;
     for term in search_terms {
-        conn.execute(
-            "INSERT INTO ad_search_terms (
-                project_id, portfolio_name, campaign_name, ad_group_name, country, targeting, match_type,
-                customer_search_term, impressions, clicks, ctr, spend, sales,
-                orders, acos, roas, conversion_rate, cpc, report_date, sku
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
-            rusqlite::params![
-                project_id,
-                term.portfolio_name,
-                term.campaign_name,
-                term.ad_group_name,
-                term.country,
-                term.targeting,
-                term.match_type,
-                term.customer_search_term,
-                term.impressions,
-                term.clicks,
-                term.ctr,
-                term.spend,
-                term.sales,
-                term.orders,
-                term.acos,
-                term.roas,
-                term.conversion_rate,
-                term.cpc,
-                term.report_date,
-                term.sku
-            ],
-        )?;
+        if mode == "append" {
+            // 追加模式：先删除匹配的旧记录，再插入新记录
+            // 去重键：report_date + customer_search_term + campaign_name + ad_group_name + country
+            conn.execute(
+                "DELETE FROM ad_search_terms
+                 WHERE project_id = ?1
+                   AND report_date IS ?2
+                   AND customer_search_term IS ?3
+                   AND campaign_name IS ?4
+                   AND ad_group_name IS ?5
+                   AND country IS ?6",
+                rusqlite::params![
+                    project_id,
+                    term.report_date,
+                    term.customer_search_term,
+                    term.campaign_name,
+                    term.ad_group_name,
+                    term.country
+                ],
+            )?;
+            // 插入新记录
+            conn.execute(
+                "INSERT INTO ad_search_terms (
+                    project_id, portfolio_name, campaign_name, ad_group_name, country, targeting, match_type,
+                    customer_search_term, impressions, clicks, ctr, spend, sales,
+                    orders, acos, roas, conversion_rate, cpc, report_date, sku
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                rusqlite::params![
+                    project_id,
+                    term.portfolio_name,
+                    term.campaign_name,
+                    term.ad_group_name,
+                    term.country,
+                    term.targeting,
+                    term.match_type,
+                    term.customer_search_term,
+                    term.impressions,
+                    term.clicks,
+                    term.ctr,
+                    term.spend,
+                    term.sales,
+                    term.orders,
+                    term.acos,
+                    term.roas,
+                    term.conversion_rate,
+                    term.cpc,
+                    term.report_date,
+                    term.sku
+                ],
+            )?;
+        } else {
+            // 替换模式：直接插入
+            conn.execute(
+                "INSERT INTO ad_search_terms (
+                    project_id, portfolio_name, campaign_name, ad_group_name, country, targeting, match_type,
+                    customer_search_term, impressions, clicks, ctr, spend, sales,
+                    orders, acos, roas, conversion_rate, cpc, report_date, sku
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                rusqlite::params![
+                    project_id,
+                    term.portfolio_name,
+                    term.campaign_name,
+                    term.ad_group_name,
+                    term.country,
+                    term.targeting,
+                    term.match_type,
+                    term.customer_search_term,
+                    term.impressions,
+                    term.clicks,
+                    term.ctr,
+                    term.spend,
+                    term.sales,
+                    term.orders,
+                    term.acos,
+                    term.roas,
+                    term.conversion_rate,
+                    term.cpc,
+                    term.report_date,
+                    term.sku
+                ],
+            )?;
+        }
         count += 1;
     }
 

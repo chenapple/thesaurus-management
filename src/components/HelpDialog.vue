@@ -18,7 +18,7 @@ const helpSections = [
   { id: 'keywords', title: '词库管理', icon: 'Collection', keywords: ['关键词', '导入', '分类', '词根', '流量', '搜索量', 'AI', '西柚', '卖家精灵', '否词', '批量', '标记'] },
   { id: 'monitoring', title: '排名监控', icon: 'TrendCharts', keywords: ['排名', '监控', '追踪', '变化', '调度', '定时', '通知'] },
   { id: 'smartcopy', title: '智能文案', icon: 'EditPen', keywords: ['文案', '标题', '五点', 'listing', 'AI', '竞品', '分析', '新品', '老品'] },
-  { id: 'ads', title: '智能广告', icon: 'Promotion', keywords: ['广告', 'ACOS', 'CPC', '否词', '优化', '预算', '投放'] },
+  { id: 'ads', title: '智能广告', icon: 'Promotion', keywords: ['广告', 'ACOS', 'CPC', '否词', '优化', '预算', '投放', '趋势图', '四象限', '导入', '追加', '替换', '时间筛选', '国家'] },
   { id: 'knowledge', title: '知识库', icon: 'FolderOpened', keywords: ['知识', '文档', 'AI问答', '向量', '搜索', 'RAG', '分类', '双向链接', '知识图谱', 'Callout', '大纲', '保存笔记', 'Obsidian'] },
   { id: 'weekly_report', title: '工作周报', icon: 'Calendar', keywords: ['周报', '工作', '总结', '计划', '任务', '常规', '导出', 'AI', 'Excel', 'Markdown'] },
 ];
@@ -225,17 +225,59 @@ function handleClose() {
           <h4>功能说明</h4>
           <p>基于AI多智能体架构分析亚马逊广告搜索词报告，提供优化建议。</p>
           <ul>
-            <li><strong>数据导入：</strong>支持导入亚马逊搜索词报告</li>
+            <li><strong>数据导入：</strong>支持导入亚马逊搜索词报告（Excel/CSV 格式）</li>
             <li><strong>多国家支持：</strong>自动识别国家并按国家分组分析</li>
-            <li><strong>多智能体分析：</strong>4个AI专家并行分析</li>
+            <li><strong>数据可视化：</strong>时间趋势图、效率四象限图、花费效率散点图等多维度图表</li>
+            <li><strong>多智能体分析：</strong>4个AI专家并行分析，提供专业优化建议</li>
           </ul>
+
+          <h4>数据可视化</h4>
+          <p>导入数据后，系统会自动生成多维度可视化图表：</p>
+          <ul>
+            <li><strong>时间趋势图：</strong>展示 ACOS、花费、订单、销售额随时间的变化趋势</li>
+            <li><strong>效率四象限图：</strong>按转化率和 ACOS 将搜索词分为高潜力、待优化、稳定、淘汰四类</li>
+            <li><strong>花费效率散点图：</strong>分析花费与 ROAS 的关系</li>
+            <li><strong>综合仪表盘：</strong>ACOS 分布、花费占比、Top10 排行榜</li>
+            <li><strong>匹配类型对比：</strong>对比不同匹配类型的表现</li>
+          </ul>
+
+          <h4>数据筛选</h4>
+          <p>支持按国家和时间两个维度筛选数据：</p>
+          <ul>
+            <li><strong>国家筛选：</strong>选择特定国家查看该国数据，或选择"全部国家"</li>
+            <li><strong>时间筛选：</strong>快速选择近7天、近15天、近30天，或自定义时间范围</li>
+          </ul>
+
+          <h4>数据导入模式</h4>
+          <p>导入搜索词报告时可选择两种模式：</p>
+          <ul>
+            <li><strong>替换全部：</strong>清空现有数据，导入新数据（适用于每次导入完整报告）</li>
+            <li><strong>追加合并：</strong>保留现有数据，智能合并新数据（适用于积累历史数据）
+              <ul>
+                <li>相同搜索词+日期+广告组+国家的记录会更新</li>
+                <li>新记录会追加到数据库</li>
+              </ul>
+            </li>
+          </ul>
+
           <h4>使用流程</h4>
           <ol>
             <li>创建广告项目，设置目标 ACOS</li>
-            <li>导入亚马逊搜索词报告</li>
+            <li>从亚马逊后台下载搜索词报告（Excel 格式）</li>
+            <li>点击"导入数据"，选择导入模式（替换/追加）</li>
+            <li>查看数据可视化图表，了解整体表现</li>
+            <li>使用国家和时间筛选器聚焦特定范围</li>
             <li>选择 AI 服务商和模型，点击"开始分析"</li>
-            <li>查看各国家的优化建议</li>
+            <li>查看 AI 生成的优化建议</li>
           </ol>
+
+          <h4>使用建议</h4>
+          <ul>
+            <li>定期导入新数据，使用"追加合并"模式积累历史趋势</li>
+            <li>关注时间趋势图，观察 ACOS 和花费的变化规律</li>
+            <li>使用四象限图快速识别高潜力和需淘汰的搜索词</li>
+            <li>对比不同时间段的数据，评估优化效果</li>
+          </ul>
         </div>
 
         <!-- Knowledge base help -->

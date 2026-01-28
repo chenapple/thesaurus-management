@@ -255,15 +255,15 @@ function parseRow(
     return index !== undefined ? row[index] : undefined;
   };
 
-  const customerSearchTerm = getValue('customer_search_term');
-  if (!customerSearchTerm) return null;
+  // 获取搜索词，如果没有则使用占位符（某些自动投放数据可能没有搜索词）
+  const customerSearchTerm = getValue('customer_search_term') || '(无搜索词)';
 
   // 解析数值字段
   const parseNumber = (value: any): number => {
     if (value === undefined || value === null || value === '') return 0;
     if (typeof value === 'number') return value;
-    // 处理货币格式 "$1,234.56" -> 1234.56
-    const cleaned = value.toString().replace(/[$,￥]/g, '').trim();
+    // 处理货币格式 "$1,234.56" / "£1,234.56" / "€1,234.56" -> 1234.56
+    const cleaned = value.toString().replace(/[$£€￥¥,]/g, '').trim();
     const num = parseFloat(cleaned);
     return isNaN(num) ? 0 : num;
   };
@@ -286,6 +286,48 @@ function parseRow(
     if (!value) return 'auto';
     const normalized = value.toString().toLowerCase().trim();
     return (MATCH_TYPE_MAPPING[normalized] as any) || 'auto';
+  };
+
+  // 解析日期（处理 Excel 序列号和各种日期格式）
+  const parseDate = (value: any): string | null => {
+    if (value === undefined || value === null || value === '') return null;
+
+    // 如果是数字，可能是 Excel 序列号
+    if (typeof value === 'number') {
+      // Excel 日期序列号：序列号 1 = 1900-01-01
+      // 基准日期是 1899-12-31（序列号 0）
+      // 注意：Excel 有个 bug，认为 1900 是闰年，序列号 60 = 1900-02-29（不存在的日期）
+      // 对于序列号 > 59，Excel 的日期比实际多算了 1 天，需要减去
+      const excelEpoch = new Date(Date.UTC(1899, 11, 31)); // 1899-12-31 UTC
+      let days = value;
+      if (value > 59) {
+        days = value - 1; // 修正 Excel 1900 闰年 bug
+      }
+      const date = new Date(excelEpoch.getTime() + days * 24 * 60 * 60 * 1000);
+      const year = date.getUTCFullYear();
+      const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(date.getUTCDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    const str = value.toString().trim();
+
+    // 已经是 YYYY-MM-DD 格式
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+      return str;
+    }
+
+    // 尝试解析其他格式 (MM/DD/YYYY, DD/MM/YYYY, etc.)
+    const date = new Date(str);
+    if (!isNaN(date.getTime())) {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    // 无法解析，返回原始值
+    return str;
   };
 
   const spend = parseNumber(getValue('spend'));
@@ -340,7 +382,7 @@ function parseRow(
     roas: parseFloat(roas.toFixed(2)),
     conversion_rate: parseFloat(conversionRate.toFixed(2)),
     cpc: parseFloat(cpc.toFixed(2)),
-    report_date: getValue('report_date')?.toString() || null,
+    report_date: parseDate(getValue('report_date')),
     sku: getValue('sku')?.toString() || null,
   };
 }

@@ -92,6 +92,10 @@
             编辑
           </el-button>
         </div>
+        <el-button type="primary" @click="showImportDialog = true">
+          <el-icon><Upload /></el-icon>
+          导入数据
+        </el-button>
       </div>
 
       <!-- 数据导入区 -->
@@ -103,8 +107,6 @@
 
       <!-- 有数据时显示概览和分析 -->
       <template v-else>
-        <!-- 数据概览 -->
-        <!-- 数据概览 -->
         <!-- 数据概览 -->
         <div class="data-overview">
           
@@ -150,6 +152,14 @@
           </div>
         </div>
 
+        <!-- 数据可视化图表 -->
+        <AdDataCharts
+          :terms="searchTerms"
+          :target-acos="currentProject?.target_acos || 30"
+          v-model:selected-country="selectedChartCountry"
+          @select="handleChartSelect"
+        />
+
         <!-- AI 分析区 -->
         <div class="ai-analysis-section">
           <div class="section-header">
@@ -184,7 +194,6 @@
               >
                 重试失败 ({{ failedCountries.length }})
               </el-button>
-              <el-button @click="reimportData">重新导入</el-button>
             </div>
           </div>
 
@@ -215,6 +224,7 @@
             :result="analysisResult"
             :target-acos="currentProject?.target_acos || 30"
             :is-partial="isAnalyzing"
+            v-model:selected-country="selectedChartCountry"
             @export="exportResults"
           />
         </div>
@@ -251,13 +261,26 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 导入数据对话框 -->
+    <el-dialog
+      v-model="showImportDialog"
+      title="导入搜索词数据"
+      width="800px"
+      destroy-on-close
+    >
+      <AdDataImport
+        :project-id="currentProject?.id"
+        @imported="onImportDialogImported"
+      />
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, MoreFilled, ArrowLeft, Search } from '@element-plus/icons-vue';
+import { Plus, MoreFilled, ArrowLeft, Search, Upload } from '@element-plus/icons-vue';
 import type { AdProject, AdSearchTerm, AdAnalysisResult, AIProvider, SearchTermsStatsResult } from '../types';
 import { AI_PROVIDERS, COUNTRY_CURRENCY_MAP, getCountryLabel } from '../types';
 import type { AnalysisSession } from '../ad-prompts';
@@ -278,6 +301,7 @@ import AdDataImport from './ad-optimizer/AdDataImport.vue';
 import AdAnalysisCanvas from './ad-optimizer/AdAnalysisCanvas.vue';
 import AdAnalysisResults from './ad-optimizer/AdAnalysisResults.vue';
 import AdCountryCard from './ad-optimizer/AdCountryCard.vue';
+import AdDataCharts from './ad-optimizer/AdDataCharts.vue';
 
 // 视图模式
 const viewMode = ref<'list' | 'detail'>('list');
@@ -362,6 +386,7 @@ function startAnalysisForCountry(country: string) {
 
 // 创建/编辑对话框
 const showCreateDialog = ref(false);
+const showImportDialog = ref(false);
 const editingProject = ref<AdProject | null>(null);
 const saving = ref(false);
 const projectForm = ref({
@@ -397,6 +422,7 @@ const searchTerms = ref<AdSearchTerm[]>([]);
 const failedCountries = ref<string[]>([]);
 const completedResults = ref<CountryAnalysisResult[]>([]);
 const analysisResultsRef = ref<InstanceType<typeof AdAnalysisResults> | null>(null);
+const selectedChartCountry = ref<string>('all');  // 图表国家筛选
 
 // Provider 变化时更新默认模型
 watch(selectedProvider, (newProvider) => {
@@ -428,9 +454,13 @@ async function enterProject(project: AdProject) {
   failedCountries.value = [];
   analysisSession.value = null;
   stats.value = { total_spend: 0, total_sales: 0, avg_acos: 0, count: 0, by_country: [] };
+  selectedChartCountry.value = 'all';  // 重置国家筛选
 
   // 加载项目数据统计
   await loadProjectStats();
+
+  // 加载搜索词数据（用于图表展示）
+  await loadSearchTerms();
 
   // 加载已有的分析结果
   await loadExistingAnalysis();
@@ -445,6 +475,23 @@ async function loadProjectStats() {
   } catch (error) {
     console.error('加载统计数据失败:', error);
   }
+}
+
+// 加载搜索词数据（用于图表展示）
+async function loadSearchTerms() {
+  if (!currentProject.value) return;
+
+  try {
+    searchTerms.value = await adGetSearchTerms(currentProject.value.id);
+  } catch (error) {
+    console.error('加载搜索词数据失败:', error);
+  }
+}
+
+// 处理图表选中搜索词
+function handleChartSelect(searchTerm: string) {
+  // TODO: 实现跳转到对应搜索词的功能
+  console.log('选中搜索词:', searchTerm);
 }
 
 // 加载已有分析结果
@@ -464,21 +511,18 @@ async function loadExistingAnalysis() {
 // 数据导入完成
 async function onDataImported() {
   await loadProjectStats();
+  await loadSearchTerms();
   ElMessage.success('数据导入成功');
 }
 
-// 重新导入数据
-function reimportData() {
-  ElMessageBox.confirm('重新导入将覆盖现有数据，是否继续？', '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
-    type: 'warning',
-  }).then(() => {
-    stats.value = { total_spend: 0, total_sales: 0, avg_acos: 0, count: 0, by_country: [] };
-    analysisResult.value = null;
-    analysisSession.value = null;
-  });
+// 导入对话框导入完成
+async function onImportDialogImported() {
+  showImportDialog.value = false;
+  await loadProjectStats();
+  await loadSearchTerms();
+  ElMessage.success('数据导入成功');
 }
+
 
 // 停止 AI 分析
 function handleStopAnalysis() {
@@ -915,6 +959,7 @@ onMounted(() => {
 }
 
 .header-info {
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 12px;

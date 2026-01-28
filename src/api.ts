@@ -1466,12 +1466,16 @@ export async function adDeleteProject(id: number): Promise<void> {
 
 /**
  * 导入搜索词数据
+ * @param projectId 项目 ID
+ * @param searchTerms 搜索词数据
+ * @param mode 导入模式：replace（替换全部）或 append（追加合并）
  */
 export async function adImportSearchTerms(
   projectId: number,
-  searchTerms: AdSearchTerm[]
+  searchTerms: AdSearchTerm[],
+  mode: 'replace' | 'append' = 'replace'
 ): Promise<number> {
-  return await invoke("ad_import_search_terms", { projectId, searchTerms });
+  return await invoke("ad_import_search_terms", { projectId, searchTerms, mode });
 }
 
 /**

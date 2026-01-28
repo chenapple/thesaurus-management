@@ -35,7 +35,7 @@
     </div>
 
     <!-- 导入预览 -->
-    <el-dialog v-model="showPreview" title="数据预览" width="80%">
+    <el-dialog v-model="showPreview" title="导入搜索词报告" width="80%">
       <div class="preview-stats">
         <el-alert v-if="parseWarnings.length > 0" type="warning" :closable="false">
           <template #title>
@@ -45,8 +45,12 @@
 
         <div class="stats-row">
           <div class="stat-item">
-            <span class="stat-label">总搜索词数</span>
-            <span class="stat-value">{{ parsedData.length }}</span>
+            <span class="stat-label">解析成功</span>
+            <span class="stat-value">{{ parsedData.length }} 条</span>
+          </div>
+          <div class="stat-item" v-if="dateRange.start">
+            <span class="stat-label">日期范围</span>
+            <span class="stat-value date-range">{{ dateRange.start }} ~ {{ dateRange.end }}</span>
           </div>
           <div class="stat-item">
             <span class="stat-label">有花费</span>
@@ -56,10 +60,21 @@
             <span class="stat-label">有销售</span>
             <span class="stat-value">{{ parseStats.withSales }}</span>
           </div>
-          <div class="stat-item">
-            <span class="stat-label">有订单</span>
-            <span class="stat-value">{{ parseStats.withOrders }}</span>
-          </div>
+        </div>
+
+        <!-- 导入模式选择 -->
+        <div class="import-mode-section">
+          <div class="mode-label">导入模式：</div>
+          <el-radio-group v-model="importMode">
+            <el-radio value="replace">
+              <span class="mode-title">替换全部</span>
+              <span class="mode-desc">清空现有数据，导入新数据</span>
+            </el-radio>
+            <el-radio value="append">
+              <span class="mode-title">追加合并</span>
+              <span class="mode-desc">保留现有数据，智能合并新数据（相同记录会更新）</span>
+            </el-radio>
+          </el-radio-group>
         </div>
       </div>
 
@@ -130,6 +145,15 @@ const parseStats = ref({
   withOrders: 0,
 });
 
+// 导入模式：replace（替换全部）或 append（追加合并）
+const importMode = ref<'replace' | 'append'>('replace');
+
+// 日期范围统计
+const dateRange = ref({
+  start: '',
+  end: '',
+});
+
 const previewData = computed(() => parsedData.value.slice(0, 100));
 
 function triggerFileInput() {
@@ -182,6 +206,16 @@ async function processFile(file: File) {
     parseWarnings.value = validation.warnings;
     parseStats.value = validation.stats;
 
+    // 计算日期范围
+    const dates = data
+      .map(d => d.report_date)
+      .filter((d): d is string => !!d)
+      .sort();
+    dateRange.value = {
+      start: dates[0] || '',
+      end: dates[dates.length - 1] || '',
+    };
+
     progress.value = 100;
     progressText.value = '解析完成';
     progressStatus.value = 'success';
@@ -212,7 +246,7 @@ async function confirmImport() {
   progress.value = 0;
 
   try {
-    const count = await adImportSearchTerms(props.projectId, parsedData.value);
+    const count = await adImportSearchTerms(props.projectId, parsedData.value, importMode.value);
     progress.value = 100;
     progressStatus.value = 'success';
     progressText.value = `成功导入 ${count} 条搜索词`;
@@ -310,5 +344,69 @@ async function confirmImport() {
   font-size: 20px;
   font-weight: 600;
   color: var(--el-color-primary);
+}
+
+.stat-item .stat-value.date-range {
+  font-size: 14px;
+}
+
+/* 导入模式选择 */
+.import-mode-section {
+  margin-top: 20px;
+  padding: 16px;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+}
+
+.mode-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+  margin-bottom: 12px;
+}
+
+.import-mode-section :deep(.el-radio-group) {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.import-mode-section :deep(.el-radio) {
+  display: flex;
+  align-items: flex-start;
+  height: auto;
+  padding: 12px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  margin-right: 0;
+  background: var(--el-bg-color);
+  transition: all 0.2s;
+}
+
+.import-mode-section :deep(.el-radio:hover) {
+  border-color: var(--el-color-primary-light-5);
+}
+
+.import-mode-section :deep(.el-radio.is-checked) {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.import-mode-section :deep(.el-radio__label) {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 8px;
+}
+
+.mode-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+}
+
+.mode-desc {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>
