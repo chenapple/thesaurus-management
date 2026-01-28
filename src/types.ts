@@ -1067,3 +1067,64 @@ export const EXCHANGE_RATE_CURRENCIES: Array<{
   { code: 'AUD', symbol: 'A$', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="30" height="20" fill="#00008B"/><path d="M0,0 L12,8 M12,0 L0,8" stroke="white" stroke-width="1.5"/><path d="M0,0 L12,8 M12,0 L0,8" stroke="#C8102E" stroke-width="0.8"/><path d="M6,0 V8 M0,4 H12" stroke="white" stroke-width="2.5"/><path d="M6,0 V8 M0,4 H12" stroke="#C8102E" stroke-width="1.5"/><polygon points="22,16 22.3,17 23.3,17 22.5,17.6 22.8,18.6 22,18 21.2,18.6 21.5,17.6 20.7,17 21.7,17" fill="white"/><polygon points="25,7 25.2,7.6 25.8,7.6 25.3,8 25.5,8.6 25,8.2 24.5,8.6 24.7,8 24.2,7.6 24.8,7.6" fill="white"/><polygon points="27,11 27.2,11.6 27.8,11.6 27.3,12 27.5,12.6 27,12.2 26.5,12.6 26.7,12 26.2,11.6 26.8,11.6" fill="white"/><polygon points="24,13 24.2,13.6 24.8,13.6 24.3,14 24.5,14.6 24,14.2 23.5,14.6 23.7,14 23.2,13.6 23.8,13.6" fill="white"/><polygon points="19,10 19.4,11.2 20.6,11.2 19.6,12 20,13.2 19,12.4 18,13.2 18.4,12 17.4,11.2 18.6,11.2" fill="white"/></svg>`, name: '澳元' },
   { code: 'MXN', symbol: 'Mex$', flag: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20"><rect width="10" height="20" fill="#006341"/><rect x="10" width="10" height="20" fill="white"/><rect x="20" width="10" height="20" fill="#CE1126"/><circle cx="15" cy="10" r="3" fill="#6B3E26"/></svg>`, name: '墨西哥比索' },
 ];
+
+// ==================== 工作周报 ====================
+
+export type WeeklyReportStatus = 'draft' | 'final';
+export type WeeklyReportEntryCategory = 'completed' | 'in_progress' | 'problem' | 'plan' | 'other';
+export type WeeklyReportEntrySource = 'manual' | 'quicknotes' | 'optimization';
+
+export interface WeeklyReport {
+  id: number;
+  week_start: string;
+  week_end: string;
+  title: string;
+  status: WeeklyReportStatus;
+  summary: string | null;
+  next_week_plan: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type WeeklyReportPriorityLevel = 'low' | 'medium' | 'high';
+
+export type WeeklyReportTaskCategory = '运营' | '开发' | '设计' | '会议' | '学习' | '其他';
+
+export interface WeeklyReportEntry {
+  id: number;
+  week_start: string;
+  category: WeeklyReportEntryCategory;
+  content: string;
+  description: string | null;
+  task_category: WeeklyReportTaskCategory | null;
+  priority: number;
+  priority_level: WeeklyReportPriorityLevel;
+  progress: number;  // 0-100 完成进度
+  source: WeeklyReportEntrySource;
+  source_id: number | null;
+  created_at: string;
+}
+
+export interface WeeklyReportEntries {
+  completed: WeeklyReportEntry[];
+  in_progress: WeeklyReportEntry[];
+  problem: WeeklyReportEntry[];
+  plan: WeeklyReportEntry[];
+  other: WeeklyReportEntry[];
+}
+
+export interface WeeklyReportContent {
+  report: WeeklyReport | null;
+  entries: WeeklyReportEntries;
+  quick_notes_completed: QuickNote[];
+  optimization_events: OptimizationEvent[];
+}
+
+// 周报分类配置
+export const WEEKLY_REPORT_CATEGORIES = [
+  { key: 'completed', label: '本周完成', icon: 'CircleCheck', color: '#67c23a' },
+  { key: 'in_progress', label: '进行中', icon: 'Loading', color: '#409eff' },
+  { key: 'problem', label: '问题与风险', icon: 'Warning', color: '#e6a23c' },
+  { key: 'plan', label: '下周计划', icon: 'Calendar', color: '#909399' },
+  { key: 'other', label: '其他', icon: 'More', color: '#606266' },
+] as const;

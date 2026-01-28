@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import { Search, DataAnalysis, Collection, TrendCharts, EditPen, Promotion, FolderOpened } from "@element-plus/icons-vue";
+import { Search, DataAnalysis, Collection, TrendCharts, EditPen, Promotion, FolderOpened, Calendar } from "@element-plus/icons-vue";
 
 defineProps<{
   visible: boolean;
@@ -20,6 +20,7 @@ const helpSections = [
   { id: 'smartcopy', title: '智能文案', icon: 'EditPen', keywords: ['文案', '标题', '五点', 'listing', 'AI', '竞品', '分析', '新品', '老品'] },
   { id: 'ads', title: '智能广告', icon: 'Promotion', keywords: ['广告', 'ACOS', 'CPC', '否词', '优化', '预算', '投放'] },
   { id: 'knowledge', title: '知识库', icon: 'FolderOpened', keywords: ['知识', '文档', 'AI问答', '向量', '搜索', 'RAG', '分类', '双向链接', '知识图谱', 'Callout', '大纲', '保存笔记', 'Obsidian'] },
+  { id: 'weekly_report', title: '工作周报', icon: 'Calendar', keywords: ['周报', '工作', '总结', '计划', '任务', '常规', '导出', 'AI', 'Excel', 'Markdown'] },
 ];
 
 const filteredHelpSections = computed(() => {
@@ -76,6 +77,7 @@ function handleClose() {
               <EditPen v-else-if="section.icon === 'EditPen'" />
               <Promotion v-else-if="section.icon === 'Promotion'" />
               <FolderOpened v-else-if="section.icon === 'FolderOpened'" />
+              <Calendar v-else-if="section.icon === 'Calendar'" />
             </el-icon>
             <span>{{ section.title }}</span>
           </el-menu-item>
@@ -255,6 +257,60 @@ function handleClose() {
             <li>为文档添加标签</li>
             <li>建立文档间的双向链接</li>
             <li>在对话界面输入问题进行问答</li>
+          </ol>
+        </div>
+
+        <!-- Weekly report help -->
+        <div v-show="activeHelpTab === 'weekly_report'" class="help-content">
+          <h4>功能说明</h4>
+          <p>工作周报帮助你记录和总结每周工作，支持数据自动同步、AI 智能生成和多格式导出。</p>
+          <ul>
+            <li><strong>周次导航：</strong>使用左右箭头切换查看不同周的周报，点击"本周"快速回到当前周</li>
+            <li><strong>常规任务：</strong>自动统计备忘录中重复任务的本周完成情况</li>
+            <li><strong>本周完成：</strong>展示手动添加的任务、备忘录完成项、优化事件</li>
+            <li><strong>本周总结：</strong>记录本周工作总结，支持 AI 润色</li>
+            <li><strong>下周计划：</strong>规划下周工作，支持 AI 智能生成</li>
+          </ul>
+
+          <h4>数据来源</h4>
+          <p>周报会自动整合以下数据，无需手动录入：</p>
+          <ul>
+            <li><strong>备忘录任务：</strong>本周完成的备忘录任务自动同步到"本周完成"</li>
+            <li><strong>常规任务：</strong>有重复周期的备忘录任务自动汇总到"常规任务检查"</li>
+            <li><strong>优化事件：</strong>排名监控中记录的优化事件自动同步</li>
+          </ul>
+
+          <h4>添加任务</h4>
+          <p>点击"添加"按钮可手动添加工作任务，支持以下字段：</p>
+          <ul>
+            <li><strong>任务标题：</strong>简要描述任务内容</li>
+            <li><strong>任务描述：</strong>详细说明任务细节</li>
+            <li><strong>优先级：</strong>低/中/高三档，高优先级会显示红色标签</li>
+            <li><strong>分类：</strong>运营、开发、设计、会议、学习、其他</li>
+            <li><strong>完成进度：</strong>0-100%，未完成的任务显示进度环</li>
+          </ul>
+
+          <h4>AI 功能</h4>
+          <p>点击"AI 生成"按钮，AI 会根据本周完成内容自动生成：</p>
+          <ul>
+            <li><strong>本周总结：</strong>基于完成事项生成工作总结</li>
+            <li><strong>下周计划：</strong>根据本周情况智能规划下周工作</li>
+          </ul>
+
+          <h4>导出功能</h4>
+          <p>支持多种格式导出，方便分享和存档：</p>
+          <ul>
+            <li><strong>导出 Excel：</strong>生成 .xlsx 文件，包含完整周报内容</li>
+            <li><strong>复制 Markdown：</strong>复制为 Markdown 格式，可粘贴到其他平台</li>
+          </ul>
+
+          <h4>使用流程</h4>
+          <ol>
+            <li>每天随时记录完成的任务（或使用备忘录自动同步）</li>
+            <li>周五点击"AI 生成"自动生成本周总结和下周计划</li>
+            <li>检查并编辑 AI 生成的内容</li>
+            <li>导出 Excel 或复制 Markdown 分享给领导</li>
+            <li>点击"历史"查看过往周报</li>
           </ol>
         </div>
       </div>

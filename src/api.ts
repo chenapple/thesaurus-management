@@ -1638,3 +1638,151 @@ export async function fetchExchangeRates(currencies: string[]): Promise<Exchange
 export async function getExchangeRateHistory(currency: string, days: number = 30): Promise<ExchangeRateHistory[]> {
   return await invoke("get_exchange_rate_history", { currency, days });
 }
+
+// ==================== 工作周报 ====================
+
+import type { WeeklyReport, WeeklyReportEntry, WeeklyReportContent, WeeklyReportEntryCategory, WeeklyReportEntrySource } from './types';
+
+/**
+ * 创建周报
+ * @param weekStart 周一日期 YYYY-MM-DD
+ * @param weekEnd 周日日期 YYYY-MM-DD
+ * @param title 周报标题
+ * @returns 周报ID
+ */
+export async function createWeeklyReport(weekStart: string, weekEnd: string, title: string): Promise<number> {
+  return await invoke("create_weekly_report", { weekStart, weekEnd, title });
+}
+
+/**
+ * 获取周报
+ * @param weekStart 周一日期 YYYY-MM-DD
+ * @returns 周报信息
+ */
+export async function getWeeklyReport(weekStart: string): Promise<WeeklyReport | null> {
+  return await invoke("get_weekly_report", { weekStart });
+}
+
+/**
+ * 更新周报
+ */
+export async function updateWeeklyReport(
+  id: number,
+  title: string,
+  summary?: string,
+  nextWeekPlan?: string,
+  status: string = 'draft'
+): Promise<void> {
+  return await invoke("update_weekly_report", {
+    id,
+    title,
+    summary: summary || null,
+    nextWeekPlan: nextWeekPlan || null,
+    status,
+  });
+}
+
+/**
+ * 列出周报
+ * @param limit 最大数量
+ * @param search 搜索关键词
+ */
+export async function listWeeklyReports(limit?: number, search?: string): Promise<WeeklyReport[]> {
+  return await invoke("list_weekly_reports", {
+    limit: limit || null,
+    search: search || null,
+  });
+}
+
+/**
+ * 添加周报条目
+ */
+export async function addReportEntry(
+  weekStart: string,
+  category: WeeklyReportEntryCategory,
+  content: string,
+  description?: string,
+  taskCategory?: string,
+  priorityLevel: string = 'medium',
+  progress: number = 100,
+  source: WeeklyReportEntrySource = 'manual',
+  sourceId?: number
+): Promise<number> {
+  return await invoke("add_report_entry", {
+    weekStart,
+    category,
+    content,
+    description: description || null,
+    taskCategory: taskCategory || null,
+    priorityLevel,
+    progress,
+    source,
+    sourceId: sourceId || null,
+  });
+}
+
+/**
+ * 更新周报条目
+ */
+export async function updateReportEntry(
+  id: number,
+  content: string,
+  description: string | null,
+  taskCategory: string | null,
+  category: WeeklyReportEntryCategory,
+  priorityLevel: string = 'medium',
+  priority: number = 0,
+  progress: number = 100
+): Promise<void> {
+  return await invoke("update_report_entry", {
+    id,
+    content,
+    description,
+    taskCategory,
+    category,
+    priorityLevel,
+    priority,
+    progress,
+  });
+}
+
+/**
+ * 删除周报条目
+ */
+export async function deleteReportEntry(id: number): Promise<void> {
+  return await invoke("delete_report_entry", { id });
+}
+
+/**
+ * 获取周报条目
+ */
+export async function getReportEntries(weekStart: string): Promise<WeeklyReportEntry[]> {
+  return await invoke("get_report_entries", { weekStart });
+}
+
+/**
+ * 获取周报完整数据（包含条目、备忘录、优化事件）
+ */
+export async function getWeeklyReportData(weekStart: string, weekEnd: string): Promise<WeeklyReportContent> {
+  return await invoke("get_weekly_report_data", { weekStart, weekEnd });
+}
+
+/**
+ * 批量导入周报条目
+ * @param entries 条目列表 [(content, source, source_id)]
+ * @returns 导入数量
+ */
+export async function importReportEntries(
+  weekStart: string,
+  category: WeeklyReportEntryCategory,
+  entries: [string, string, number | null][]
+): Promise<number> {
+  return await invoke("import_report_entries", { weekStart, category, entries });
+}
+
+/**
+ * 删除周报
+ */
+export async function deleteWeeklyReport(weekStart: string): Promise<void> {
+  return await invoke("delete_weekly_report", { weekStart });
+}

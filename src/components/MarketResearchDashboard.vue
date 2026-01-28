@@ -221,7 +221,8 @@ function renderMarkdown(text: string): string {
   let result = text
     // 代码块
     .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-    // 标题
+    // 标题（从最多井号开始处理，避免误匹配）
+    .replace(/^#### (.+)$/gm, '<h5>$1</h5>')
     .replace(/^### (.+)$/gm, '<h4>$1</h4>')
     .replace(/^## (.+)$/gm, '<h3>$1</h3>')
     .replace(/^# (.+)$/gm, '<h2>$1</h2>')
@@ -881,6 +882,13 @@ html.dark .marketplace-item {
 .markdown-content :deep(h4) {
   font-size: 14px;
   margin: 10px 0 4px;
+}
+
+.markdown-content :deep(h5) {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 10px 0 4px;
+  color: #374151;
 }
 
 .markdown-content :deep(ul) {

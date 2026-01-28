@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ArrowDown, DataLine, Document, Grid, PieChart, TrendCharts, EditPen, Promotion, ChatDotRound, Cpu, Setting, QuestionFilled } from "@element-plus/icons-vue";
+import { ArrowDown, DataLine, Document, Grid, PieChart, TrendCharts, EditPen, Promotion, ChatDotRound, Cpu, Setting, QuestionFilled, Calendar } from "@element-plus/icons-vue";
 
-type ViewMode = 'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge' | 'ads' | 'agent';
+type ViewMode = 'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge' | 'ads' | 'agent' | 'weekly_report';
 
 defineProps<{
   viewMode: ViewMode;
@@ -87,6 +87,13 @@ function switchView(mode: ViewMode) {
       >
         <el-icon><Cpu /></el-icon>
         智能体
+      </el-button>
+      <el-button
+        :type="viewMode === 'weekly_report' ? 'primary' : 'default'"
+        @click="switchView('weekly_report')"
+      >
+        <el-icon><Calendar /></el-icon>
+        工作周报
       </el-button>
     </el-button-group>
     <el-dropdown trigger="click" class="global-settings-dropdown">

@@ -35,6 +35,7 @@ const AdOptimizerTab = defineAsyncComponent(() => import("./components/AdOptimiz
 const AgentTab = defineAsyncComponent(() => import("./components/AgentTab.vue"));
 const GlobalNotification = defineAsyncComponent(() => import("./components/GlobalNotification.vue"));
 const QuickNotes = defineAsyncComponent(() => import("./components/QuickNotes.vue"));
+const WeeklyReportTab = defineAsyncComponent(() => import("./components/WeeklyReportTab.vue"));
 
 // New extracted components
 const TopNavBar = defineAsyncComponent(() => import("./components/TopNavBar.vue"));
@@ -166,7 +167,7 @@ const showQuickAddMonitoringDialog = ref(false);
 const appVersion = ref("");
 
 // View mode
-const viewMode = ref<'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge' | 'ads' | 'agent'>('dashboard');
+const viewMode = ref<'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge' | 'ads' | 'agent' | 'weekly_report'>('dashboard');
 const enableAgent = import.meta.env.VITE_ENABLE_AGENT === 'true';
 
 // Word cloud
@@ -576,7 +577,7 @@ async function loadWorkflowStatus() {
 
 // ==================== View Mode ====================
 
-function switchViewMode(mode: 'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge' | 'ads' | 'agent') {
+function switchViewMode(mode: 'dashboard' | 'keywords' | 'roots' | 'wordcloud' | 'monitoring' | 'smartcopy' | 'knowledge' | 'ads' | 'agent' | 'weekly_report') {
   viewMode.value = mode;
   if (mode === 'wordcloud' && allRootsForCloud.value.length === 0) {
     loadAllRootsForCloud();
@@ -1351,7 +1352,7 @@ onUnmounted(() => {
     <div class="app-body">
       <!-- Product Sidebar -->
       <ProductSidebar
-        v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'ads' && viewMode !== 'agent'"
+        v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'ads' && viewMode !== 'agent' && viewMode !== 'weekly_report'"
         :products="products"
         :selected-product="selectedProduct"
         :sidebar-width="sidebarWidth"
@@ -1367,7 +1368,7 @@ onUnmounted(() => {
 
       <!-- Resize handle -->
       <div
-        v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'ads' && viewMode !== 'agent'"
+        v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'ads' && viewMode !== 'agent' && viewMode !== 'weekly_report'"
         class="resize-handle"
         :class="{ resizing: isResizing }"
         @mousedown="startResize"
@@ -1376,7 +1377,7 @@ onUnmounted(() => {
       <!-- Main content -->
       <main class="main-content">
         <!-- Top toolbar -->
-        <header v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'ads' && viewMode !== 'agent'" class="header">
+        <header v-if="viewMode !== 'knowledge' && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'ads' && viewMode !== 'agent' && viewMode !== 'weekly_report'" class="header">
           <div class="header-left">
             <h1 class="title">{{ selectedProduct?.name || '请选择产品' }}</h1>
             <div class="header-stats" v-if="selectedProduct">
@@ -1647,6 +1648,15 @@ onUnmounted(() => {
           />
         </keep-alive>
 
+        <!-- Weekly Report view -->
+        <keep-alive>
+          <WeeklyReportTab
+            v-if="viewMode === 'weekly_report'"
+            class="weekly-report-view"
+            @show-help="showHelpDialog = true"
+          />
+        </keep-alive>
+
         <!-- Dashboard view -->
         <DashboardTab
           v-if="viewMode === 'dashboard'"
@@ -1657,7 +1667,7 @@ onUnmounted(() => {
         />
 
         <!-- No product selected -->
-        <div class="empty-state main-empty" v-if="!selectedProduct && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'knowledge' && viewMode !== 'ads'">
+        <div class="empty-state main-empty" v-if="!selectedProduct && viewMode !== 'dashboard' && viewMode !== 'smartcopy' && viewMode !== 'knowledge' && viewMode !== 'ads' && viewMode !== 'weekly_report'">
           <div class="empty-icon">
             <el-icon :size="64"><Pointer /></el-icon>
           </div>
@@ -1946,4 +1956,5 @@ h1, h2, h3, h4, h5, h6, .font-heading {
 .ad-optimizer-view { flex: 1; overflow-y: auto; min-height: 0; margin: 0 16px; background: var(--el-bg-color); border-radius: 8px; }
 .dashboard-view { flex: 1; overflow-y: auto; min-height: 0; margin: 0 16px; background: var(--el-bg-color); border-radius: 8px; }
 .agent-view { flex: 1; overflow-y: auto; min-height: 0; margin: 0 16px; background: var(--el-bg-color); border-radius: 8px; }
+.weekly-report-view { flex: 1; overflow-y: auto; min-height: 0; margin: 0 16px; background: var(--el-bg-color); border-radius: 8px; }
 </style>

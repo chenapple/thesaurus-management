@@ -390,6 +390,9 @@ pub fn init_db(app_data_dir: PathBuf) -> Result<()> {
     // 初始化汇率历史表
     init_exchange_rate_history_table(&conn)?;
 
+    // 初始化工作周报表
+    init_weekly_report_tables(&conn)?;
+
     DB.set(Mutex::new(conn))
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
 
@@ -6682,13 +6685,30 @@ pub fn add_quick_note(content: String) -> Result<i64> {
 pub fn get_quick_notes(filter: Option<String>) -> Result<Vec<QuickNote>> {
     let conn = get_db().lock();
 
+    // 获取今天的日期（用于过滤未到期的重复任务）
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+    // 未完成任务的过滤条件：due_date 为空 或 due_date <= 今天
+    // 这样重复任务在完成后，下一个周期的任务只有到期日才会显示
     let sql = match filter.as_deref() {
-        Some("pending") => "SELECT id, content, completed, created_at, completed_at, due_date, sort_order, repeat_type, repeat_interval FROM quick_notes WHERE completed = 0 ORDER BY sort_order ASC, created_at DESC",
-        Some("completed") => "SELECT id, content, completed, created_at, completed_at, due_date, sort_order, repeat_type, repeat_interval FROM quick_notes WHERE completed = 1 ORDER BY completed_at DESC",
-        _ => "SELECT id, content, completed, created_at, completed_at, due_date, sort_order, repeat_type, repeat_interval FROM quick_notes ORDER BY completed ASC, sort_order ASC, created_at DESC",
+        Some("pending") => format!(
+            "SELECT id, content, completed, created_at, completed_at, due_date, sort_order, repeat_type, repeat_interval \
+             FROM quick_notes \
+             WHERE completed = 0 AND (due_date IS NULL OR due_date <= '{}') \
+             ORDER BY sort_order ASC, created_at DESC",
+            today
+        ),
+        Some("completed") => "SELECT id, content, completed, created_at, completed_at, due_date, sort_order, repeat_type, repeat_interval FROM quick_notes WHERE completed = 1 ORDER BY completed_at DESC".to_string(),
+        _ => format!(
+            "SELECT id, content, completed, created_at, completed_at, due_date, sort_order, repeat_type, repeat_interval \
+             FROM quick_notes \
+             WHERE completed = 1 OR (completed = 0 AND (due_date IS NULL OR due_date <= '{}')) \
+             ORDER BY completed ASC, sort_order ASC, created_at DESC",
+            today
+        ),
     };
 
-    let mut stmt = conn.prepare(sql)?;
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], |row| {
         Ok(QuickNote {
             id: row.get(0)?,
@@ -6810,16 +6830,30 @@ pub fn delete_quick_note(id: i64) -> Result<()> {
 
 pub fn get_quick_notes_count() -> Result<(i64, i64)> {
     let conn = get_db().lock();
+
+    // 获取今天的日期
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+    // 总数：已完成 + 到期的未完成任务
     let total: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM quick_notes",
+        &format!(
+            "SELECT COUNT(*) FROM quick_notes WHERE completed = 1 OR (completed = 0 AND (due_date IS NULL OR due_date <= '{}'))",
+            today
+        ),
         [],
         |row| row.get(0),
     )?;
+
+    // 待办数：只统计已到期的未完成任务
     let pending: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM quick_notes WHERE completed = 0",
+        &format!(
+            "SELECT COUNT(*) FROM quick_notes WHERE completed = 0 AND (due_date IS NULL OR due_date <= '{}')",
+            today
+        ),
         [],
         |row| row.get(0),
     )?;
+
     Ok((total, pending))
 }
 
@@ -6977,4 +7011,447 @@ pub fn cleanup_old_exchange_rate_history(days: i32) -> Result<usize> {
         rusqlite::params![days_param],
     )?;
     Ok(deleted)
+}
+
+// ==================== 工作周报 ====================
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WeeklyReport {
+    pub id: i64,
+    pub week_start: String,              // 周一日期 (YYYY-MM-DD)
+    pub week_end: String,                // 周日日期
+    pub title: String,                   // 周报标题
+    pub status: String,                  // draft | final
+    pub summary: Option<String>,         // 本周总结
+    pub next_week_plan: Option<String>,  // 下周计划
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WeeklyReportEntry {
+    pub id: i64,
+    pub week_start: String,              // 所属周次
+    pub category: String,                // completed | in_progress | problem | plan | other
+    pub content: String,                 // 条目内容（标题）
+    pub description: Option<String>,     // 详细描述
+    pub task_category: Option<String>,   // 任务分类: 运营 | 开发 | 设计 | 会议 | 学习 | 其他
+    pub priority: i64,                   // 排序优先级
+    pub priority_level: String,          // 优先级等级: low | medium | high
+    pub progress: i64,                   // 完成进度 0-100
+    pub source: String,                  // manual | quicknotes | optimization
+    pub source_id: Option<i64>,          // 来源记录 ID
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WeeklyReportContent {
+    pub report: Option<WeeklyReport>,
+    pub entries: WeeklyReportEntries,
+    pub quick_notes_completed: Vec<QuickNote>,
+    pub optimization_events: Vec<OptimizationEvent>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WeeklyReportEntries {
+    pub completed: Vec<WeeklyReportEntry>,
+    pub in_progress: Vec<WeeklyReportEntry>,
+    pub problem: Vec<WeeklyReportEntry>,
+    pub plan: Vec<WeeklyReportEntry>,
+    pub other: Vec<WeeklyReportEntry>,
+}
+
+pub fn init_weekly_report_tables(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        -- 周报主表
+        CREATE TABLE IF NOT EXISTS weekly_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            week_start TEXT NOT NULL,
+            week_end TEXT NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT DEFAULT 'draft',
+            summary TEXT,
+            next_week_plan TEXT,
+            created_at TEXT DEFAULT (datetime('now', 'localtime')),
+            updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+            UNIQUE(week_start)
+        );
+
+        -- 周报条目表
+        CREATE TABLE IF NOT EXISTS weekly_report_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            week_start TEXT NOT NULL,
+            category TEXT NOT NULL,
+            content TEXT NOT NULL,
+            description TEXT,
+            task_category TEXT,
+            priority INTEGER DEFAULT 0,
+            priority_level TEXT DEFAULT 'medium',
+            progress INTEGER DEFAULT 100,
+            source TEXT DEFAULT 'manual',
+            source_id INTEGER,
+            created_at TEXT DEFAULT (datetime('now', 'localtime'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_entries_week ON weekly_report_entries(week_start);
+        CREATE INDEX IF NOT EXISTS idx_entries_category ON weekly_report_entries(category);
+        "
+    )?;
+
+    // 迁移：给 weekly_report_entries 添加新字段
+    let _ = conn.execute("ALTER TABLE weekly_report_entries ADD COLUMN progress INTEGER DEFAULT 100", []);
+    let _ = conn.execute("ALTER TABLE weekly_report_entries ADD COLUMN description TEXT", []);
+    let _ = conn.execute("ALTER TABLE weekly_report_entries ADD COLUMN priority_level TEXT DEFAULT 'medium'", []);
+    let _ = conn.execute("ALTER TABLE weekly_report_entries ADD COLUMN task_category TEXT", []);
+
+    Ok(())
+}
+
+// 创建周报
+pub fn create_weekly_report(week_start: &str, week_end: &str, title: &str) -> Result<i64> {
+    let conn = get_db().lock();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    conn.execute(
+        "INSERT OR IGNORE INTO weekly_reports (week_start, week_end, title, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?4)",
+        rusqlite::params![week_start, week_end, title, now],
+    )?;
+
+    // 如果已存在，返回现有ID
+    let id: i64 = conn.query_row(
+        "SELECT id FROM weekly_reports WHERE week_start = ?1",
+        [week_start],
+        |row| row.get(0),
+    )?;
+
+    Ok(id)
+}
+
+// 获取周报
+pub fn get_weekly_report(week_start: &str) -> Result<Option<WeeklyReport>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, week_start, week_end, title, status, summary, next_week_plan, created_at, updated_at
+         FROM weekly_reports WHERE week_start = ?1"
+    )?;
+
+    let mut rows = stmt.query([week_start])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(WeeklyReport {
+            id: row.get(0)?,
+            week_start: row.get(1)?,
+            week_end: row.get(2)?,
+            title: row.get(3)?,
+            status: row.get(4)?,
+            summary: row.get(5)?,
+            next_week_plan: row.get(6)?,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+// 更新周报
+pub fn update_weekly_report(
+    id: i64,
+    title: &str,
+    summary: Option<&str>,
+    next_week_plan: Option<&str>,
+    status: &str,
+) -> Result<()> {
+    let conn = get_db().lock();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    conn.execute(
+        "UPDATE weekly_reports SET title = ?2, summary = ?3, next_week_plan = ?4, status = ?5, updated_at = ?6
+         WHERE id = ?1",
+        rusqlite::params![id, title, summary, next_week_plan, status, now],
+    )?;
+    Ok(())
+}
+
+// 列出周报
+pub fn list_weekly_reports(limit: Option<i64>, search: Option<&str>) -> Result<Vec<WeeklyReport>> {
+    let conn = get_db().lock();
+
+    let mut sql = String::from(
+        "SELECT id, week_start, week_end, title, status, summary, next_week_plan, created_at, updated_at
+         FROM weekly_reports"
+    );
+
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![];
+
+    if let Some(ref s) = search {
+        if !s.is_empty() {
+            sql.push_str(" WHERE title LIKE ?1 OR summary LIKE ?1");
+            params.push(Box::new(format!("%{}%", s)));
+        }
+    }
+
+    sql.push_str(" ORDER BY week_start DESC");
+
+    if let Some(l) = limit {
+        sql.push_str(&format!(" LIMIT {}", l));
+    }
+
+    let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let mut stmt = conn.prepare(&sql)?;
+
+    let reports = stmt.query_map(params_refs.as_slice(), |row| {
+        Ok(WeeklyReport {
+            id: row.get(0)?,
+            week_start: row.get(1)?,
+            week_end: row.get(2)?,
+            title: row.get(3)?,
+            status: row.get(4)?,
+            summary: row.get(5)?,
+            next_week_plan: row.get(6)?,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
+        })
+    })?
+    .collect::<Result<Vec<_>>>()?;
+
+    Ok(reports)
+}
+
+// 添加周报条目
+pub fn add_report_entry(
+    week_start: &str,
+    category: &str,
+    content: &str,
+    description: Option<&str>,
+    task_category: Option<&str>,
+    priority_level: &str,
+    progress: i64,
+    source: &str,
+    source_id: Option<i64>,
+) -> Result<i64> {
+    let conn = get_db().lock();
+
+    // 获取当前最大 priority
+    let max_priority: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(priority), 0) FROM weekly_report_entries WHERE week_start = ?1 AND category = ?2",
+            rusqlite::params![week_start, category],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    conn.execute(
+        "INSERT INTO weekly_report_entries (week_start, category, content, description, task_category, priority, priority_level, progress, source, source_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        rusqlite::params![week_start, category, content, description, task_category, max_priority + 1, priority_level, progress, source, source_id],
+    )?;
+
+    Ok(conn.last_insert_rowid())
+}
+
+// 更新周报条目
+pub fn update_report_entry(
+    id: i64,
+    content: &str,
+    description: Option<&str>,
+    task_category: Option<&str>,
+    category: &str,
+    priority_level: &str,
+    priority: i64,
+    progress: i64,
+) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute(
+        "UPDATE weekly_report_entries SET content = ?2, description = ?3, task_category = ?4, category = ?5, priority_level = ?6, priority = ?7, progress = ?8 WHERE id = ?1",
+        rusqlite::params![id, content, description, task_category, category, priority_level, priority, progress],
+    )?;
+    Ok(())
+}
+
+// 删除周报条目
+pub fn delete_report_entry(id: i64) -> Result<()> {
+    let conn = get_db().lock();
+    conn.execute("DELETE FROM weekly_report_entries WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+// 获取周报条目
+pub fn get_report_entries(week_start: &str) -> Result<Vec<WeeklyReportEntry>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, week_start, category, content, description, task_category, priority, priority_level, progress, source, source_id, created_at
+         FROM weekly_report_entries WHERE week_start = ?1 ORDER BY priority ASC"
+    )?;
+
+    let entries = stmt.query_map([week_start], |row| {
+        Ok(WeeklyReportEntry {
+            id: row.get(0)?,
+            week_start: row.get(1)?,
+            category: row.get(2)?,
+            content: row.get(3)?,
+            description: row.get(4)?,
+            task_category: row.get(5)?,
+            priority: row.get(6)?,
+            priority_level: row.get::<_, Option<String>>(7)?.unwrap_or_else(|| "medium".to_string()),
+            progress: row.get(8)?,
+            source: row.get(9)?,
+            source_id: row.get(10)?,
+            created_at: row.get(11)?,
+        })
+    })?
+    .collect::<Result<Vec<_>>>()?;
+
+    Ok(entries)
+}
+
+// 获取本周完成的备忘录任务
+pub fn get_week_quick_notes(week_start: &str, week_end: &str) -> Result<Vec<QuickNote>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, content, completed, created_at, completed_at, due_date, sort_order, repeat_type, repeat_interval
+         FROM quick_notes
+         WHERE completed = 1 AND completed_at >= ?1 AND completed_at <= ?2
+         ORDER BY completed_at DESC"
+    )?;
+
+    // 调整日期范围包含整天
+    let start = format!("{} 00:00:00", week_start);
+    let end = format!("{} 23:59:59", week_end);
+
+    let notes = stmt.query_map(rusqlite::params![start, end], |row| {
+        Ok(QuickNote {
+            id: row.get(0)?,
+            content: row.get(1)?,
+            completed: row.get::<_, i32>(2)? == 1,
+            created_at: row.get(3)?,
+            completed_at: row.get(4)?,
+            due_date: row.get(5)?,
+            sort_order: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+            repeat_type: row.get(7)?,
+            repeat_interval: row.get::<_, Option<i64>>(8)?.unwrap_or(1),
+        })
+    })?
+    .collect::<Result<Vec<_>>>()?;
+
+    Ok(notes)
+}
+
+// 获取本周优化事件（不依赖 product_id）
+pub fn get_week_optimization_events_all(week_start: &str, week_end: &str) -> Result<Vec<OptimizationEvent>> {
+    let conn = get_db().lock();
+    let mut stmt = conn.prepare(
+        "SELECT id, product_id, event_date, event_type, COALESCE(event_sub_type, 'title') as event_sub_type,
+                title, description, target_asin, affected_keywords, screenshots, created_at
+         FROM optimization_events
+         WHERE event_date >= ?1 AND event_date <= ?2
+         ORDER BY event_date DESC, created_at DESC"
+    )?;
+
+    let events = stmt.query_map(rusqlite::params![week_start, week_end], |row| {
+        Ok(OptimizationEvent {
+            id: row.get(0)?,
+            product_id: row.get(1)?,
+            event_date: row.get(2)?,
+            event_type: row.get(3)?,
+            event_sub_type: row.get(4)?,
+            title: row.get(5)?,
+            description: row.get(6)?,
+            target_asin: row.get(7)?,
+            affected_keywords: row.get(8)?,
+            screenshots: row.get(9)?,
+            created_at: row.get(10)?,
+        })
+    })?
+    .collect::<Result<Vec<_>>>()?;
+
+    Ok(events)
+}
+
+// 获取周报完整数据
+pub fn get_weekly_report_data(week_start: &str, week_end: &str) -> Result<WeeklyReportContent> {
+    let report = get_weekly_report(week_start)?;
+    let all_entries = get_report_entries(week_start)?;
+    let quick_notes = get_week_quick_notes(week_start, week_end)?;
+    let events = get_week_optimization_events_all(week_start, week_end)?;
+
+    // 按 category 分组
+    let mut entries = WeeklyReportEntries {
+        completed: vec![],
+        in_progress: vec![],
+        problem: vec![],
+        plan: vec![],
+        other: vec![],
+    };
+
+    for entry in all_entries {
+        match entry.category.as_str() {
+            "completed" => entries.completed.push(entry),
+            "in_progress" => entries.in_progress.push(entry),
+            "problem" => entries.problem.push(entry),
+            "plan" => entries.plan.push(entry),
+            _ => entries.other.push(entry),
+        }
+    }
+
+    Ok(WeeklyReportContent {
+        report,
+        entries,
+        quick_notes_completed: quick_notes,
+        optimization_events: events,
+    })
+}
+
+// 批量导入周报条目（避免重复导入）
+pub fn import_report_entries(
+    week_start: &str,
+    category: &str,
+    entries: Vec<(String, String, Option<i64>)>,  // (content, source, source_id)
+) -> Result<i64> {
+    let conn = get_db().lock();
+    let mut imported = 0i64;
+
+    for (content, source, source_id) in entries {
+        // 检查是否已存在（根据 source 和 source_id）
+        if let Some(sid) = source_id {
+            let exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM weekly_report_entries WHERE week_start = ?1 AND source = ?2 AND source_id = ?3",
+                rusqlite::params![week_start, source, sid],
+                |row| row.get(0),
+            ).unwrap_or(0);
+
+            if exists > 0 {
+                continue;
+            }
+        }
+
+        // 获取当前最大 priority
+        let max_priority: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(priority), 0) FROM weekly_report_entries WHERE week_start = ?1 AND category = ?2",
+                rusqlite::params![week_start, category],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        conn.execute(
+            "INSERT INTO weekly_report_entries (week_start, category, content, priority, progress, source, source_id)
+             VALUES (?1, ?2, ?3, ?4, 100, ?5, ?6)",
+            rusqlite::params![week_start, category, content, max_priority + 1, source, source_id],
+        )?;
+        imported += 1;
+    }
+
+    Ok(imported)
+}
+
+// 删除周报
+pub fn delete_weekly_report(week_start: &str) -> Result<()> {
+    let conn = get_db().lock();
+    // 删除周报条目
+    conn.execute("DELETE FROM weekly_report_entries WHERE week_start = ?1", [week_start])?;
+    // 删除周报主表
+    conn.execute("DELETE FROM weekly_reports WHERE week_start = ?1", [week_start])?;
+    Ok(())
 }

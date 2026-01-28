@@ -10,6 +10,7 @@ use db::{BackupInfo, Category, KeywordData, KeywordMonitoring, MonitoringSparkli
 use db::{KbCategory, KbDocument, KbChunk, KbSearchResult, KbConversation, KbMessage, KbDocumentLink, KbDocumentCategory};
 use db::ScProject;
 use db::{QuickNote, ExchangeRateCache, ExchangeRateHistory};
+use db::{WeeklyReport, WeeklyReportEntry, WeeklyReportContent};
 use scheduler::{SchedulerSettings, SchedulerStatus, SCHEDULER, MARKET_RESEARCH_SCHEDULER};
 use crawler::{BsrResult, SubcategoryResult};
 use tauri::Manager;
@@ -2142,6 +2143,114 @@ fn get_exchange_rate_history(currency: String, days: Option<i32>) -> Result<Vec<
     db::get_exchange_rate_history(&currency, days).map_err(|e| e.to_string())
 }
 
+// ==================== 工作周报 ====================
+
+#[tauri::command]
+fn create_weekly_report(week_start: String, week_end: String, title: String) -> Result<i64, String> {
+    db::create_weekly_report(&week_start, &week_end, &title).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_weekly_report(week_start: String) -> Result<Option<WeeklyReport>, String> {
+    db::get_weekly_report(&week_start).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_weekly_report(
+    id: i64,
+    title: String,
+    summary: Option<String>,
+    next_week_plan: Option<String>,
+    status: String,
+) -> Result<(), String> {
+    db::update_weekly_report(id, &title, summary.as_deref(), next_week_plan.as_deref(), &status)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_weekly_reports(limit: Option<i64>, search: Option<String>) -> Result<Vec<WeeklyReport>, String> {
+    db::list_weekly_reports(limit, search.as_deref()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn add_report_entry(
+    week_start: String,
+    category: String,
+    content: String,
+    description: Option<String>,
+    task_category: Option<String>,
+    priority_level: Option<String>,
+    progress: Option<i64>,
+    source: Option<String>,
+    source_id: Option<i64>,
+) -> Result<i64, String> {
+    db::add_report_entry(
+        &week_start,
+        &category,
+        &content,
+        description.as_deref(),
+        task_category.as_deref(),
+        &priority_level.unwrap_or_else(|| "medium".to_string()),
+        progress.unwrap_or(100),
+        &source.unwrap_or_else(|| "manual".to_string()),
+        source_id,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_report_entry(
+    id: i64,
+    content: String,
+    description: Option<String>,
+    task_category: Option<String>,
+    category: String,
+    priority_level: Option<String>,
+    priority: i64,
+    progress: i64,
+) -> Result<(), String> {
+    db::update_report_entry(
+        id,
+        &content,
+        description.as_deref(),
+        task_category.as_deref(),
+        &category,
+        &priority_level.unwrap_or_else(|| "medium".to_string()),
+        priority,
+        progress,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_report_entry(id: i64) -> Result<(), String> {
+    db::delete_report_entry(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_report_entries(week_start: String) -> Result<Vec<WeeklyReportEntry>, String> {
+    db::get_report_entries(&week_start).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_weekly_report_data(week_start: String, week_end: String) -> Result<WeeklyReportContent, String> {
+    db::get_weekly_report_data(&week_start, &week_end).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn import_report_entries(
+    week_start: String,
+    category: String,
+    entries: Vec<(String, String, Option<i64>)>,
+) -> Result<i64, String> {
+    db::import_report_entries(&week_start, &category, entries).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_weekly_report(week_start: String) -> Result<(), String> {
+    db::delete_weekly_report(&week_start).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2444,6 +2553,18 @@ pub fn run() {
             get_exchange_rates,
             fetch_exchange_rates,
             get_exchange_rate_history,
+            // 工作周报
+            create_weekly_report,
+            get_weekly_report,
+            update_weekly_report,
+            list_weekly_reports,
+            add_report_entry,
+            update_report_entry,
+            delete_report_entry,
+            get_report_entries,
+            get_weekly_report_data,
+            import_report_entries,
+            delete_weekly_report,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

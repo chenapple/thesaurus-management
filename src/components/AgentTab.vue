@@ -885,10 +885,24 @@ async function runAgent(quickScan = false) {
 
 // 保存执行结果
 async function saveResult(result: TaskResult, runId: number | null) {
+  // 优先从 generate_weekly_report 工具调用结果中提取 HTML 报告内容
+  let reportContent = result.output;
+  const reportToolCall = toolCallHistory.value.find(
+    call => call.name === 'generate_weekly_report' && call.result?.report_content
+  );
+  if (reportToolCall?.result?.report_content) {
+    reportContent = reportToolCall.result.report_content;
+    // 同时更新 finalResult 的 output，以便页面正确显示
+    if (finalResult.value) {
+      finalResult.value.output = reportContent;
+    }
+    console.log('使用工具调用返回的 HTML 报告内容');
+  }
+
   // 1. 保存到 localStorage（用于快速恢复）
   const timestamp = new Date().toISOString();
   const resultData = {
-    result,
+    result: { ...result, output: reportContent },
     marketplace: selectedMarketplace.value,
     categoryId: customCategoryId.value,
     categoryName: customCategoryName.value,
@@ -907,11 +921,12 @@ async function saveResult(result: TaskResult, runId: number | null) {
   if (runId) {
     try {
       if (result.success) {
-        // 提取摘要（取前200个字符）
-        const summary = result.output.slice(0, 200).replace(/[#\n]/g, ' ').trim();
+        // 提取摘要（取前200个字符，去除HTML标签）
+        const plainText = reportContent.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+        const summary = plainText.slice(0, 200).trim();
 
         // 检查报告内容是否为空
-        if (!result.output || result.output.trim().length === 0) {
+        if (!reportContent || reportContent.trim().length === 0) {
           console.warn('警告: 任务成功但报告内容为空', { runId, toolsUsed: result.toolsUsed });
         }
 
@@ -919,10 +934,10 @@ async function saveResult(result: TaskResult, runId: number | null) {
           runId,
           status: 'completed',
           summary: summary || '报告生成完成',
-          content: result.output,
+          content: reportContent,
           snapshotId: null,
         });
-        console.log('市场调研报告已保存到数据库', { runId, contentLength: result.output.length });
+        console.log('市场调研报告已保存到数据库', { runId, contentLength: reportContent.length });
       } else {
         await invoke('fail_research_run', {
           runId,
@@ -1088,7 +1103,8 @@ function renderMarkdown(text: string): string {
   let result = text
     // 代码块
     .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-    // 标题
+    // 标题（从最多井号开始处理，避免误匹配）
+    .replace(/^#### (.+)$/gm, '<h5>$1</h5>')
     .replace(/^### (.+)$/gm, '<h4>$1</h4>')
     .replace(/^## (.+)$/gm, '<h3>$1</h3>')
     .replace(/^# (.+)$/gm, '<h2>$1</h2>')
@@ -2233,6 +2249,13 @@ function renderMarkdown(text: string): string {
 .markdown-content :deep(h4) {
   font-size: 14px;
   margin: 10px 0 4px;
+}
+
+.markdown-content :deep(h5) {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 10px 0 4px;
+  color: #374151;
 }
 
 .markdown-content :deep(ul) {
