@@ -987,7 +987,7 @@ async function checkHolidayReminder() {
 
 // ==================== 汇率相关 ====================
 const exchangeRates = ref<Map<string, number>>(new Map());
-const previousExchangeRates = ref<Map<string, number>>(new Map()); // 上次汇率用于比较涨跌
+const yesterdayExchangeRates = ref<Map<string, number>>(new Map()); // 前一天汇率用于比较涨跌
 const exchangeRatesLoading = ref(false);
 const exchangeRatesUpdatedAt = ref<string | null>(null);
 
@@ -995,12 +995,13 @@ const exchangeRatesUpdatedAt = ref<string | null>(null);
 const selectedCurrencies = ref<string[]>(['USD', 'EUR', 'GBP']);
 
 // 获取汇率涨跌方向: 1=上涨, -1=下跌, 0=持平, null=无数据
+// 与前一天的汇率进行对比
 function getRateDirection(currency: string): number | null {
   const current = exchangeRates.value.get(currency);
-  const previous = previousExchangeRates.value.get(currency);
-  if (!current || !previous) return null;
-  if (current > previous) return 1;
-  if (current < previous) return -1;
+  const yesterday = yesterdayExchangeRates.value.get(currency);
+  if (!current || !yesterday) return null;
+  if (current > yesterday) return 1;
+  if (current < yesterday) return -1;
   return 0;
 }
 
@@ -1092,50 +1093,42 @@ const displayCurrencies = computed(() => {
   return EXCHANGE_RATE_CURRENCIES.filter(c => selectedCurrencies.value.includes(c.code));
 });
 
-// 从 localStorage 加载上次汇率（用于比较涨跌）
-function loadPreviousRatesFromStorage() {
+// 加载前一天的汇率（从历史记录获取，用于比较涨跌）
+async function loadYesterdayRates() {
   try {
-    const saved = localStorage.getItem('previous_exchange_rates');
-    if (saved) {
-      const parsed = JSON.parse(saved) as [string, number][];
-      previousExchangeRates.value = new Map(parsed);
+    const currencies = EXCHANGE_RATE_CURRENCIES.map(c => c.code);
+    // 获取每种货币的历史记录（2天即可获取昨天的数据）
+    for (const currency of currencies) {
+      const history = await api.getExchangeRateHistory(currency, 2);
+      // history 按日期排序，找到前一天的记录
+      if (history.length >= 2) {
+        // 取倒数第二条（前一天）
+        const yesterdayRate = history[history.length - 2];
+        if (yesterdayRate) {
+          yesterdayExchangeRates.value.set(currency, yesterdayRate.rate);
+        }
+      } else if (history.length === 1) {
+        // 只有一天数据时，用这一天的数据作为对比基准
+        yesterdayExchangeRates.value.set(currency, history[0].rate);
+      }
     }
   } catch (e) {
-    console.error('加载上次汇率失败:', e);
-  }
-}
-
-// 将当前汇率保存到 localStorage（作为下次比较的基准）
-function saveCurrentRatesToStorage() {
-  try {
-    if (exchangeRates.value.size > 0) {
-      const data = Array.from(exchangeRates.value.entries());
-      localStorage.setItem('previous_exchange_rates', JSON.stringify(data));
-    }
-  } catch (e) {
-    console.error('保存汇率失败:', e);
+    console.error('加载前一天汇率失败:', e);
   }
 }
 
 // 加载缓存的汇率
 async function loadCachedRates() {
   try {
-    // 先从 localStorage 加载上次汇率
-    loadPreviousRatesFromStorage();
-
     const cached = await api.getExchangeRates();
     if (cached.length > 0) {
       cached.forEach(item => {
         exchangeRates.value.set(item.currency, item.rate);
       });
       exchangeRatesUpdatedAt.value = cached[0]?.updated_at || null;
-
-      // 如果没有上次汇率数据，用当前汇率初始化（首次使用）
-      if (previousExchangeRates.value.size === 0) {
-        previousExchangeRates.value = new Map(exchangeRates.value);
-        saveCurrentRatesToStorage();
-      }
     }
+    // 加载前一天的汇率用于对比
+    await loadYesterdayRates();
   } catch (e) {
     console.error('加载缓存汇率失败:', e);
   }
@@ -1148,12 +1141,6 @@ async function fetchExchangeRates() {
     // 获取需要的货币代码列表
     const currencies = EXCHANGE_RATE_CURRENCIES.map(c => c.code);
 
-    // 在获取新汇率前，将当前汇率保存为"上次汇率"
-    if (exchangeRates.value.size > 0) {
-      previousExchangeRates.value = new Map(exchangeRates.value);
-      saveCurrentRatesToStorage();
-    }
-
     // 调用后端 API 获取汇率
     const result = await api.fetchExchangeRates(currencies);
 
@@ -1164,6 +1151,9 @@ async function fetchExchangeRates() {
       });
       exchangeRatesUpdatedAt.value = result[0]?.updated_at || new Date().toISOString();
     }
+
+    // 刷新前一天的汇率数据（每小时刷新一次，跨天时需要更新对比基准）
+    await loadYesterdayRates();
   } catch (e) {
     console.error('获取汇率失败:', e);
   } finally {
