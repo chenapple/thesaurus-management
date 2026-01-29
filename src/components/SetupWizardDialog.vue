@@ -11,6 +11,7 @@ defineProps<{
 const emit = defineEmits<{
   (e: 'update:visible', value: boolean): void;
   (e: 'complete'): void;
+  (e: 'start-onboarding'): void;
 }>();
 
 // 向导步骤
@@ -130,6 +131,8 @@ async function complete() {
   }
   emit('complete');
   emit('update:visible', false);
+  // 触发新手教程
+  emit('start-onboarding');
 }
 
 // 稍后配置

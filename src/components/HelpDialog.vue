@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import { Search, DataAnalysis, Collection, TrendCharts, EditPen, Promotion, FolderOpened, Calendar } from "@element-plus/icons-vue";
+import { Search, DataAnalysis, Collection, TrendCharts, EditPen, Promotion, FolderOpened, Calendar, Guide } from "@element-plus/icons-vue";
 
 defineProps<{
   visible: boolean;
@@ -8,7 +8,16 @@ defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:visible', value: boolean): void;
+  (e: 'start-onboarding'): void;
 }>();
+
+function handleStartOnboarding() {
+  emit('update:visible', false);
+  // 延迟一点让对话框关闭
+  setTimeout(() => {
+    emit('start-onboarding');
+  }, 300);
+}
 
 const activeHelpTab = ref('dashboard');
 const helpSearchQuery = ref('');
@@ -87,6 +96,12 @@ function handleClose() {
             <span>未找到相关帮助</span>
           </div>
         </el-menu>
+        <div class="help-tour-btn">
+          <el-button type="primary" @click="handleStartOnboarding">
+            <el-icon><Guide /></el-icon>
+            新手教程
+          </el-button>
+        </div>
         <div class="help-shortcut-hint">
           <kbd>⌘</kbd> + <kbd>H</kbd> 快速打开
         </div>
@@ -412,12 +427,20 @@ function handleClose() {
   background: var(--el-color-primary-light-9);
 }
 
+.help-tour-btn {
+  padding: 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.help-tour-btn .el-button {
+  width: 100%;
+}
+
 .help-shortcut-hint {
   padding: 12px;
   font-size: 12px;
   color: var(--el-text-color-placeholder);
   text-align: center;
-  border-top: 1px solid var(--el-border-color-lighter);
 }
 
 .help-shortcut-hint kbd {

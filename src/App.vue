@@ -29,6 +29,7 @@ const SettingsDialog = defineAsyncComponent(() => import("./components/SettingsD
 const QuickAddMonitoringDialog = defineAsyncComponent(() => import("./components/QuickAddMonitoringDialog.vue"));
 const KnowledgeBaseTab = defineAsyncComponent(() => import("./components/KnowledgeBaseTab.vue"));
 const SetupWizardDialog = defineAsyncComponent(() => import("./components/SetupWizardDialog.vue"));
+const OnboardingTour = defineAsyncComponent(() => import("./components/OnboardingTour.vue"));
 const DashboardTab = defineAsyncComponent(() => import("./components/DashboardTab.vue"));
 const SmartCopyTab = defineAsyncComponent(() => import("./components/SmartCopyTab.vue"));
 const AdOptimizerTab = defineAsyncComponent(() => import("./components/AdOptimizerTab.vue"));
@@ -162,6 +163,10 @@ const settingsInitialTab = ref<'monitoring' | 'auto' | 'logs'>('monitoring');
 const showTrafficDialog = ref(false);
 const showColumnConfig = ref(false);
 const showQuickAddMonitoringDialog = ref(false);
+
+// Onboarding tour
+const onboardingTourRef = ref<InstanceType<typeof OnboardingTour> | null>(null);
+const triggerOnboarding = ref(false);
 
 // App version
 const appVersion = ref("");
@@ -1207,6 +1212,23 @@ async function checkSetupWizard() {
   }
 }
 
+// ==================== Onboarding Tour ====================
+
+function handleStartOnboarding() {
+  // 延迟 500ms 后启动教程，等待对话框关闭动画完成
+  setTimeout(() => {
+    triggerOnboarding.value = true;
+  }, 500);
+}
+
+function handleOnboardingCompleted() {
+  triggerOnboarding.value = false;
+}
+
+function restartOnboardingTour() {
+  onboardingTourRef.value?.restartTour();
+}
+
 // ==================== Keyboard Shortcuts ====================
 
 function handleKeyboard(e: KeyboardEvent) {
@@ -1767,11 +1789,23 @@ onUnmounted(() => {
       @update:visible="(v) => !v && checkApiKeyStatus()"
     />
 
-    <HelpDialog v-model:visible="showHelpDialog" />
+    <HelpDialog
+      v-model:visible="showHelpDialog"
+      @start-onboarding="restartOnboardingTour"
+    />
 
     <SetupWizardDialog
       v-model:visible="showSetupWizard"
       @complete="checkApiKeyStatus"
+      @start-onboarding="handleStartOnboarding"
+    />
+
+    <!-- Onboarding Tour -->
+    <OnboardingTour
+      ref="onboardingTourRef"
+      :trigger="triggerOnboarding"
+      @completed="handleOnboardingCompleted"
+      @switch-view="switchViewMode"
     />
 
     <SettingsDialog
