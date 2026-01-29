@@ -3,7 +3,7 @@
     <!-- 国家分析进度（仅在分析进行中且多国家时显示） -->
     <div v-if="session?.status === 'running' && session.countryProgress && session.countryProgress.total > 1" class="country-progress-bar">
       <div class="country-progress-header">
-        <span class="country-flag">{{ getCountryFlag(session.currentCountry) }}</span>
+        <span class="country-flag" v-html="getCountryFlag(session.currentCountry)"></span>
         <span class="country-label">
           正在分析 <strong>{{ getCountryLabel(session.currentCountry) }}</strong> 市场
         </span>
@@ -28,7 +28,7 @@
             'failed': isCountryFailed(country)
           }"
         >
-          {{ getCountryFlag(country) }} {{ country }}
+          <span class="country-flag-mini" v-html="getCountryFlag(country)"></span> {{ getCountryLabel(country) }}
           <span v-if="isCountryFailed(country)" class="failed-icon">✕</span>
         </span>
       </div>
@@ -465,42 +465,19 @@ function getAgentMessage(agent: AgentState): string {
   return '等待中...';
 }
 
-// 国家相关辅助函数
-const COUNTRY_FLAGS: Record<string, string> = {
-  'US': '🇺🇸',
-  'UK': '🇬🇧',
-  'DE': '🇩🇪',
-  'FR': '🇫🇷',
-  'IT': '🇮🇹',
-  'ES': '🇪🇸',
-  'CA': '🇨🇦',
-  'MX': '🇲🇽',
-  'JP': '🇯🇵',
-  'AU': '🇦🇺',
-};
-
-const COUNTRY_LABELS: Record<string, string> = {
-  'US': '美国',
-  'UK': '英国',
-  'DE': '德国',
-  'FR': '法国',
-  'IT': '意大利',
-  'ES': '西班牙',
-  'CA': '加拿大',
-  'MX': '墨西哥',
-  'JP': '日本',
-  'AU': '澳大利亚',
-};
+// 使用 types.ts 中的函数（支持代码和名称查找）
+import { getCountryFlag as getFlag, getCountryLabel as getLabel } from '../../types';
 
 function getCountryFlag(country?: string): string {
-  if (!country) return '🌍';
-  return COUNTRY_FLAGS[country] || '🌍';
+  if (!country) return '';
+  const flag = getFlag(country);
+  return flag || '';  // SVG 或空
 }
 
 function getCountryLabel(country?: string): string {
   if (!country) return '准备中...';
   if (country === 'Unknown') return '未知市场';
-  return COUNTRY_LABELS[country] || country;
+  return getLabel(country);
 }
 
 function isCountryCompleted(country: string): boolean {
@@ -881,7 +858,27 @@ function isCountryFailed(country: string): boolean {
 }
 
 .country-flag {
-  font-size: 24px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.country-flag :deep(svg) {
+  width: 24px;
+  height: 16px;
+  border-radius: 2px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.country-flag-mini {
+  display: inline-flex;
+  align-items: center;
+}
+
+.country-flag-mini :deep(svg) {
+  width: 18px;
+  height: 12px;
+  border-radius: 2px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
 .country-label {

@@ -43,6 +43,82 @@ export function isAnalysisRunning(): boolean {
   return currentAbortController !== null;
 }
 
+/**
+ * 智能采样 - 确保各类问题都能被 AI 发现
+ * 当数据量超过 maxCount 时，按分类采样而非只取高花费词
+ *
+ * @param terms 原始搜索词数据
+ * @param targetAcos 目标 ACOS
+ * @param maxCount 最大采样数量（默认 200）
+ * @returns 采样后的搜索词数据和采样信息
+ */
+export function smartSampleTerms(
+  terms: AdSearchTerm[],
+  targetAcos: number,
+  maxCount: number = 200
+): { sampledTerms: AdSearchTerm[]; originalCount: number; wasSampled: boolean } {
+  const originalCount = terms.length;
+
+  if (terms.length <= maxCount) {
+    return { sampledTerms: terms, originalCount, wasSampled: false };
+  }
+
+  const selected = new Set<number>(); // 存储已选中的 ID
+  const result: AdSearchTerm[] = [];
+
+  // 1. 高花费词 (40%) - 按花费降序
+  const highSpend = [...terms].sort((a, b) => b.spend - a.spend);
+  const highSpendCount = Math.floor(maxCount * 0.4);
+  for (let i = 0; i < highSpendCount && i < highSpend.length; i++) {
+    selected.add(highSpend[i].id);
+    result.push(highSpend[i]);
+  }
+
+  // 2. 高 ACOS 词 (20%) - ACOS > 目标 ACOS，按 ACOS 降序
+  const highAcos = terms
+    .filter(t => t.acos > targetAcos && !selected.has(t.id))
+    .sort((a, b) => b.acos - a.acos);
+  const highAcosCount = Math.floor(maxCount * 0.2);
+  for (let i = 0; i < highAcosCount && i < highAcos.length; i++) {
+    selected.add(highAcos[i].id);
+    result.push(highAcos[i]);
+  }
+
+  // 3. 低转化词 (20%) - 点击 > 10 且订单 = 0，按花费降序
+  const lowConversion = terms
+    .filter(t => t.clicks > 10 && t.orders === 0 && !selected.has(t.id))
+    .sort((a, b) => b.spend - a.spend);
+  const lowConversionCount = Math.floor(maxCount * 0.2);
+  for (let i = 0; i < lowConversionCount && i < lowConversion.length; i++) {
+    selected.add(lowConversion[i].id);
+    result.push(lowConversion[i]);
+  }
+
+  // 4. 高潜力词 (20%) - ACOS < 目标 ACOS 且订单 > 0，按销售额降序
+  const highPotential = terms
+    .filter(t => t.acos > 0 && t.acos < targetAcos && t.orders > 0 && !selected.has(t.id))
+    .sort((a, b) => b.sales - a.sales);
+  const highPotentialCount = Math.floor(maxCount * 0.2);
+  for (let i = 0; i < highPotentialCount && i < highPotential.length; i++) {
+    selected.add(highPotential[i].id);
+    result.push(highPotential[i]);
+  }
+
+  // 5. 如果还不够，补充剩余高花费词
+  if (result.length < maxCount) {
+    const remaining = highSpend.filter(t => !selected.has(t.id));
+    for (let i = 0; result.length < maxCount && i < remaining.length; i++) {
+      selected.add(remaining[i].id);
+      result.push(remaining[i]);
+    }
+  }
+
+  console.log(`[SmartSample] 智能采样完成: ${originalCount} → ${result.length} 条`);
+  console.log(`[SmartSample] 分布: 高花费 ${highSpendCount}, 高ACOS ${Math.min(highAcosCount, highAcos.length)}, 低转化 ${Math.min(lowConversionCount, lowConversion.length)}, 高潜力 ${Math.min(highPotentialCount, highPotential.length)}`);
+
+  return { sampledTerms: result, originalCount, wasSampled: true };
+}
+
 // 按国家分组搜索词
 function groupSearchTermsByCountry(searchTerms: AdSearchTerm[]): Map<string, AdSearchTerm[]> {
   const grouped = new Map<string, AdSearchTerm[]>();
@@ -106,6 +182,10 @@ async function callAIStream(
   let charCount = 0;
   const maxTokens = getMaxTokensForProvider(provider, model);
 
+  // 节流控制：限制 UI 更新频率，避免过度渲染
+  let lastUpdateTime = 0;
+  const UPDATE_INTERVAL = 200; // 每 200ms 最多更新一次 UI
+
   try {
     for await (const chunk of chatStream(
       [
@@ -129,10 +209,14 @@ async function callAIStream(
       fullResponse += chunk.content;
       charCount += chunk.content.length;
 
-      // 基于响应长度估算进度（假设平均响应约 3000 字符）
-      const estimatedProgress = Math.min(90, Math.round((charCount / 3000) * 85) + 10);
-      const preview = fullResponse.slice(-150);
-      onProgress?.(estimatedProgress, `正在生成... ${charCount} 字符`, preview);
+      // 节流：只在间隔足够时才更新 UI
+      const now = Date.now();
+      if (now - lastUpdateTime >= UPDATE_INTERVAL) {
+        lastUpdateTime = now;
+        const estimatedProgress = Math.min(90, Math.round((charCount / 3000) * 85) + 10);
+        const preview = fullResponse.slice(-150);
+        onProgress?.(estimatedProgress, `正在生成... ${charCount} 字符`, preview);
+      }
     }
 
     console.log(`[${agentName}] 流式响应完成，总长度: ${fullResponse.length}`);
@@ -297,6 +381,51 @@ function deduplicateNegativeWords(negativeWords: any[]): any[] {
 }
 
 /**
+ * 去重新词机会
+ * 相同搜索词合并：累加订单数，取最佳 ACOS，合并广告组
+ */
+function deduplicateKeywordOpportunities(opportunities: any[]): any[] {
+  const wordMap = new Map<string, any>();
+
+  for (const opp of opportunities) {
+    const key = opp.search_term?.toLowerCase?.() || '';
+    if (!key) continue;
+
+    if (wordMap.has(key)) {
+      const existing = wordMap.get(key)!;
+      // 累加订单数
+      if (existing.performance && opp.performance) {
+        existing.performance.orders = (existing.performance.orders || 0) + (opp.performance.orders || 0);
+        // 取最低 ACOS（更好的表现）
+        if (opp.performance.acos < existing.performance.acos) {
+          existing.performance.acos = opp.performance.acos;
+          existing.performance.conversion_rate = opp.performance.conversion_rate;
+        }
+      }
+      // 合并广告组
+      if (opp.ad_group_name && opp.ad_group_name !== existing.ad_group_name) {
+        existing.ad_group_name = existing.ad_group_name
+          ? `${existing.ad_group_name}, ${opp.ad_group_name}`
+          : opp.ad_group_name;
+      }
+      // 合并活动
+      if (opp.campaign_name && opp.campaign_name !== existing.campaign_name) {
+        existing.campaign_name = existing.campaign_name
+          ? `${existing.campaign_name}, ${opp.campaign_name}`
+          : opp.campaign_name;
+      }
+    } else {
+      wordMap.set(key, { ...opp });
+    }
+  }
+
+  // 转回数组，按订单数降序排列
+  return Array.from(wordMap.values()).sort((a, b) =>
+    (b.performance?.orders || 0) - (a.performance?.orders || 0)
+  );
+}
+
+/**
  * 运行单个国家的分析
  */
 async function runSingleCountryAnalysis(
@@ -312,6 +441,14 @@ async function runSingleCountryAnalysis(
 ): Promise<CountryAnalysisResult> {
   console.log(`[MultiAgent] 分析国家: ${country} (${currency.code})`);
   console.log(`[MultiAgent] 该国家搜索词数量: ${searchTerms.length}`);
+
+  // 智能采样 - 确保各类问题都能被发现
+  const { sampledTerms, originalCount, wasSampled } = smartSampleTerms(searchTerms, targetAcos);
+  if (wasSampled) {
+    console.log(`[MultiAgent] 已智能采样: ${originalCount} → ${sampledTerms.length} 条`);
+  }
+  const termsForAnalysis = sampledTerms;
+  const samplingInfo = wasSampled ? { originalCount, sampledCount: sampledTerms.length } : null;
 
   // 重置所有 agent 状态
   const resetAgents = () => {
@@ -332,11 +469,11 @@ async function runSingleCountryAnalysis(
 
   resetAgents();
 
-  // 构建带国家/货币信息的 prompts
+  // 构建带国家/货币信息的 prompts（使用采样后的数据）
   const prompts = {
-    searchTermAnalyst: buildSearchTermAnalystPrompt(searchTerms, targetAcos, country, currency),
-    acosExpert: buildAcosExpertPrompt(searchTerms, targetAcos, country, currency),
-    bidStrategist: buildBidStrategistPrompt(searchTerms, targetAcos, country, currency),
+    searchTermAnalyst: buildSearchTermAnalystPrompt(termsForAnalysis, targetAcos, country, currency, samplingInfo),
+    acosExpert: buildAcosExpertPrompt(termsForAnalysis, targetAcos, country, currency, samplingInfo),
+    bidStrategist: buildBidStrategistPrompt(termsForAnalysis, targetAcos, country, currency, samplingInfo),
   };
 
   // 并行执行三个智能体
@@ -390,6 +527,9 @@ async function runSingleCountryAnalysis(
   // 去重否定词：相同搜索词合并，累加浪费金额，合并影响活动
   const deduplicatedNegativeWords = deduplicateNegativeWords(finalResult.negative_words || []);
 
+  // 去重新词机会：相同搜索词合并，累加订单数，取最佳 ACOS
+  const deduplicatedOpportunities = deduplicateKeywordOpportunities(finalResult.keyword_opportunities || []);
+
   // 基于实际 spend_wasted 计算 potential_savings（而非依赖 AI 估算）
   const calculatedPotentialSavings = deduplicatedNegativeWords.reduce(
     (sum, w) => sum + (w.spend_wasted || 0), 0
@@ -400,7 +540,7 @@ async function runSingleCountryAnalysis(
     currency,
     negative_words: deduplicatedNegativeWords,
     bid_adjustments: finalResult.bid_adjustments || [],
-    keyword_opportunities: finalResult.keyword_opportunities || [],
+    keyword_opportunities: deduplicatedOpportunities,
     summary: {
       total_spend_analyzed: totalSpend,
       potential_savings: parseFloat(calculatedPotentialSavings.toFixed(2)),
@@ -469,11 +609,38 @@ export async function runMultiAgentAnalysis(
   const abortController = new AbortController();
   currentAbortController = abortController;
 
+  // 节流更新：避免频繁的深拷贝和 Vue 响应式更新
+  let lastNotifyTime = 0;
+  let pendingNotify = false;
+  const NOTIFY_INTERVAL = 250; // 每 250ms 最多通知一次
+
   const notifyUpdate = () => {
+    const now = Date.now();
+    if (now - lastNotifyTime >= NOTIFY_INTERVAL) {
+      lastNotifyTime = now;
+      pendingNotify = false;
+      onSessionUpdate?.(cloneSession(session));
+    } else if (!pendingNotify) {
+      // 如果距离上次更新不够久，延迟到下一个间隔点更新
+      pendingNotify = true;
+      setTimeout(() => {
+        if (pendingNotify) {
+          lastNotifyTime = Date.now();
+          pendingNotify = false;
+          onSessionUpdate?.(cloneSession(session));
+        }
+      }, NOTIFY_INTERVAL - (now - lastNotifyTime));
+    }
+  };
+
+  // 强制立即通知（用于初始化和完成时）
+  const forceNotifyUpdate = () => {
+    lastNotifyTime = Date.now();
+    pendingNotify = false;
     onSessionUpdate?.(cloneSession(session));
   };
 
-  notifyUpdate();
+  forceNotifyUpdate();
 
   console.log(`[MultiAgent] ========== 开始分析 ==========`);
   console.log(`[MultiAgent] 使用 ${provider} - ${model}`);
@@ -506,13 +673,13 @@ export async function runMultiAgentAnalysis(
     countries: validCountries,
     failedCountries: [],
   };
-  notifyUpdate();
+  forceNotifyUpdate();
 
   // 如果没有需要分析的国家
   if (countries.length === 0) {
     session.status = 'completed';
     session.endTime = Date.now();
-    notifyUpdate();
+    forceNotifyUpdate();
     return null;
   }
 
@@ -530,7 +697,7 @@ export async function runMultiAgentAnalysis(
 
     // 更新当前分析的国家
     session.currentCountry = country;
-    notifyUpdate();
+    forceNotifyUpdate();
 
     try {
       const result = await runSingleCountryAnalysis(
@@ -549,7 +716,7 @@ export async function runMultiAgentAnalysis(
       // 更新增量结果到 session
       const currentMerged = mergeCountryResults([...countryResults]);
       session.finalResult = currentMerged;
-      notifyUpdate();
+      forceNotifyUpdate();
 
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -561,13 +728,13 @@ export async function runMultiAgentAnalysis(
         session.currentCountry = undefined;
         session.endTime = Date.now();
         currentAbortController = null;
-        notifyUpdate();
+        forceNotifyUpdate();
 
         // 如果已有部分结果，返回它们
         if (countryResults.length > 0) {
           const partialMerged = mergeCountryResults(countryResults);
           session.finalResult = partialMerged;
-          notifyUpdate();
+          forceNotifyUpdate();
           return partialMerged;
         }
         return null;
@@ -587,7 +754,7 @@ export async function runMultiAgentAnalysis(
 
       failedCountries.push(country);
       session.countryProgress!.failedCountries = failedCountries;
-      notifyUpdate();
+      forceNotifyUpdate();
       // 不抛出错误，继续下一个国家
     }
   }
@@ -602,7 +769,7 @@ export async function runMultiAgentAnalysis(
   if (countryResults.length === 0) {
     // 所有国家都失败了
     session.status = 'error';
-    notifyUpdate();
+    forceNotifyUpdate();
     throw new Error('所有国家分析均失败');
   } else if (failedCountries.length > 0) {
     // 部分成功
@@ -618,7 +785,7 @@ export async function runMultiAgentAnalysis(
   const mergedResult = mergeCountryResults(countryResults);
   session.finalResult = mergedResult;
   session.countryProgress!.completed = (skipCountries?.length || 0) + countryResults.length;
-  notifyUpdate();
+  forceNotifyUpdate();
 
   return mergedResult;
 }

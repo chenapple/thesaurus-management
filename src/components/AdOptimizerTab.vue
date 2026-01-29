@@ -154,6 +154,7 @@
 
         <!-- 数据可视化图表 -->
         <AdDataCharts
+          ref="dataChartsRef"
           :terms="searchTerms"
           :target-acos="currentProject?.target_acos || 30"
           v-model:selected-country="selectedChartCountry"
@@ -162,6 +163,31 @@
 
         <!-- AI 分析区 -->
         <div class="ai-analysis-section">
+          <!-- 分析范围信息 -->
+          <div class="analysis-scope-info">
+            <div class="scope-header">
+              <span class="scope-label">分析范围</span>
+            </div>
+            <div class="scope-details">
+              <div class="scope-item">
+                <el-icon class="scope-icon"><Calendar /></el-icon>
+                <span>时间：{{ analysisDateRangeLabel }}</span>
+              </div>
+              <div class="scope-item">
+                <el-icon class="scope-icon"><Location /></el-icon>
+                <span>国家：{{ analysisCountryLabel }}</span>
+              </div>
+              <div class="scope-item">
+                <el-icon class="scope-icon"><DataAnalysis /></el-icon>
+                <span>数据量：{{ analysisTermsCount }} 条搜索词</span>
+              </div>
+            </div>
+            <div v-if="needsSampling" class="scope-warning">
+              <el-icon><Warning /></el-icon>
+              <span>每个国家超过 200 条时将智能采样（高花费、低转化、高ACOS、高潜力各占比例）</span>
+            </div>
+          </div>
+
           <div class="section-header">
             <span class="section-title">AI 多智能体分析</span>
             <div class="controls">
@@ -280,7 +306,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, MoreFilled, ArrowLeft, Search, Upload } from '@element-plus/icons-vue';
+import { Plus, MoreFilled, ArrowLeft, Search, Upload, Warning, Calendar, Location, DataAnalysis } from '@element-plus/icons-vue';
 import type { AdProject, AdSearchTerm, AdAnalysisResult, AIProvider, SearchTermsStatsResult } from '../types';
 import { AI_PROVIDERS, COUNTRY_CURRENCY_MAP, getCountryLabel } from '../types';
 import type { AnalysisSession } from '../ad-prompts';
@@ -422,11 +448,45 @@ const searchTerms = ref<AdSearchTerm[]>([]);
 const failedCountries = ref<string[]>([]);
 const completedResults = ref<CountryAnalysisResult[]>([]);
 const analysisResultsRef = ref<InstanceType<typeof AdAnalysisResults> | null>(null);
+const dataChartsRef = ref<InstanceType<typeof AdDataCharts> | null>(null);
 const selectedChartCountry = ref<string>('all');  // 图表国家筛选
 
 // Provider 变化时更新默认模型
 watch(selectedProvider, (newProvider) => {
   selectedModel.value = AI_PROVIDERS[newProvider].defaultModel;
+});
+
+// 分析范围信息 - 从图表组件获取筛选后的数据
+const analysisTermsCount = computed(() => {
+  return dataChartsRef.value?.filteredTerms?.length || searchTerms.value.length;
+});
+
+const analysisDateRangeLabel = computed(() => {
+  return dataChartsRef.value?.dateRangeLabel || '全部时间';
+});
+
+const analysisCountryLabel = computed(() => {
+  if (selectedChartCountry.value === 'all') {
+    const countryCount = stats.value.by_country.length;
+    return countryCount > 1 ? `全部 (${countryCount} 个国家)` : stats.value.by_country[0]?.country || '全部';
+  }
+  return getCountryLabel(selectedChartCountry.value);
+});
+
+// 检查是否有国家需要采样（任何国家超过 200 条）
+const needsSampling = computed(() => {
+  // 检查各国家数据量
+  const termsToCheck = dataChartsRef.value?.filteredTerms || searchTerms.value;
+  const countryMap = new Map<string, number>();
+  termsToCheck.forEach(term => {
+    const country = term.country || 'Unknown';
+    countryMap.set(country, (countryMap.get(country) || 0) + 1);
+  });
+  // 任何一个国家超过 200 条就需要采样
+  for (const count of countryMap.values()) {
+    if (count > 200) return true;
+  }
+  return false;
 });
 
 // 加载项目列表
@@ -571,9 +631,20 @@ async function startAnalysis() {
       return;
     }
 
+    // 使用筛选后的数据（与图表一致）
+    const termsToAnalyze = dataChartsRef.value?.filteredTerms || searchTerms.value;
+
+    if (termsToAnalyze.length === 0) {
+      ElMessage.warning('当前筛选条件下没有数据，请调整时间或国家筛选');
+      isAnalyzing.value = false;
+      return;
+    }
+
+    console.log(`[Analysis] 分析数据量: ${termsToAnalyze.length} 条 (原始: ${searchTerms.value.length} 条)`);
+
     // 运行多智能体分析（支持增量回调）
     const result = await runMultiAgentAnalysis(
-      searchTerms.value,
+      termsToAnalyze,
       currentProject.value.target_acos,
       selectedProvider.value,
       selectedModel.value,
@@ -1105,5 +1176,61 @@ onMounted(() => {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 20px;
+}
+
+/* 分析范围信息 */
+.analysis-scope-info {
+    background: var(--el-fill-color-lighter);
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+}
+
+.scope-header {
+    margin-bottom: 12px;
+}
+
+.scope-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+}
+
+.scope-details {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+}
+
+.scope-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--el-text-color-regular);
+}
+
+.scope-icon {
+    font-size: 16px;
+    color: var(--el-text-color-secondary);
+}
+
+.scope-warning {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 12px;
+    padding: 10px 12px;
+    background: var(--el-color-warning-light-9);
+    border: 1px solid var(--el-color-warning-light-5);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--el-color-warning-dark-2);
+}
+
+.scope-warning .el-icon {
+    font-size: 16px;
+    color: var(--el-color-warning);
 }
 </style>

@@ -395,6 +395,14 @@ onMounted(() => {
     isCollapsed.value = true;
   }
 });
+
+// 暴露给父组件的数据和方法
+defineExpose({
+  filteredTerms,
+  dateRangeLabel,
+  selectedDateRange,
+  dataDateRange,
+});
 </script>
 
 <style scoped>

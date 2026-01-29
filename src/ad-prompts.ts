@@ -11,18 +11,30 @@ export interface CurrencyInfo {
   code: string;
 }
 
+// 采样信息接口
+export interface SamplingInfo {
+  originalCount: number;
+  sampledCount: number;
+}
+
 // ==================== 搜索词分析师 ====================
 
 export function buildSearchTermAnalystPrompt(
   searchTerms: AdSearchTerm[],
   targetAcos: number,
   country?: string,
-  currency?: CurrencyInfo
+  currency?: CurrencyInfo,
+  samplingInfo?: SamplingInfo | null
 ): string {
   // 计算统计数据
   const avgSpend = searchTerms.reduce((s, t) => s + t.spend, 0) / searchTerms.length;
   const currencySymbol = currency?.symbol || '$';
   const countryInfo = country ? `\n\n## 市场/国家\n${country} (${currency?.code || 'USD'})` : '';
+
+  // 采样说明
+  const samplingNote = samplingInfo
+    ? `\n\n## 数据说明\n以下数据已智能采样（原始 ${samplingInfo.originalCount} 条 → 采样 ${samplingInfo.sampledCount} 条），包含高花费、高ACOS、低转化、高潜力等代表性搜索词，确保各类问题都能被发现。`
+    : '';
 
   return `你是一位资深的亚马逊 PPC 搜索词分析师。
 
@@ -32,7 +44,7 @@ export function buildSearchTermAnalystPrompt(
 - search_term 保留原文
 
 ## 任务
-分析以下搜索词数据，识别需要否定的无效词和高潜力词。${countryInfo}
+分析以下搜索词数据，识别需要否定的无效词和高潜力词。${countryInfo}${samplingNote}
 
 ## 目标 ACOS
 ${targetAcos}%
@@ -145,13 +157,19 @@ export function buildAcosExpertPrompt(
   searchTerms: AdSearchTerm[],
   targetAcos: number,
   country?: string,
-  currency?: CurrencyInfo
+  currency?: CurrencyInfo,
+  samplingInfo?: SamplingInfo | null
 ): string {
   const totalSpend = searchTerms.reduce((s, t) => s + t.spend, 0);
   const totalSales = searchTerms.reduce((s, t) => s + t.sales, 0);
   const overallAcos = totalSales > 0 ? (totalSpend / totalSales) * 100 : 0;
   const currencySymbol = currency?.symbol || '$';
   const countryInfo = country ? ` (${country} - ${currency?.code || 'USD'})` : '';
+
+  // 采样说明
+  const samplingNote = samplingInfo
+    ? `\n\n## 数据说明\n以下数据已智能采样（原始 ${samplingInfo.originalCount} 条 → 采样 ${samplingInfo.sampledCount} 条），包含高花费、高ACOS、低转化、高潜力等代表性搜索词。`
+    : '';
 
   // 按 ACOS 分组
   const excellentTerms = searchTerms.filter(t => t.acos > 0 && t.acos <= targetAcos * 0.7);
@@ -169,7 +187,7 @@ export function buildAcosExpertPrompt(
 - search_term、targeting 保留原文
 
 ## 任务
-分析广告效率，识别 ACOS 异常的投放词，并提供优化建议。${countryInfo}
+分析广告效率，识别 ACOS 异常的投放词，并提供优化建议。${countryInfo}${samplingNote}
 
 ## 目标 ACOS: ${targetAcos}%
 
@@ -261,10 +279,16 @@ export function buildBidStrategistPrompt(
   searchTerms: AdSearchTerm[],
   targetAcos: number,
   country?: string,
-  currency?: CurrencyInfo
+  currency?: CurrencyInfo,
+  samplingInfo?: SamplingInfo | null
 ): string {
   const currencySymbol = currency?.symbol || '$';
   const countryInfo = country ? ` (${country} - ${currency?.code || 'USD'})` : '';
+
+  // 采样说明
+  const samplingNote = samplingInfo
+    ? `\n\n## 数据说明\n以下数据已智能采样（原始 ${samplingInfo.originalCount} 条 → 采样 ${samplingInfo.sampledCount} 条），包含高花费、高ACOS、低转化、高潜力等代表性搜索词。`
+    : '';
 
   // 按投放词聚合数据
   const targetingMap = new Map<string, {
@@ -332,7 +356,7 @@ export function buildBidStrategistPrompt(
 - targeting、campaign_name 保留原文
 
 ## 任务
-基于搜索词表现数据，生成具体的竞价调整建议。${countryInfo}
+基于搜索词表现数据，生成具体的竞价调整建议。${countryInfo}${samplingNote}
 
 ## 目标 ACOS: ${targetAcos}%
 
