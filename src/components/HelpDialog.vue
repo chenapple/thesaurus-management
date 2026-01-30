@@ -27,7 +27,7 @@ const helpSections = [
   { id: 'keywords', title: '词库管理', icon: 'Collection', keywords: ['关键词', '导入', '分类', '词根', '流量', '搜索量', 'AI', '西柚', '卖家精灵', '否词', '批量', '标记'] },
   { id: 'monitoring', title: '排名监控', icon: 'TrendCharts', keywords: ['排名', '监控', '追踪', '变化', '调度', '定时', '通知'] },
   { id: 'smartcopy', title: '智能文案', icon: 'EditPen', keywords: ['文案', '标题', '五点', 'listing', 'AI', '竞品', '分析', '新品', '老品'] },
-  { id: 'ads', title: '智能广告', icon: 'Promotion', keywords: ['广告', 'ACOS', 'CPC', '否词', '优化', '预算', '投放', '趋势图', '四象限', '导入', '追加', '替换', '时间筛选', '国家'] },
+  { id: 'ads', title: '智能广告', icon: 'Promotion', keywords: ['广告', 'ACOS', 'CPC', '否词', '优化', '预算', '投放', '趋势图', '四象限', '导入', '追加', '替换', '时间筛选', '国家', '广告指南', '捡漏', '自动广告', '手动广告'] },
   { id: 'knowledge', title: '知识库', icon: 'FolderOpened', keywords: ['知识', '文档', 'AI问答', '向量', '搜索', 'RAG', '分类', '双向链接', '知识图谱', 'Callout', '大纲', '保存笔记', 'Obsidian'] },
   { id: 'weekly_report', title: '工作周报', icon: 'Calendar', keywords: ['周报', '工作', '总结', '计划', '任务', '常规', '导出', 'AI', 'Excel', 'Markdown'] },
 ];
@@ -307,6 +307,15 @@ function handleClose() {
             <li>关注时间趋势图，观察 ACOS 和花费的变化规律</li>
             <li>使用四象限图快速识别高潜力和需淘汰的搜索词</li>
             <li>对比不同时间段的数据，评估优化效果</li>
+          </ul>
+
+          <h4>广告指南</h4>
+          <p>点击"广告指南"按钮，打开亚马逊广告优化知识库：</p>
+          <ul>
+            <li><strong>分类浏览：</strong>自动广告、手动广告、捡漏广告、ACOS优化、预算分配等分类</li>
+            <li><strong>搜索功能：</strong>输入关键词快速查找相关技巧</li>
+            <li><strong>详细内容：</strong>每个技巧包含策略说明、参数设置、优化建议</li>
+            <li><strong>捡漏广告：</strong>5种低成本获取流量的策略，含参数对照表</li>
           </ul>
         </div>
 

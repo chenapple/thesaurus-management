@@ -5,6 +5,7 @@ mod notification;
 mod installer;
 mod knowledge_base;
 mod ai;
+mod keychain;
 
 use db::{BackupInfo, Category, KeywordData, KeywordMonitoring, MonitoringSparkline, MonitoringStats, Product, RankingHistory, RankingSnapshot, RootWithCategories, TrafficLevelStats, UncategorizedKeyword, WorkflowStatus};
 use db::{KbCategory, KbDocument, KbChunk, KbSearchResult, KbConversation, KbMessage, KbDocumentLink, KbDocumentCategory};
@@ -258,6 +259,8 @@ fn delete_backup(backup_id: i64) -> Result<(), String> {
 }
 
 // ==================== API Key 存储 ====================
+// 注意：keychain 存储在某些环境下不稳定，暂时使用 SQLite 存储
+// TODO: 调查 keyring 库兼容性问题后再考虑启用 keychain
 
 #[tauri::command]
 fn set_api_key(key_name: String, api_key: String) -> Result<(), String> {
@@ -281,6 +284,12 @@ fn has_api_key(key_name: String) -> Result<bool, String> {
         Ok(None) => Ok(false),
         Err(e) => Err(format!("检查 API Key 失败: {}", e)),
     }
+}
+
+/// 迁移 API Key（keychain 功能暂时禁用，返回空列表）
+#[tauri::command]
+fn migrate_api_keys() -> Result<Vec<String>, String> {
+    Ok(vec![])
 }
 
 // ==================== 关键词排名监控 ====================
@@ -2376,11 +2385,12 @@ pub fn run() {
             get_backups,
             restore_backup,
             delete_backup,
-            // API Key 安全存储
+            // API Key 存储
             set_api_key,
             get_api_key,
             delete_api_key,
             has_api_key,
+            migrate_api_keys,
             // 关键词排名监控
             add_keyword_monitoring,
             get_keyword_monitoring_list,

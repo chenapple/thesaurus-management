@@ -347,6 +347,15 @@ export async function hasApiKey(keyName: string): Promise<boolean> {
   return await invoke("has_api_key", { keyName });
 }
 
+/**
+ * 从 SQLite 迁移 API Key 到系统密钥链
+ * 应用启动时自动调用，确保旧版本数据平滑迁移
+ * @returns 成功迁移的 key 名称列表
+ */
+export async function migrateApiKeys(): Promise<string[]> {
+  return await invoke("migrate_api_keys");
+}
+
 // ==================== 关键词排名监控 ====================
 
 /**

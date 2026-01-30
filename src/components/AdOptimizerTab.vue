@@ -5,6 +5,10 @@
       <div class="list-header">
         <h2>智能广告分析</h2>
         <div class="header-actions">
+          <el-button @click="showTipsDrawer = true">
+            <el-icon><Reading /></el-icon>
+            广告指南
+          </el-button>
           <el-button type="primary" @click="showCreateDialog = true">
             <el-icon><Plus /></el-icon>
             新建项目
@@ -300,13 +304,16 @@
         @imported="onImportDialogImported"
       />
     </el-dialog>
+
+    <!-- 广告指南抽屉 -->
+    <AdTipsDrawer v-model="showTipsDrawer" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, MoreFilled, ArrowLeft, Search, Upload, Warning, Calendar, Location, DataAnalysis } from '@element-plus/icons-vue';
+import { Plus, MoreFilled, ArrowLeft, Search, Upload, Warning, Calendar, Location, DataAnalysis, Reading } from '@element-plus/icons-vue';
 import type { AdProject, AdSearchTerm, AdAnalysisResult, AIProvider, SearchTermsStatsResult } from '../types';
 import { AI_PROVIDERS, COUNTRY_CURRENCY_MAP, getCountryLabel } from '../types';
 import type { AnalysisSession } from '../ad-prompts';
@@ -328,6 +335,7 @@ import AdAnalysisCanvas from './ad-optimizer/AdAnalysisCanvas.vue';
 import AdAnalysisResults from './ad-optimizer/AdAnalysisResults.vue';
 import AdCountryCard from './ad-optimizer/AdCountryCard.vue';
 import AdDataCharts from './ad-optimizer/AdDataCharts.vue';
+import AdTipsDrawer from './ad-optimizer/AdTipsDrawer.vue';
 
 // 视图模式
 const viewMode = ref<'list' | 'detail'>('list');
@@ -413,6 +421,7 @@ function startAnalysisForCountry(country: string) {
 // 创建/编辑对话框
 const showCreateDialog = ref(false);
 const showImportDialog = ref(false);
+const showTipsDrawer = ref(false);
 const editingProject = ref<AdProject | null>(null);
 const saving = ref(false);
 const projectForm = ref({

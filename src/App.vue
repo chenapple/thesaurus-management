@@ -1324,6 +1324,17 @@ function handleKeyboard(e: KeyboardEvent) {
 onMounted(async () => {
   initTheme();
   loadExchangeRateSettings();
+
+  // 自动迁移旧版 API Key 到系统密钥链（首次升级时执行）
+  try {
+    const migrated = await api.migrateApiKeys();
+    if (migrated.length > 0) {
+      console.log('已迁移 API Key 到系统密钥链:', migrated);
+    }
+  } catch (e) {
+    console.warn('API Key 迁移失败，将继续使用旧存储:', e);
+  }
+
   await checkSetupWizard();
   await checkApiKeyStatus();
   appVersion.value = await getVersion();

@@ -15,6 +15,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { CompetitorTask, CompetitorRun, CompetitorAsin } from '../types';
 import { getCountryLabel, getCountryFlag } from '../types';
+import { renderSimpleMarkdown } from '../utils/sanitize';
 
 // Emits
 const emit = defineEmits<{
@@ -229,46 +230,9 @@ function handleEditTask(task: CompetitorTask) {
   emit('editTask', task);
 }
 
-// Markdown 渲染
+// Markdown 渲染 - 使用安全的 sanitize 工具
 function renderMarkdown(text: string): string {
-  if (!text) return '';
-
-  if (text.trim().startsWith('<div')) {
-    return text;
-  }
-
-  let result = text
-    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-    .replace(/^### (.+)$/gm, '<h4>$1</h4>')
-    .replace(/^## (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^# (.+)$/gm, '<h2>$1</h2>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
-
-  result = result.replace(/(?:^|\n)(\|.+\|)\n(\|[-:\s|]+\|)\n((?:\|.+\|\n?)+)/g, (_match, header, _separator, body) => {
-    const headerCells = header.split('|').filter((c: string) => c.trim()).map((c: string) => `<th style="padding:10px 14px;text-align:left;font-weight:600;background:#f8fafc;border-bottom:2px solid #e5e7eb;color:#374151;font-size:13px;">${c.trim()}</th>`).join('');
-    const bodyRows = body.trim().split('\n').map((row: string) => {
-      const cells = row.split('|').filter((c: string) => c.trim()).map((c: string) => {
-        const content = c.trim();
-        const isUp = content.includes('↑');
-        const isDown = content.includes('↓');
-        const color = isUp ? '#059669' : isDown ? '#dc2626' : '#374151';
-        const fontWeight = (isUp || isDown) ? '600' : '400';
-        return `<td style="padding:10px 14px;border-bottom:1px solid #e5e7eb;color:${color};font-weight:${fontWeight};font-size:13px;">${content}</td>`;
-      }).join('');
-      return `<tr>${cells}</tr>`;
-    }).join('');
-    return `<table style="width:100%;border-collapse:collapse;margin:12px 0;"><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table>`;
-  });
-
-  result = result
-    .replace(/>\n</g, '><')
-    .replace(/\n\n+/g, '</p><p>')
-    .replace(/\n/g, '<br>');
-
-  return result;
+  return renderSimpleMarkdown(text);
 }
 
 // 刷新数据

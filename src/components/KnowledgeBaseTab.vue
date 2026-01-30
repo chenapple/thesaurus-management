@@ -10,7 +10,7 @@ import { chat, chatStream, buildStrictModePrompt, buildAnalysisModePrompt, build
 import type { ChatMessage } from '../ai-service';
 import type { KbDocument, KbConversation, KbMessage, KbSearchResult, KbChunk, AIProvider, DependencyStatus, InstallProgress, KbDocumentLink, KbDocumentCategory } from '../types';
 import { AI_PROVIDERS } from '../types';
-import { marked } from 'marked';
+import { renderMarkdownWithCallouts } from '../utils/sanitize';
 
 // ==================== 状态 ====================
 
@@ -1761,62 +1761,9 @@ function stopGeneration() {
   }
 }
 
-// Markdown 渲染
-// Callout 类型配置
-const CALLOUT_TYPES: Record<string, { icon: string; color: string; label: string }> = {
-  note: { icon: '📝', color: '#409EFF', label: '笔记' },
-  tip: { icon: '💡', color: '#67C23A', label: '提示' },
-  warning: { icon: '⚠️', color: '#E6A23C', label: '警告' },
-  danger: { icon: '❌', color: '#F56C6C', label: '危险' },
-  info: { icon: 'ℹ️', color: '#409EFF', label: '信息' },
-  quote: { icon: '💬', color: '#909399', label: '引用' },
-  example: { icon: '📋', color: '#00BCD4', label: '示例' },
-  question: { icon: '❓', color: '#9C27B0', label: '问题' },
-  success: { icon: '✅', color: '#67C23A', label: '成功' },
-  failure: { icon: '❎', color: '#F56C6C', label: '失败' },
-};
-
+// Markdown 渲染 - 使用安全的 sanitize 工具
 function renderMarkdown(content: string): string {
-  // 预处理 Callouts: > [!type] 标题
-  let processedContent = content;
-
-  // 分割内容为块（按 Obsidian Callout 语法分割）
-  const blocks = processedContent.split(/\n(?=>\s*\[!)/);
-  const processedBlocks = blocks.map(block => {
-    const calloutMatch = block.match(/^>\s*\[!(\w+)\]\s*(.*?)(?:\n|$)/);
-    if (calloutMatch) {
-      const type = calloutMatch[1].toLowerCase();
-      const title = calloutMatch[2] || '';
-      const config = CALLOUT_TYPES[type] || CALLOUT_TYPES['note'];
-
-      // 提取 callout 内容（去掉首行和 > 前缀）
-      const lines = block.split('\n');
-      const contentLines = lines.slice(1).map(line => {
-        return line.replace(/^>\s?/, '');
-      }).join('\n');
-
-      return `<div class="callout callout-${type}" style="--callout-color: ${config.color}">
-        <div class="callout-header">
-          <span class="callout-icon">${config.icon}</span>
-          <span class="callout-title">${title || config.label}</span>
-        </div>
-        <div class="callout-content">${marked(contentLines, { breaks: true })}</div>
-      </div>`;
-    }
-    return block;
-  });
-
-  processedContent = processedBlocks.join('\n');
-
-  let html = marked(processedContent, { breaks: true }) as string;
-
-  // 将 [来源X] 包裹在 span 中以便样式化
-  html = html.replace(/\[来源(\d+)\]/g, '<span class="source-ref">[来源$1]</span>');
-
-  // 处理 [[文档标题]] 双向链接语法
-  html = html.replace(/\[\[([^\]]+)\]\]/g, '<span class="wiki-link">$1</span>');
-
-  return html;
+  return renderMarkdownWithCallouts(content);
 }
 
 function scrollToBottom() {
