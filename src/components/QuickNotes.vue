@@ -177,6 +177,7 @@ function getRepeatLabel(note: QuickNote): string {
   if (interval === 1) {
     switch (note.repeat_type) {
       case 'daily': return '每天';
+      case 'weekday': return '工作日';
       case 'weekly': return '每周';
       case 'monthly': return '每月';
       default: return '';
@@ -184,6 +185,7 @@ function getRepeatLabel(note: QuickNote): string {
   } else {
     switch (note.repeat_type) {
       case 'daily': return `每${interval}天`;
+      case 'weekday': return `每${interval}个工作日`;
       case 'weekly': return `每${interval}周`;
       case 'monthly': return `每${interval}月`;
       default: return '';
@@ -459,6 +461,7 @@ onMounted(async () => {
                         >
                           <el-option label="不重复" value="" />
                           <el-option label="每天" value="daily" />
+                          <el-option label="仅工作日" value="weekday" />
                           <el-option label="每周" value="weekly" />
                           <el-option label="每月" value="monthly" />
                         </el-select>

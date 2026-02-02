@@ -6857,6 +6857,17 @@ fn calculate_next_due_date(current_due: &str, repeat_type: &str, interval: i64) 
 
     let next_date = match repeat_type {
         "daily" => date + Duration::days(interval),
+        "weekday" => {
+            // 仅工作日重复：跳过周末
+            let mut next = date + Duration::days(interval);
+            // 如果落在周六，跳到周一
+            if next.weekday() == Weekday::Sat {
+                next = next + Duration::days(2);
+            } else if next.weekday() == Weekday::Sun {
+                next = next + Duration::days(1);
+            }
+            next
+        },
         "weekly" => {
             // 找到下一个周一（至少 1 天后）
             let mut next = date + Duration::days(1);

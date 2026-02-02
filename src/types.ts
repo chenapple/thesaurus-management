@@ -1033,7 +1033,7 @@ export interface QuickNote {
   completed_at?: string;
   due_date?: string;
   sort_order: number;
-  repeat_type?: 'daily' | 'weekly' | 'monthly' | null;  // 重复类型
+  repeat_type?: 'daily' | 'weekday' | 'weekly' | 'monthly' | null;  // 重复类型: daily=每天, weekday=仅工作日, weekly=每周, monthly=每月
   repeat_interval: number;  // 重复间隔，默认1
 }
 
