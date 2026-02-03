@@ -72,7 +72,7 @@
             </el-radio>
             <el-radio value="append">
               <span class="mode-title">追加合并</span>
-              <span class="mode-desc">保留现有数据，智能合并新数据（相同记录会更新）</span>
+              <span class="mode-desc">保留现有数据，只添加新数据（已存在的记录不会被覆盖）</span>
             </el-radio>
           </el-radio-group>
         </div>

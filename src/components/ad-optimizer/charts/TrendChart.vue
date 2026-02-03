@@ -4,6 +4,9 @@
       <span class="chart-title">时间趋势图</span>
       <span class="chart-subtitle" v-if="data.dateRange.start">
         {{ data.dateRange.start }} ~ {{ data.dateRange.end }}
+        <span v-if="data.comparison?.previousPeriod" class="comparison-hint">
+          (环比：{{ data.comparison.previousPeriod.start }} ~ {{ data.comparison.previousPeriod.end }})
+        </span>
       </span>
     </div>
 
@@ -14,21 +17,49 @@
         <span class="card-value" :class="acosStatusClass">
           {{ data.summary.avgAcos.toFixed(2) }}%
         </span>
+        <span
+          v-if="data.comparison?.acos"
+          class="card-change"
+          :class="getChangeClass(data.comparison.acos)"
+        >
+          {{ formatChange(data.comparison.acos) }}
+        </span>
       </div>
       <div class="summary-card">
         <span class="card-label">花费</span>
         <span class="card-value">
           {{ currency }}{{ formatNumber(data.summary.totalSpend) }}
         </span>
+        <span
+          v-if="data.comparison?.spend"
+          class="card-change"
+          :class="getChangeClass(data.comparison.spend, true)"
+        >
+          {{ formatChange(data.comparison.spend) }}
+        </span>
       </div>
       <div class="summary-card">
         <span class="card-label">订单</span>
         <span class="card-value">{{ data.summary.totalOrders }}</span>
+        <span
+          v-if="data.comparison?.orders"
+          class="card-change"
+          :class="getChangeClass(data.comparison.orders)"
+        >
+          {{ formatChange(data.comparison.orders) }}
+        </span>
       </div>
       <div class="summary-card">
         <span class="card-label">销售额</span>
         <span class="card-value">
           {{ currency }}{{ formatNumber(data.summary.totalSales) }}
+        </span>
+        <span
+          v-if="data.comparison?.sales"
+          class="card-change"
+          :class="getChangeClass(data.comparison.sales)"
+        >
+          {{ formatChange(data.comparison.sales) }}
         </span>
       </div>
     </div>
@@ -61,7 +92,7 @@ import type {
   TooltipComponentOption,
   LegendComponentOption,
 } from 'echarts/components';
-import type { TrendData } from '../../../utils/ad-chart-utils';
+import type { TrendData, ComparisonChange } from '../../../utils/ad-chart-utils';
 
 use([
   CanvasRenderer,
@@ -100,6 +131,20 @@ function formatNumber(value: number): string {
     return value.toLocaleString('en-US', { maximumFractionDigits: 2 });
   }
   return value.toFixed(2);
+}
+
+// 格式化环比变化
+function formatChange(change: ComparisonChange): string {
+  if (change.direction === 'same') return '-';
+  const arrow = change.direction === 'up' ? '↑' : '↓';
+  return `${arrow}${change.value.toFixed(1)}%`;
+}
+
+// 获取环比变化的样式类
+function getChangeClass(change: ComparisonChange, isNeutral: boolean = false): string {
+  if (change.direction === 'same') return 'change-neutral';
+  if (isNeutral) return 'change-neutral'; // 花费变化是中性的
+  return change.isPositive ? 'change-positive' : 'change-negative';
 }
 
 // 图表配色 - 参考亚马逊配色
@@ -427,6 +472,30 @@ const chartOption = computed<EChartsOption>(() => {
 
 .card-value.status-critical {
   color: #f56c6c;
+}
+
+.card-change {
+  font-size: 12px;
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+.card-change.change-positive {
+  color: #67c23a;
+}
+
+.card-change.change-negative {
+  color: #f56c6c;
+}
+
+.card-change.change-neutral {
+  color: var(--el-text-color-secondary);
+}
+
+.comparison-hint {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  margin-left: 8px;
 }
 
 .chart-body {

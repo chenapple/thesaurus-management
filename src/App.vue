@@ -886,6 +886,8 @@ async function executeKeywordExport() {
     if (keywordExportScope.value === 'all') {
       const [allData] = await api.getKeywordData({
         productId: selectedProduct.value.id,
+        sortBy: keywordSortBy.value,
+        sortOrder: keywordSortOrder.value,
         page: 1,
         pageSize: 1000000,
       });

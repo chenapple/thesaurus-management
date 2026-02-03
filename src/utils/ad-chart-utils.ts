@@ -104,6 +104,22 @@ export interface TrendDataPoint {
   acos: number;
 }
 
+// 环比变化数据
+export interface ComparisonChange {
+  value: number;       // 变化百分比
+  direction: 'up' | 'down' | 'same';  // 变化方向
+  isPositive: boolean; // 对于该指标，这个变化是否是正面的
+}
+
+// 环比对比数据
+export interface ComparisonData {
+  acos: ComparisonChange | null;
+  spend: ComparisonChange | null;
+  orders: ComparisonChange | null;
+  sales: ComparisonChange | null;
+  previousPeriod: { start: string; end: string } | null;
+}
+
 // 时间趋势数据
 export interface TrendData {
   points: TrendDataPoint[];
@@ -114,6 +130,7 @@ export interface TrendData {
     avgAcos: number;
   };
   dateRange: { start: string; end: string };
+  comparison: ComparisonData | null;  // 环比数据
 }
 
 /**
@@ -430,10 +447,48 @@ export function getQuadrantName(quadrant: QuadrantPoint['quadrant']): string {
 }
 
 /**
+ * 计算环比变化
+ */
+function calculateChange(
+  current: number,
+  previous: number,
+  lowerIsBetter: boolean = false
+): ComparisonChange | null {
+  if (previous === 0) {
+    if (current === 0) return { value: 0, direction: 'same', isPositive: true };
+    return { value: 100, direction: 'up', isPositive: !lowerIsBetter };
+  }
+
+  const change = ((current - previous) / previous) * 100;
+  const direction: 'up' | 'down' | 'same' = change > 0.5 ? 'up' : change < -0.5 ? 'down' : 'same';
+
+  // 对于 ACOS 和花费，下降是好事；对于订单和销售额，上升是好事
+  let isPositive: boolean;
+  if (direction === 'same') {
+    isPositive = true;
+  } else if (lowerIsBetter) {
+    isPositive = direction === 'down';
+  } else {
+    isPositive = direction === 'up';
+  }
+
+  return {
+    value: Math.abs(change),
+    direction,
+    isPositive,
+  };
+}
+
+/**
  * 计算时间趋势数据
  * 按日期聚合搜索词数据
+ * @param terms 当前周期的搜索词数据
+ * @param previousTerms 对比周期的搜索词数据（可选，用于计算环比）
  */
-export function calculateTrendData(terms: AdSearchTerm[]): TrendData {
+export function calculateTrendData(
+  terms: AdSearchTerm[],
+  previousTerms?: AdSearchTerm[]
+): TrendData {
   // 过滤有日期的数据
   const validTerms = terms.filter(t => t.report_date);
 
@@ -478,6 +533,30 @@ export function calculateTrendData(terms: AdSearchTerm[]): TrendData {
     end: dates[dates.length - 1] || '',
   };
 
+  // 计算环比数据
+  let comparison: ComparisonData | null = null;
+  if (previousTerms && previousTerms.length > 0) {
+    const prevValidTerms = previousTerms.filter(t => t.report_date);
+    const prevTotalSpend = prevValidTerms.reduce((sum, t) => sum + t.spend, 0);
+    const prevTotalSales = prevValidTerms.reduce((sum, t) => sum + t.sales, 0);
+    const prevTotalOrders = prevValidTerms.reduce((sum, t) => sum + t.orders, 0);
+    const prevAvgAcos = prevTotalSales > 0 ? (prevTotalSpend / prevTotalSales) * 100 : 0;
+
+    // 计算对比周期的日期范围
+    const prevDates = prevValidTerms.map(t => t.report_date!).sort();
+    const previousPeriod = prevDates.length > 0
+      ? { start: prevDates[0], end: prevDates[prevDates.length - 1] }
+      : null;
+
+    comparison = {
+      acos: calculateChange(avgAcos, prevAvgAcos, true),      // ACOS 越低越好
+      spend: calculateChange(totalSpend, prevTotalSpend, false), // 花费增加是中性的，但配合其他指标看
+      orders: calculateChange(totalOrders, prevTotalOrders, false), // 订单越多越好
+      sales: calculateChange(totalSales, prevTotalSales, false),   // 销售额越高越好
+      previousPeriod,
+    };
+  }
+
   return {
     points,
     summary: {
@@ -487,5 +566,6 @@ export function calculateTrendData(terms: AdSearchTerm[]): TrendData {
       avgAcos,
     },
     dateRange,
+    comparison,
   };
 }

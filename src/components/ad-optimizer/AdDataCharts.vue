@@ -371,9 +371,52 @@ const matchTypeData = computed(() => {
   return calculateMatchTypeComparison(filteredTerms.value);
 });
 
-// 计算时间趋势数据（使用筛选后的数据）
+// 计算对比周期的日期范围
+const previousDateRange = computed<{ start: string; end: string } | null>(() => {
+  // 全部时间不显示环比
+  if (dateFilterMode.value === 'all') {
+    return null;
+  }
+
+  const range = selectedDateRange.value;
+  if (!range) return null;
+
+  // 计算当前周期的天数
+  const startDate = new Date(range.start);
+  const endDate = new Date(range.end);
+  const daysDiff = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+  // 对比周期：往前推相同天数
+  const prevEndDate = new Date(startDate);
+  prevEndDate.setDate(prevEndDate.getDate() - 1);
+  const prevStartDate = new Date(prevEndDate);
+  prevStartDate.setDate(prevStartDate.getDate() - daysDiff + 1);
+
+  const formatDate = (d: Date) => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  return { start: formatDate(prevStartDate), end: formatDate(prevEndDate) };
+});
+
+// 获取对比周期的数据
+const previousPeriodTerms = computed(() => {
+  const range = previousDateRange.value;
+  if (!range) return [];
+
+  return countryFilteredTerms.value.filter(term => {
+    if (!term.report_date) return false;
+    return term.report_date >= range.start && term.report_date <= range.end;
+  });
+});
+
+// 计算时间趋势数据（使用筛选后的数据，包含环比）
 const trendData = computed(() => {
-  return calculateTrendData(filteredTerms.value);
+  const prevTerms = previousPeriodTerms.value.length > 0 ? previousPeriodTerms.value : undefined;
+  return calculateTrendData(filteredTerms.value, prevTerms);
 });
 
 // 处理选中搜索词

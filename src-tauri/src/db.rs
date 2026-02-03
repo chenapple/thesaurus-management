@@ -5490,16 +5490,17 @@ pub fn ad_import_search_terms(project_id: i64, search_terms: Vec<AdSearchTerm>, 
     let mut count = 0i64;
     for term in search_terms {
         if mode == "append" {
-            // 追加模式：先删除匹配的旧记录，再插入新记录
+            // 追加模式：只添加新数据，已存在的记录跳过不覆盖
             // 去重键：report_date + customer_search_term + campaign_name + ad_group_name + country
-            conn.execute(
-                "DELETE FROM ad_search_terms
+            let exists: bool = conn.query_row(
+                "SELECT 1 FROM ad_search_terms
                  WHERE project_id = ?1
                    AND report_date IS ?2
                    AND customer_search_term IS ?3
                    AND campaign_name IS ?4
                    AND ad_group_name IS ?5
-                   AND country IS ?6",
+                   AND country IS ?6
+                 LIMIT 1",
                 rusqlite::params![
                     project_id,
                     term.report_date,
@@ -5508,7 +5509,14 @@ pub fn ad_import_search_terms(project_id: i64, search_terms: Vec<AdSearchTerm>, 
                     term.ad_group_name,
                     term.country
                 ],
-            )?;
+                |_| Ok(true),
+            ).unwrap_or(false);
+
+            // 如果记录已存在，跳过
+            if exists {
+                continue;
+            }
+
             // 插入新记录
             conn.execute(
                 "INSERT INTO ad_search_terms (
