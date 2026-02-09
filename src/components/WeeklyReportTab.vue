@@ -141,7 +141,7 @@ async function ensureReport(): Promise<number | null> {
 // 常规任务显示结构
 interface RoutineTaskDisplay {
   content: string;
-  repeat_type: 'daily' | 'weekly' | 'monthly';
+  repeat_type: 'daily' | 'weekday' | 'weekly' | 'monthly';
   repeat_interval: number;
   completedCount: number;  // 本周完成次数
   expectedCount: number;   // 本周预期完成次数
@@ -164,7 +164,7 @@ async function loadRoutineTasks() {
 
     // 按任务内容分组，统计本周完成的【不同日期】数量
     const taskMap = new Map<string, {
-      repeat_type: 'daily' | 'weekly' | 'monthly';
+      repeat_type: 'daily' | 'weekday' | 'weekly' | 'monthly';
       repeat_interval: number;
       completedDates: Set<string>; // 用 Set 存储完成日期，自动去重
     }>();
@@ -183,7 +183,7 @@ async function loadRoutineTasks() {
           completedDates.add(completedAt);
         }
         taskMap.set(note.content, {
-          repeat_type: note.repeat_type as 'daily' | 'weekly' | 'monthly',
+          repeat_type: note.repeat_type as 'daily' | 'weekday' | 'weekly' | 'monthly',
           repeat_interval: note.repeat_interval || 1,
           completedDates,
         });
@@ -219,8 +219,8 @@ async function loadRoutineTasks() {
     for (const [content, data] of taskMap) {
       let expectedCount = 1;
 
-      if (data.repeat_type === 'daily') {
-        // 每日任务：预期次数 = 工作日天数 / 间隔
+      if (data.repeat_type === 'daily' || data.repeat_type === 'weekday') {
+        // 每日/仅工作日任务：预期次数 = 工作日天数 / 间隔
         expectedCount = Math.ceil(workdaysInWeek / data.repeat_interval);
       } else if (data.repeat_type === 'weekly') {
         // 每周任务：预期1次

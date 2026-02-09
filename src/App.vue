@@ -709,20 +709,31 @@ function cancelAnalysis() {
 async function handleKeywordClassify() {
   if (!selectedProduct.value) return;
 
-  const unclassifiedKeywords = keywordData.value.filter(k => !k.primary_category);
-  if (unclassifiedKeywords.length === 0) {
-    ElMessage.info("当前页所有关键词已分类");
-    return;
-  }
-
-  // Build a map to look up keyword by keyword text
-  const keywordMap = new Map(unclassifiedKeywords.map(k => [k.keyword, k]));
-
   classifying.value = true;
-  classifyProgress.value = { current: 0, total: unclassifiedKeywords.length };
-  classifyAbortController.value = new AbortController();
+  classifyProgress.value = { current: 0, total: 0 };
 
   try {
+    // 获取所有关键词（不分页）
+    const [allKeywords] = await api.getKeywordData({
+      productId: selectedProduct.value.id,
+      page: 1,
+      pageSize: 1000000,
+    });
+
+    // 筛选出未分类的关键词
+    const unclassifiedKeywords = allKeywords.filter(k => !k.primary_category);
+    if (unclassifiedKeywords.length === 0) {
+      ElMessage.info("所有关键词已分类");
+      classifying.value = false;
+      return;
+    }
+
+    classifyProgress.value = { current: 0, total: unclassifiedKeywords.length };
+    classifyAbortController.value = new AbortController();
+
+    // Build a map to look up keyword in current page by keyword text
+    const currentPageMap = new Map(keywordData.value.map(k => [k.keyword, k]));
+
     await batchAnalyzeKeywordCategories(
       unclassifiedKeywords.map(k => ({ keyword: k.keyword, translation: k.translation })),
       {
@@ -740,9 +751,9 @@ async function handleKeywordClassify() {
           ]);
           await api.batchUpdateKeywordCategories(selectedProduct.value!.id, updates);
 
-          // Update local state
+          // Update local state (only for keywords visible on current page)
           for (const result of results) {
-            const kw = keywordMap.get(result.keyword);
+            const kw = currentPageMap.get(result.keyword);
             if (kw) {
               kw.primary_category = result.primary_category;
               kw.secondary_category = result.secondary_category;
@@ -752,7 +763,7 @@ async function handleKeywordClassify() {
         },
       }
     );
-    ElMessage.success("分类完成");
+    ElMessage.success(`分类完成，共处理 ${unclassifiedKeywords.length} 个关键词`);
   } catch (e) {
     if ((e as Error).name !== 'AbortError') {
       ElMessage.error("分类失败: " + e);

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
-import { Search, Reading, MagicStick, Aim, Coin, DataAnalysis, Wallet } from '@element-plus/icons-vue';
+import { Search, Reading, MagicStick, Aim, Coin, DataAnalysis, Wallet, Promotion } from '@element-plus/icons-vue';
 import type { Component } from 'vue';
 import { AD_TIPS, searchTips, type AdTip, type AdTipCategory } from '../../data/ad-tips';
 import { renderSimpleMarkdown } from '../../utils/sanitize';
@@ -12,6 +12,7 @@ const iconMap: Record<string, Component> = {
   Coin,
   DataAnalysis,
   Wallet,
+  Promotion,
 };
 
 const props = defineProps<{

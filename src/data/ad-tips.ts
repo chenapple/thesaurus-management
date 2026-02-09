@@ -23,7 +23,7 @@ export const AD_TIPS: AdTipCategory[] = [
   {
     id: 'newproduct',
     name: '新品推广',
-    icon: 'MagicStick',
+    icon: 'Promotion',
     description: '新品期打造自然流量的广告策略组合',
     tips: [
       {
