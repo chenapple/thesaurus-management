@@ -2068,6 +2068,11 @@ fn delete_quick_note(id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn clear_completed_quick_notes() -> Result<i64, String> {
+    db::clear_completed_quick_notes().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn get_quick_notes_count() -> Result<(i64, i64), String> {
     db::get_quick_notes_count().map_err(|e| e.to_string())
 }
@@ -2554,6 +2559,7 @@ pub fn run() {
             update_quick_note,
             toggle_quick_note,
             delete_quick_note,
+            clear_completed_quick_notes,
             get_quick_notes_count,
             update_quick_note_due_date,
             update_quick_note_repeat,

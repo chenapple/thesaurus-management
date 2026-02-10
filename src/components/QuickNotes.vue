@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
-import { EditPen, Delete, Check, Close, Rank, Calendar, Refresh } from '@element-plus/icons-vue';
+import { EditPen, Delete, Check, Close, Rank, Calendar, Refresh, Search } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import draggable from 'vuedraggable';
@@ -12,11 +12,14 @@ const isOpen = ref(false);
 const notes = ref<QuickNote[]>([]);
 const newContent = ref('');
 const loading = ref(false);
-const filter = ref<'all' | 'pending' | 'completed'>('all');
+const filter = ref<'all' | 'pending' | 'completed'>('pending');
 const editingId = ref<number | null>(null);
 const editingContent = ref('');
-const editingDueDateId = ref<number | null>(null);
 const hasShownStartupNotification = ref(false); // 防止重复发送启动通知
+const searchText = ref('');
+const typeFilter = ref<'all' | 'repeat' | 'normal'>('all');
+const newDueDate = ref<string | null>(null);
+const newRepeatType = ref<string | null>(null);
 
 // 计算属性
 const pendingCount = computed(() => notes.value.filter(n => !n.completed).length);
@@ -34,13 +37,22 @@ const urgentCount = computed(() => urgentNotes.value.length);
 
 
 const filteredNotes = computed(() => {
+  let result = notes.value;
   if (filter.value === 'pending') {
-    return notes.value.filter(n => !n.completed);
+    result = result.filter(n => !n.completed);
+  } else if (filter.value === 'completed') {
+    result = result.filter(n => n.completed);
   }
-  if (filter.value === 'completed') {
-    return notes.value.filter(n => n.completed);
+  if (typeFilter.value === 'repeat') {
+    result = result.filter(n => !!n.repeat_type);
+  } else if (typeFilter.value === 'normal') {
+    result = result.filter(n => !n.repeat_type);
   }
-  return notes.value;
+  if (searchText.value.trim()) {
+    const keyword = searchText.value.trim().toLowerCase();
+    result = result.filter(n => n.content.toLowerCase().includes(keyword));
+  }
+  return result;
 });
 
 // 检查是否过期
@@ -93,7 +105,15 @@ async function addNote() {
   if (!content) return;
 
   try {
-    await api.addQuickNote(content);
+    const id = await api.addQuickNote(content);
+    if (newDueDate.value) {
+      await api.updateQuickNoteDueDate(id, newDueDate.value);
+      if (newRepeatType.value) {
+        await api.updateQuickNoteRepeat(id, newRepeatType.value);
+      }
+      newDueDate.value = null;
+      newRepeatType.value = null;
+    }
     newContent.value = '';
     await loadNotes();
   } catch (e) {
@@ -153,7 +173,6 @@ async function deleteNote(id: number) {
 async function updateDueDate(id: number, dueDate: string | null) {
   try {
     await api.updateQuickNoteDueDate(id, dueDate);
-    editingDueDateId.value = null;
     await loadNotes();
   } catch (e) {
     console.error('更新截止日期失败:', e);
@@ -344,6 +363,23 @@ onMounted(async () => {
     </template>
 
     <div class="notes-container">
+      <!-- 搜索和类型筛选 -->
+      <div class="notes-toolbar">
+        <el-input
+          v-model="searchText"
+          placeholder="搜索备忘..."
+          clearable
+          size="small"
+          :prefix-icon="Search"
+          class="search-input"
+        />
+        <el-radio-group v-model="typeFilter" size="small" class="type-filter">
+          <el-radio-button value="all">全部</el-radio-button>
+          <el-radio-button value="repeat">重复</el-radio-button>
+          <el-radio-button value="normal">普通</el-radio-button>
+        </el-radio-group>
+      </div>
+
       <!-- 添加区域 -->
       <div class="add-note-area">
         <el-input
@@ -353,7 +389,52 @@ onMounted(async () => {
           @keyup.enter="addNote"
         >
           <template #append>
-            <el-button @click="addNote" :disabled="!newContent.trim()">添加</el-button>
+            <div class="add-note-append">
+              <el-popover placement="bottom" :width="280" trigger="click">
+                <template #reference>
+                  <el-button
+                    :icon="Calendar"
+                    :type="newDueDate ? 'primary' : 'default'"
+                    :title="newDueDate ? `截止: ${newDueDate}` : '设置截止日期'"
+                  />
+                </template>
+                <div class="due-date-picker">
+                  <el-date-picker
+                    v-model="newDueDate"
+                    type="date"
+                    placeholder="选择截止日期"
+                    format="YYYY-MM-DD"
+                    value-format="YYYY-MM-DD"
+                    :clearable="true"
+                    style="width: 100%"
+                  />
+                  <div class="quick-date-btns">
+                    <el-button size="small" @click="newDueDate = new Date().toISOString().split('T')[0]">今天</el-button>
+                    <el-button size="small" @click="newDueDate = new Date(Date.now() + 86400000).toISOString().split('T')[0]">明天</el-button>
+                    <el-button size="small" @click="newDueDate = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0]">一周后</el-button>
+                  </div>
+                  <!-- 重复设置（仅当有截止日期时显示） -->
+                  <div v-if="newDueDate" class="repeat-setting">
+                    <span class="repeat-label-text">重复:</span>
+                    <el-select
+                      :model-value="newRepeatType || ''"
+                      size="small"
+                      placeholder="不重复"
+                      style="width: 100%"
+                      @change="(val: string) => newRepeatType = val || null"
+                    >
+                      <el-option label="不重复" value="" />
+                      <el-option label="每天" value="daily" />
+                      <el-option label="仅工作日" value="weekday" />
+                      <el-option label="每周" value="weekly" />
+                      <el-option label="每月" value="monthly" />
+                    </el-select>
+                  </div>
+                </div>
+              </el-popover>
+              <span class="append-divider"></span>
+              <el-button @click="addNote" :disabled="!newContent.trim()">添加</el-button>
+            </div>
           </template>
         </el-input>
       </div>
@@ -370,7 +451,7 @@ onMounted(async () => {
         >
           <template #item="{ element: note }">
             <div
-              v-show="filter === 'all' || (filter === 'pending' && !note.completed) || (filter === 'completed' && note.completed)"
+              v-show="(filter === 'all' || (filter === 'pending' && !note.completed) || (filter === 'completed' && note.completed)) && (typeFilter === 'all' || (typeFilter === 'repeat' && !!note.repeat_type) || (typeFilter === 'normal' && !note.repeat_type)) && (!searchText.trim() || note.content.toLowerCase().includes(searchText.trim().toLowerCase()))"
               class="note-item"
               :class="{ completed: note.completed, overdue: isOverdue(note) }"
             >
@@ -418,7 +499,6 @@ onMounted(async () => {
                 <div class="note-actions">
                   <!-- 设置截止日期 -->
                   <el-popover
-                    :visible="editingDueDateId === note.id"
                     placement="bottom"
                     :width="280"
                     trigger="click"
@@ -429,7 +509,6 @@ onMounted(async () => {
                         :icon="Calendar"
                         link
                         :type="note.due_date ? 'primary' : 'default'"
-                        @click="editingDueDateId = editingDueDateId === note.id ? null : note.id"
                         title="设置截止日期"
                       />
                     </template>
@@ -596,10 +675,37 @@ onMounted(async () => {
 }
 
 /* 添加区域 */
+.notes-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.notes-toolbar .search-input {
+  flex: 1;
+}
+
+.notes-toolbar .type-filter {
+  flex-shrink: 0;
+}
+
 .add-note-area {
   padding: 0 0 16px 0;
   border-bottom: 1px solid var(--el-border-color-light);
   margin-bottom: 16px;
+}
+
+.add-note-append {
+  display: flex;
+  align-items: center;
+}
+
+.append-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--el-border-color);
+  margin: 0 15px;
 }
 
 /* 备忘列表 */

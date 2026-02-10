@@ -6921,6 +6921,16 @@ pub fn delete_quick_note(id: i64) -> Result<()> {
     Ok(())
 }
 
+pub fn clear_completed_quick_notes() -> Result<i64> {
+    let conn = get_db().lock();
+    // 删除已完成且非重复的任务
+    let count = conn.execute(
+        "DELETE FROM quick_notes WHERE completed = 1 AND (repeat_type IS NULL OR repeat_type = '')",
+        [],
+    )?;
+    Ok(count as i64)
+}
+
 pub fn get_quick_notes_count() -> Result<(i64, i64)> {
     let conn = get_db().lock();
 

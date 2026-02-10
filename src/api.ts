@@ -1581,6 +1581,13 @@ export async function deleteQuickNote(id: number): Promise<void> {
 }
 
 /**
+ * 清除已完成的非重复备忘录
+ */
+export async function clearCompletedQuickNotes(): Promise<number> {
+  return await invoke("clear_completed_quick_notes");
+}
+
+/**
  * 获取快捷备忘统计
  * @returns [总数, 待完成数]
  */

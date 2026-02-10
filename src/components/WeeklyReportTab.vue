@@ -255,6 +255,7 @@ function startAutoRefresh() {
   if (routineRefreshTimer) return;
   routineRefreshTimer = setInterval(() => {
     loadRoutineTasks();
+    loadReportData();
   }, 5000);
 }
 
